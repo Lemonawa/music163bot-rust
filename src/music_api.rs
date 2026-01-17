@@ -1,9 +1,16 @@
 use crate::error::{BotError, Result};
+use aes::Aes128;
+use cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyInit};
+use ecb::{Decryptor, Encryptor};
+use hex::encode_upper;
 use image::{DynamicImage, GenericImageView, ImageFormat};
+use md5::compute as md5_compute;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct MusicApi {
@@ -80,6 +87,12 @@ pub struct SearchResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct EapiSearchResponse {
+    pub code: i32,
+    pub result: SearchResult,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResult {
     pub songs: Vec<SearchSong>,
     #[serde(rename = "songCount")]
@@ -120,6 +133,70 @@ impl MusicApi {
             music_u,
             base_url,
         }
+    }
+
+    fn build_eapi_cookie(&self) -> String {
+        let device_id = Uuid::new_v4().simple().to_string();
+        let appver = "9.3.40";
+        let buildver = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+        let mut cookie_parts = vec![
+            format!("deviceId={}", device_id),
+            format!("appver={}", appver),
+            format!("buildver={}", &buildver[..buildver.len().min(10)]),
+            "resolution=1920x1080".to_string(),
+            "os=Android".to_string(),
+        ];
+
+        if let Some(music_u) = &self.music_u {
+            cookie_parts.push(format!("MUSIC_U={}", music_u));
+        } else {
+            cookie_parts.push("MUSIC_A=4ee5f776c9ed1e4d5f031b09e084c6cb333e43ee4a841afeebbef9bbf4b7e4152b51ff20ecb9e8ee9e89ab23044cf50d1609e4781e805e73a138419e5583bc7fd1e5933c52368d9127ba9ce4e2f233bf5a77ba40ea6045ae1fc612ead95d7b0e0edf70a74334194e1a190979f5fc12e9968c3666a981495b33a649814e309366".to_string());
+        }
+
+        cookie_parts.join("; ")
+    }
+
+    fn eapi_splice(path: &str, json: &str) -> String {
+        let marker = "36cd479b6b5";
+        let text = format!("nobody{}use{}md5forencrypt", path, json);
+        let digest = format!("{:x}", md5_compute(text.as_bytes()));
+        format!("{}-{}-{}-{}-{}", path, marker, json, marker, digest)
+    }
+
+    fn eapi_encrypt(data: &str) -> String {
+        let block_size = 16;
+        let data_len = data.as_bytes().len();
+        let padded_len = ((data_len + block_size) / block_size) * block_size;
+        let mut buf = vec![0u8; padded_len];
+        buf[..data_len].copy_from_slice(data.as_bytes());
+        let encrypted = Encryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8")
+            .expect("eapi key length")
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, data_len)
+            .map_err(|_| BotError::MusicApi("Failed to encrypt eapi payload".to_string()))
+            .unwrap_or(&[]);
+        encode_upper(encrypted)
+    }
+
+    fn eapi_decrypt(hex_data: &str) -> Result<String> {
+        let mut bytes = hex::decode(hex_data).map_err(|e| BotError::MusicApi(e.to_string()))?;
+        let decrypted = Decryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8")
+            .expect("eapi key length")
+            .decrypt_padded_mut::<Pkcs7>(&mut bytes)
+            .map_err(|e| BotError::MusicApi(e.to_string()))?;
+        String::from_utf8(decrypted.to_vec()).map_err(|e| BotError::MusicApi(e.to_string()))
+    }
+
+    fn eapi_params(path: &str, json: &str) -> String {
+        let data = Self::eapi_splice(path, json);
+        let encrypted = Self::eapi_encrypt(&data);
+        format!("params={}", encrypted)
+    }
+
+    fn choose_eapi_user_agent() -> &'static str {
+        "NeteaseMusic/9.3.40.1753206443(164);Dalvik/2.1.0 (Linux; U; Android 9; MIX 2 MIUI/V12.0.1.0.PDECNXM)"
     }
 
     /// Get song details
@@ -211,21 +288,32 @@ impl MusicApi {
 
     /// Search songs
     pub async fn search_songs(&self, keyword: &str, limit: u32) -> Result<Vec<SearchSong>> {
-        let url = format!("{}/api/search/get/web", self.base_url);
-        let mut params = HashMap::new();
-        params.insert("s", keyword.to_string());
-        params.insert("type", "1".to_string()); // Song type
-        params.insert("limit", limit.to_string());
-        params.insert("offset", "0".to_string());
-
-        let mut request = self.client.post(url).form(&params);
-
-        if let Some(music_u) = &self.music_u {
-            request = request.header("Cookie", format!("MUSIC_U={}", music_u));
-        }
+        let path = "/api/v1/search/song/get";
+        let url = format!("{}/eapi/v1/search/song/get", self.base_url);
+        let payload = serde_json::json!({
+            "s": keyword,
+            "offset": 0,
+            "limit": limit.max(1),
+        });
+        let payload_str = payload.to_string();
+        let body = Self::eapi_params(path, &payload_str);
+        let request = self
+            .client
+            .post(url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("User-Agent", Self::choose_eapi_user_agent())
+            .header("Cookie", self.build_eapi_cookie())
+            .body(body);
 
         let response = request.send().await?;
-        let data: SearchResponse = response.json().await?;
+        let raw_body = response.text().await?;
+        let trimmed = raw_body.trim_start();
+        let data: EapiSearchResponse = if trimmed.starts_with('{') {
+            serde_json::from_str(trimmed)?
+        } else {
+            let decrypted = Self::eapi_decrypt(trimmed)?;
+            serde_json::from_str(&decrypted)?
+        };
 
         if data.code != 200 {
             return Err(BotError::MusicApi(format!(
