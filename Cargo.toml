@@ -9,17 +9,10 @@ license = "WTFPL"
 tokio = { version = "1.0", features = ["full"] }
 
 # Telegram bot framework
-teloxide = { version = "0.11", features = ["macros", "auto-send"] }
+teloxide = { version = "0.11", default-features = false, features = ["macros", "auto-send", "rustls", "ctrlc_handler"] }
 
 # HTTP client
-reqwest = { version = "0.11", features = ["json", "cookies", "stream", "rustls-tls"], default-features = false }
-
-[features]
-vendored-openssl = ["openssl/vendored"]
-
-[dependencies.openssl]
-version = "0.10"
-optional = true
+reqwest = { version = "0.11", default-features = false, features = ["json", "cookies", "stream", "rustls-tls"] }
 
 # URL parsing
 url = "2.4"
@@ -30,6 +23,7 @@ serde_json = "1.0"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
+
 
 # Utilities
 anyhow = "1.0"

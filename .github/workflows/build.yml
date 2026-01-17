@@ -76,13 +76,10 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          BUILD_FEATURES=""
           if [ "${{ matrix.platform.target }}" = "aarch64-unknown-linux-gnu" ]; then
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-            # Use vendored OpenSSL to avoid cross-compilation headaches
-            BUILD_FEATURES="--features vendored-openssl"
           fi
-          cargo build --release --target ${{ matrix.platform.target }} $BUILD_FEATURES
+          cargo build --release --target ${{ matrix.platform.target }}
 
       - name: Package
         shell: bash
