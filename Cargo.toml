@@ -14,6 +14,13 @@ teloxide = { version = "0.11", features = ["macros", "auto-send"] }
 # HTTP client
 reqwest = { version = "0.11", features = ["json", "cookies", "stream", "rustls-tls"], default-features = false }
 
+[features]
+vendored-openssl = ["openssl/vendored"]
+
+[dependencies.openssl]
+version = "0.10"
+optional = true
+
 # URL parsing
 url = "2.4"
 
