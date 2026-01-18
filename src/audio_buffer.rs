@@ -392,10 +392,9 @@ impl AudioBuffer {
         let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
         tag.set_vorbis("ARTIST", vec![artist]);
 
-        // Description (163 key - used by original project for DRM info)
-        // We'll add a placeholder or music ID since we don't have the original 163 key
-        let description = format!("163 key(Don't modify):Music ID {}", song_detail.id);
-        tag.set_vorbis("DESCRIPTION", vec![description]);
+        // Description (163 key) - preserve existing value if present, otherwise don't add
+        // The original FLAC file from NetEase may already contain the 163 key
+        // We don't generate a fake key, just preserve what's already there
 
         // Add album artwork if provided
         if let Some(artwork_data) = artwork_data {
@@ -458,9 +457,9 @@ impl AudioBuffer {
         let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
         tag.set_vorbis("ARTIST", vec![artist]);
 
-        // Description (163 key - used by original project for DRM info)
-        let description = format!("163 key(Don't modify):Music ID {}", song_detail.id);
-        tag.set_vorbis("DESCRIPTION", vec![description]);
+        // Description (163 key) - preserve existing value if present, otherwise don't add
+        // The original FLAC file from NetEase may already contain the 163 key
+        // We don't generate a fake key, just preserve what's already there
 
         // 4. Add album artwork if provided
         if let Some(artwork_data) = artwork_data {
