@@ -100,6 +100,7 @@ lyric - 获取歌曲歌词
 status - 查看机器人运行状态和缓存信息
 about - 关于机器人
 rmcache - [管理员] 清理指定音乐的缓存
+clearallcache - [管理员] 清除所有缓存 (需确认)
 help - 显示详细使用帮助
 ```
 
