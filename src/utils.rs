@@ -40,6 +40,13 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
     None
 }
 
+/// Extract the first URL from text
+pub fn extract_first_url(text: &str) -> Option<String> {
+    SHARE_LINK_REGEX
+        .find(text)
+        .map(|matched| matched.as_str().to_string())
+}
+
 /// Check if directory exists, create if not
 pub fn ensure_dir(path: &str) -> std::io::Result<()> {
     let path = Path::new(path);

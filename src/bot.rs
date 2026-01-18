@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::database::{Database, SongInfo};
 use crate::error::Result;
 use crate::music_api::{format_artists, MusicApi};
-use crate::utils::{clean_filename, ensure_dir, parse_music_id};
+use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id};
 
 pub struct BotState {
     pub config: Config,
@@ -1009,6 +1009,32 @@ async fn handle_music_url(
     text: &str,
 ) -> ResponseResult<()> {
     if let Some(music_id) = parse_music_id(text) {
+        return process_music(bot, msg, state, music_id).await;
+    }
+
+    let url = match extract_first_url(text) {
+        Some(url) => url,
+        None => {
+            bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
+                .reply_to_message_id(msg.id)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let response = match state.music_api.download_file(&url).await {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::warn!("Failed to resolve share link: {}", e);
+            bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
+                .reply_to_message_id(msg.id)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let final_url = response.url().to_string();
+    if let Some(music_id) = parse_music_id(&final_url) {
         process_music(bot, msg, state, music_id).await
     } else {
         bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
