@@ -29,6 +29,7 @@ This is the first production-ready release, featuring:
 - Robust error handling with anyhow and thiserror
 - Comprehensive logging with tracing
 - Support for premium songs with MUSIC_U cookie configuration
+- **Code Quality**: Passes all clippy pedantic lints for maximum Rust code quality and safety
 
 ## Installation
 
