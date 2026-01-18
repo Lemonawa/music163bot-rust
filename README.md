@@ -1,4 +1,6 @@
 # Music163bot-Rust
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FLemonawa%2Fmusic163bot-rust.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FLemonawa%2Fmusic163bot-rust?ref=badge_shield)
+
 
 一个用 Rust 语言重写的网易云音乐 Telegram 机器人，基于 [Music163bot-Go](https://github.com/XiaoMengXinX/Music163bot-Go) 项目。
 
@@ -114,6 +116,9 @@ help - 显示详细使用帮助
 ## License
 
 [WTFPL License](LICENSE)
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FLemonawa%2Fmusic163bot-rust.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FLemonawa%2Fmusic163bot-rust?ref=badge_large)
 
 ## 致谢
 
