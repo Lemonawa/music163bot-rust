@@ -221,4 +221,13 @@ impl Database {
 
         Ok(result.rows_affected() > 0)
     }
+
+    /// Delete all songs from cache (admin only)
+    pub async fn clear_all_songs(&self) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM song_infos")
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected())
+    }
 }

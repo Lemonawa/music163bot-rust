@@ -199,7 +199,7 @@ async fn handle_command(
 
     // Only log music/search commands and admin commands
     match command {
-        "music" | "netease" | "search" | "rmcache" => {
+        "music" | "netease" | "search" | "rmcache" | "clearallcache" => {
             tracing::info!("Command: /{} from chat {}", command, msg.chat.id);
         }
         _ => {} // Don't log about/start/status commands
@@ -214,6 +214,18 @@ async fn handle_command(
         "lyric" => handle_lyric_command(bot, msg, state, args).await,
         "status" => handle_status_command(bot, msg, state).await,
         "rmcache" => handle_rmcache_command(bot, msg, state, args).await,
+        "clearallcache" => {
+            // Check if this is a confirmation
+            if let Some(ref arg) = args {
+                if arg.trim() == "confirm" {
+                    handle_clearallcache_confirm_command(bot, msg, state).await
+                } else {
+                    handle_clearallcache_command(bot, msg, state).await
+                }
+            } else {
+                handle_clearallcache_command(bot, msg, state).await
+            }
+        }
         _ => {
             // Unknown commands: don't respond (as requested)
             Ok(())
@@ -565,7 +577,7 @@ async fn download_and_send_music(
             if let Some(ref pic_url) = al.pic_url {
                 if pic_url.is_empty() {
                     tracing::warn!("Album art URL is empty for music_id {}", song_detail.id);
-                    None
+                    (None, None)
                 } else {
                     tracing::info!(
                         "Starting album art download for music_id {}, pic_url: {}",
@@ -573,10 +585,38 @@ async fn download_and_send_music(
                         pic_url
                     );
 
-                    match state.music_api.download_album_art_data(pic_url).await {
+                    // Download both versions in parallel: original (for embedding) and resized (for Telegram thumbnail)
+                    let original_future = state.music_api.download_album_art_original(pic_url);
+                    let thumbnail_future = state.music_api.download_album_art_data(pic_url);
+
+                    let (original_result, thumbnail_result) =
+                        tokio::join!(original_future, thumbnail_future);
+
+                    // Process original high-res image for embedding
+                    let original_data = match original_result {
                         Ok(data) => {
                             tracing::info!(
-                                "Downloaded album art for music_id {} ({} bytes)",
+                                "Downloaded original album art for music_id {} ({} bytes)",
+                                song_detail.id,
+                                data.len()
+                            );
+                            Some(data)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to download original album art for music_id {}: {}",
+                                song_detail.id,
+                                e
+                            );
+                            None
+                        }
+                    };
+
+                    // Process 320x320 thumbnail for Telegram display
+                    let thumbnail_buffer = match thumbnail_result {
+                        Ok(data) => {
+                            tracing::info!(
+                                "Downloaded thumbnail for music_id {} ({} bytes)",
                                 song_detail.id,
                                 data.len()
                             );
@@ -596,21 +636,23 @@ async fn download_and_send_music(
                         }
                         Err(e) => {
                             tracing::warn!(
-                                "Failed to download album art for music_id {}: {}",
+                                "Failed to download thumbnail for music_id {}: {}",
                                 song_detail.id,
                                 e
                             );
                             None
                         }
-                    }
+                    };
+
+                    (original_data, thumbnail_buffer)
                 }
             } else {
                 tracing::warn!("No pic_url found in album for music_id {}", song_detail.id);
-                None
+                (None, None)
             }
         } else {
             tracing::warn!("No album info found for music_id {}", song_detail.id);
-            None
+            (None, None)
         }
     };
 
@@ -653,7 +695,8 @@ async fn download_and_send_music(
     };
 
     // Execute both downloads in parallel
-    let (downloaded_result, thumbnail_buffer) = tokio::join!(audio_future, artwork_future);
+    let (downloaded_result, (original_artwork_data, thumbnail_buffer)) =
+        tokio::join!(audio_future, artwork_future);
     let (mut audio_buffer, downloaded) = downloaded_result?;
 
     tracing::info!(
@@ -666,7 +709,12 @@ async fn download_and_send_music(
         }
     );
     tracing::info!(
-        "Cover download result: {}",
+        "Cover download result - Original: {}, Thumbnail: {}",
+        if original_artwork_data.is_some() {
+            "Available"
+        } else {
+            "None"
+        },
         if thumbnail_buffer.is_some() {
             "Available"
         } else {
@@ -697,30 +745,23 @@ async fn download_and_send_music(
 
     tracing::info!("File validation passed: {} bytes", actual_size);
 
-    // 封面处理：先确保有封面文件，再根据格式处理
+    // 封面处理：使用原始高分辨率图片嵌入文件，缩略图用于Telegram显示
     tracing::info!("Processing cover art for {} format", file_ext);
 
-    // Get artwork data for embedding
-    let artwork_data = if let Some(ref thumb_buf) = thumbnail_buffer {
-        thumb_buf.get_data().await.ok()
-    } else {
-        None
-    };
-
-    // 根据文件格式嵌入封面
+    // 根据文件格式嵌入封面（使用原始高分辨率图片）
     match file_ext {
         "mp3" => {
             tracing::info!("Adding ID3 tags to MP3");
-            match audio_buffer.add_id3_tags(song_detail, artwork_data.as_deref()) {
+            match audio_buffer.add_id3_tags(song_detail, original_artwork_data.as_deref()) {
                 Ok(()) => tracing::info!("MP3 tags added successfully"),
                 Err(e) => tracing::warn!("Failed to add MP3 tags: {}", e),
             }
         }
         "flac" => {
-            tracing::info!("Adding PICTURE block to FLAC");
-            match audio_buffer.add_flac_metadata(artwork_data.as_deref()) {
-                Ok(()) => tracing::info!("FLAC cover embedded successfully"),
-                Err(e) => tracing::warn!("Failed to embed FLAC cover: {}", e),
+            tracing::info!("Adding FLAC metadata (vorbis comments + picture)");
+            match audio_buffer.add_flac_metadata(song_detail, original_artwork_data.as_deref()) {
+                Ok(()) => tracing::info!("FLAC metadata added successfully"),
+                Err(e) => tracing::warn!("Failed to add FLAC metadata: {}", e),
             }
         }
         _ => {
@@ -1012,14 +1053,11 @@ async fn handle_music_url(
         return process_music(bot, msg, state, music_id).await;
     }
 
-    let url = match extract_first_url(text) {
-        Some(url) => url,
-        None => {
-            bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
-                .reply_to_message_id(msg.id)
-                .await?;
-            return Ok(());
-        }
+    let Some(url) = extract_first_url(text) else {
+        bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
+            .reply_to_message_id(msg.id)
+            .await?;
+        return Ok(());
     };
 
     let response = match state.music_api.download_file(&url).await {
@@ -1335,6 +1373,82 @@ async fn handle_rmcache_command(
         bot.send_message(msg.chat.id, "无效的歌曲ID")
             .reply_to_message_id(msg.id)
             .await?;
+    }
+
+    Ok(())
+}
+
+async fn handle_clearallcache_command(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> ResponseResult<()> {
+    // Check if user is admin
+    let user_id = msg.from().map_or(0, |u| u.id.0 as i64);
+
+    tracing::info!(
+        "clearallcache command from user_id: {}, configured admins: {:?}",
+        user_id,
+        state.config.bot_admin
+    );
+
+    if !state.config.bot_admin.contains(&user_id) {
+        bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
+            .reply_to_message_id(msg.id)
+            .await?;
+        return Ok(());
+    }
+
+    // Send confirmation message
+    bot
+        .send_message(msg.chat.id, "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 `/clearallcache confirm` 确认操作。")
+        .reply_to_message_id(msg.id)
+        .await?;
+
+    Ok(())
+}
+
+async fn handle_clearallcache_confirm_command(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> ResponseResult<()> {
+    // Check if user is admin
+    let user_id = msg.from().map_or(0, |u| u.id.0 as i64);
+
+    if !state.config.bot_admin.contains(&user_id) {
+        bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
+            .reply_to_message_id(msg.id)
+            .await?;
+        return Ok(());
+    }
+
+    let status_msg = bot
+        .send_message(msg.chat.id, "🗑️ 正在清除所有缓存...")
+        .reply_to_message_id(msg.id)
+        .await?;
+
+    match state.database.clear_all_songs().await {
+        Ok(count) => {
+            bot.edit_message_text(
+                msg.chat.id,
+                status_msg.id,
+                format!("✅ 成功清除所有缓存！\n\n删除了 {count} 条记录"),
+            )
+            .await?;
+
+            tracing::info!(
+                "Admin {} cleared all cache, {} records deleted",
+                user_id,
+                count
+            );
+        }
+        Err(e) => {
+            bot.edit_message_text(msg.chat.id, status_msg.id, format!("❌ 清除缓存失败: {e}"))
+                .await?;
+
+            tracing::error!("Failed to clear all cache: {}", e);
+        }
     }
 
     Ok(())

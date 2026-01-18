@@ -417,6 +417,38 @@ impl MusicApi {
         .await
         .map_err(|e| BotError::MusicApi(format!("Image processing task panicked: {e}")))?
     }
+
+    /// Download original high-resolution album art without resizing (for embedding in audio files)
+    pub async fn download_album_art_original(&self, pic_url: &str) -> Result<Vec<u8>> {
+        if pic_url.is_empty() {
+            return Err(BotError::MusicApi("Empty album art URL".to_string()));
+        }
+
+        // Download the image
+        let mut request = self.client.get(pic_url);
+
+        // Add headers for image download
+        request = request
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
+            .header("Referer", "https://music.163.com/")
+            .header(
+                "Accept",
+                "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            );
+
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            return Err(BotError::MusicApi(format!(
+                "Failed to download album art: {}",
+                response.status()
+            )));
+        }
+
+        Ok(response.bytes().await?.to_vec())
+    }
 }
 
 /// Parse artists into a formatted string

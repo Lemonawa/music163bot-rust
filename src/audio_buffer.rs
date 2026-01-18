@@ -347,58 +347,91 @@ impl AudioBuffer {
         10 + size // Header (10 bytes) + tag data
     }
 
-    /// Add FLAC metadata (picture block) - supports both disk and memory modes
-    pub fn add_flac_metadata(&mut self, artwork_data: Option<&[u8]>) -> Result<()> {
-        let artwork = match artwork_data {
-            Some(data) if !data.is_empty() => data,
-            _ => return Ok(()), // No artwork to add
-        };
-
+    /// Add FLAC metadata (picture block + vorbis comments) - supports both disk and memory modes
+    pub fn add_flac_metadata(
+        &mut self,
+        song_detail: &SongDetail,
+        artwork_data: Option<&[u8]>,
+    ) -> Result<()> {
         match self {
             Self::Disk { path, .. } => {
                 // Disk mode: use metaflac directly
-                Self::add_flac_picture_disk(path, artwork)
+                Self::add_flac_metadata_disk(path, song_detail, artwork_data)
             }
             Self::Memory { data, .. } => {
                 // Memory mode: parse and rebuild FLAC in memory
-                Self::add_flac_picture_memory(data, artwork)
+                Self::add_flac_metadata_memory(data, song_detail, artwork_data)
             }
         }
     }
 
-    /// Add FLAC picture using disk-based metaflac
-    fn add_flac_picture_disk(path: &Path, artwork_data: &[u8]) -> Result<()> {
+    /// Add FLAC metadata using disk-based metaflac
+    fn add_flac_metadata_disk(
+        path: &Path,
+        song_detail: &SongDetail,
+        artwork_data: Option<&[u8]>,
+    ) -> Result<()> {
+        use crate::music_api::format_artists;
         use metaflac::block::{Picture, PictureType};
         use metaflac::Tag;
 
         let mut tag = Tag::read_from_path(path).unwrap_or_else(|_| Tag::new());
 
-        tag.remove_picture_type(PictureType::CoverFront);
+        // Add Vorbis Comments (text metadata)
+        // Title
+        tag.set_vorbis("TITLE", vec![song_detail.name.clone()]);
 
-        let (width, height) = match image::load_from_memory(artwork_data) {
-            Ok(img) => (img.width(), img.height()),
-            Err(_) => (0, 0),
-        };
+        // Album
+        let album_name = song_detail
+            .al
+            .as_ref()
+            .map_or("Unknown Album", |al| al.name.as_str());
+        tag.set_vorbis("ALBUM", vec![album_name.to_string()]);
 
-        let mut pic = Picture::new();
-        pic.picture_type = PictureType::CoverFront;
-        pic.mime_type = "image/jpeg".to_string();
-        pic.description = "Album Cover".to_string();
-        pic.width = width;
-        pic.height = height;
-        pic.depth = 24;
-        pic.num_colors = 0;
-        pic.data = artwork_data.to_vec();
+        // Artist (Performer)
+        let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
+        tag.set_vorbis("ARTIST", vec![artist]);
 
-        tag.push_block(metaflac::Block::Picture(pic));
+        // Description (163 key - used by original project for DRM info)
+        // We'll add a placeholder or music ID since we don't have the original 163 key
+        let description = format!("163 key(Don't modify):Music ID {}", song_detail.id);
+        tag.set_vorbis("DESCRIPTION", vec![description]);
+
+        // Add album artwork if provided
+        if let Some(artwork_data) = artwork_data {
+            tag.remove_picture_type(PictureType::CoverFront);
+
+            let (width, height) = match image::load_from_memory(artwork_data) {
+                Ok(img) => (img.width(), img.height()),
+                Err(_) => (0, 0),
+            };
+
+            let mut pic = Picture::new();
+            pic.picture_type = PictureType::CoverFront;
+            pic.mime_type = "image/jpeg".to_string();
+            pic.description = "Front cover".to_string();
+            pic.width = width;
+            pic.height = height;
+            pic.depth = 24;
+            pic.num_colors = 0;
+            pic.data = artwork_data.to_vec();
+
+            tag.push_block(metaflac::Block::Picture(pic));
+        }
+
         tag.write_to_path(path)
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata: {e}"))?;
 
         Ok(())
     }
 
-    /// Add FLAC picture in memory by parsing and rebuilding the file
-    fn add_flac_picture_memory(data: &mut Vec<u8>, artwork_data: &[u8]) -> Result<()> {
+    /// Add FLAC metadata in memory by parsing and rebuilding the file
+    fn add_flac_metadata_memory(
+        data: &mut Vec<u8>,
+        song_detail: &SongDetail,
+        artwork_data: Option<&[u8]>,
+    ) -> Result<()> {
+        use crate::music_api::format_artists;
         use metaflac::block::{Picture, PictureType};
         use metaflac::Tag;
 
@@ -410,27 +443,48 @@ impl AudioBuffer {
         let mut cursor = Cursor::new(&data[..]);
         let mut tag = Tag::read_from(&mut cursor).unwrap_or_else(|_| Tag::new());
 
-        // 3. Remove existing front cover and add new one
-        tag.remove_picture_type(PictureType::CoverFront);
+        // 3. Add Vorbis Comments (text metadata)
+        // Title
+        tag.set_vorbis("TITLE", vec![song_detail.name.clone()]);
 
-        let (width, height) = match image::load_from_memory(artwork_data) {
-            Ok(img) => (img.width(), img.height()),
-            Err(_) => (0, 0),
-        };
+        // Album
+        let album_name = song_detail
+            .al
+            .as_ref()
+            .map_or("Unknown Album", |al| al.name.as_str());
+        tag.set_vorbis("ALBUM", vec![album_name.to_string()]);
 
-        let mut pic = Picture::new();
-        pic.picture_type = PictureType::CoverFront;
-        pic.mime_type = "image/jpeg".to_string();
-        pic.description = "Album Cover".to_string();
-        pic.width = width;
-        pic.height = height;
-        pic.depth = 24;
-        pic.num_colors = 0;
-        pic.data = artwork_data.to_vec();
+        // Artist (Performer)
+        let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
+        tag.set_vorbis("ARTIST", vec![artist]);
 
-        tag.push_block(metaflac::Block::Picture(pic));
+        // Description (163 key - used by original project for DRM info)
+        let description = format!("163 key(Don't modify):Music ID {}", song_detail.id);
+        tag.set_vorbis("DESCRIPTION", vec![description]);
 
-        // 4. Write new metadata + audio data
+        // 4. Add album artwork if provided
+        if let Some(artwork_data) = artwork_data {
+            tag.remove_picture_type(PictureType::CoverFront);
+
+            let (width, height) = match image::load_from_memory(artwork_data) {
+                Ok(img) => (img.width(), img.height()),
+                Err(_) => (0, 0),
+            };
+
+            let mut pic = Picture::new();
+            pic.picture_type = PictureType::CoverFront;
+            pic.mime_type = "image/jpeg".to_string();
+            pic.description = "Front cover".to_string();
+            pic.width = width;
+            pic.height = height;
+            pic.depth = 24;
+            pic.num_colors = 0;
+            pic.data = artwork_data.to_vec();
+
+            tag.push_block(metaflac::Block::Picture(pic));
+        }
+
+        // 5. Write new metadata + audio data
         data.clear();
         tag.write_to(data)
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
