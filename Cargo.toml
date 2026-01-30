@@ -61,7 +61,7 @@ image = { version = "0.24", default-features = false, features = ["jpeg", "png",
 metaflac = "0.2"
 
 # System info (for memory detection in smart storage)
-sysinfo = "0.30"
+sysinfo = "0.38"
 
 # Memory allocator with better memory return behavior
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
