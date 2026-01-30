@@ -1,8 +1,9 @@
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 /// Storage mode for temporary files during download processing
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
