@@ -891,39 +891,43 @@ async fn download_and_send_music(
         }
     );
 
-    // Build a dedicated upload bot. If a custom API is configured, use it but with an upload-optimized HTTP client.
-    let (upload_bot, _used_custom_api) =
-        if !state.config.bot_api.is_empty() && state.config.bot_api != "https://api.telegram.org" {
-            // Normalize API URL (ensure it ends with /bot)
-            let api_url_str = if state.config.bot_api.ends_with("/bot") {
+    // Build a dedicated upload bot with optimized HTTP client for large file uploads.
+    // Always create a separate client with longer timeout and disabled connection pooling
+    // to prevent "token invalid" errors caused by stale connections after long uploads.
+    let upload_bot = {
+        let api_url_str = if !state.config.bot_api.is_empty() && state.config.bot_api != "https://api.telegram.org" {
+            if state.config.bot_api.ends_with("/bot") {
                 state.config.bot_api.clone()
             } else {
                 format!("{}/bot", state.config.bot_api)
-            };
-
-            let api_url = reqwest::Url::parse(&api_url_str)
-                .unwrap_or_else(|_| reqwest::Url::parse("https://api.telegram.org/bot").unwrap());
-            tracing::info!("Using custom API for upload: {}", api_url);
-
-            // Create a client optimized for multipart uploads
-            // pool_max_idle_per_host(0) prevents connection pool memory accumulation after upload
-            let client = reqwest::Client::builder()
-                .use_rustls_tls()
-                .timeout(std::time::Duration::from_secs(300)) // large files need longer timeouts
-                .pool_max_idle_per_host(0)
-                .no_gzip() // avoid gzip interference on multipart boundaries via proxies
-                .user_agent("Go-http-client/2.0")
-                .default_headers(reqwest::header::HeaderMap::new())
-                .build()
-                .unwrap();
-
-            (
-                Bot::with_client(&state.config.bot_token, client).set_api_url(api_url),
-                true,
-            )
+            }
         } else {
-            (bot.clone(), false)
+            "https://api.telegram.org/bot".to_string()
         };
+
+        let api_url = reqwest::Url::parse(&api_url_str)
+            .unwrap_or_else(|_| reqwest::Url::parse("https://api.telegram.org/bot").unwrap());
+        
+        if api_url_str != "https://api.telegram.org/bot" {
+            tracing::info!("Using custom API for upload: {}", api_url);
+        }
+
+        // Create a client optimized for multipart uploads
+        // - 300s timeout for large files
+        // - pool_max_idle_per_host(0) prevents stale connection issues after long uploads
+        // - no_gzip avoids gzip interference on multipart boundaries
+        let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            .timeout(std::time::Duration::from_secs(300))
+            .pool_max_idle_per_host(0)
+            .no_gzip()
+            .user_agent("Go-http-client/2.0")
+            .default_headers(reqwest::header::HeaderMap::new())
+            .build()
+            .unwrap();
+
+        Bot::with_client(&state.config.bot_token, client).set_api_url(api_url)
+    };
 
     // Send audio file with enhanced error handling and proper MIME type
     tracing::info!(
