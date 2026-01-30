@@ -230,4 +230,19 @@ impl Database {
 
         Ok(result.rows_affected())
     }
+
+    /// Optimize database by running VACUUM to reclaim space and defragment
+    /// Should be called periodically after many deletions
+    pub async fn optimize(&self) -> Result<()> {
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        tracing::info!("Database VACUUM completed successfully");
+        Ok(())
+    }
+
+    /// Run ANALYZE to update query planner statistics
+    pub async fn analyze(&self) -> Result<()> {
+        sqlx::query("ANALYZE").execute(&self.pool).await?;
+        tracing::debug!("Database ANALYZE completed");
+        Ok(())
+    }
 }

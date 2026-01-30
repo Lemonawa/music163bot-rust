@@ -944,8 +944,9 @@ async fn download_and_send_music(
     // Explicitly drop upload_bot to release HTTP connection pool immediately
     drop(upload_bot);
 
-    // Save to database
+    // Save to database and update query statistics
     state.database.save_song_info(&song_info).await?;
+    state.database.analyze().await.ok(); // Non-critical, ignore errors
 
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
@@ -1357,6 +1358,11 @@ async fn handle_clearallcache_confirm_command(
 
     match state.database.clear_all_songs().await {
         Ok(count) => {
+            // Optimize database after bulk deletion
+            if let Err(e) = state.database.optimize().await {
+                tracing::warn!("Database optimization failed after clear: {}", e);
+            }
+
             bot.edit_message_text(
                 msg.chat.id,
                 status_msg.id,
