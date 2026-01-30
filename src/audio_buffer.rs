@@ -175,7 +175,12 @@ impl AudioBuffer {
 
     /// Get available system memory in MB
     fn get_available_memory_mb() -> u64 {
-        let mut sys = System::new();
+        // Use a static System instance to avoid creating new allocations each time
+        use std::sync::Mutex;
+        use std::sync::OnceLock;
+        
+        static SYSTEM: OnceLock<Mutex<System>> = OnceLock::new();
+        let mut sys = SYSTEM.get_or_init(|| Mutex::new(System::new())).lock().unwrap();
         sys.refresh_memory();
         sys.available_memory() / (1024 * 1024)
     }

@@ -397,25 +397,24 @@ impl MusicApi {
 
         let bytes = response.bytes().await?.to_vec();
 
-        // Offload image processing to a blocking thread to avoid blocking the async runtime
-        tokio::task::spawn_blocking(move || {
-            // Load and resize image
-            let img = image::load_from_memory(&bytes)
-                .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
+        // Process image inline to avoid spawn_blocking memory overhead
+        // Load and resize image
+        let img = image::load_from_memory(&bytes)
+            .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
+        
+        // Drop original bytes to free memory before processing
+        drop(bytes);
 
-            // Resize to 320x320 with black padding (like the original Go project)
-            let resized = resize_image_with_padding(img, 320, 320);
+        // Resize to 320x320 with black padding (like the original Go project)
+        let resized = resize_image_with_padding(img, 320, 320);
 
-            // Save as JPEG into memory
-            let mut cursor = Cursor::new(Vec::new());
-            resized
-                .write_to(&mut cursor, ImageFormat::Jpeg)
-                .map_err(|e| BotError::MusicApi(format!("Failed to encode image: {e}")))?;
+        // Save as JPEG into memory
+        let mut cursor = Cursor::new(Vec::new());
+        resized
+            .write_to(&mut cursor, ImageFormat::Jpeg)
+            .map_err(|e| BotError::MusicApi(format!("Failed to encode image: {e}")))?;
 
-            Ok(cursor.into_inner())
-        })
-        .await
-        .map_err(|e| BotError::MusicApi(format!("Image processing task panicked: {e}")))?
+        Ok(cursor.into_inner())
     }
 
     /// Download original high-resolution album art without resizing (for embedding in audio files)
