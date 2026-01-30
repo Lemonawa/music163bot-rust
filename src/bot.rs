@@ -125,7 +125,7 @@ pub async fn run(config: Config) -> Result<()> {
         config: config.clone(),
         database,
         music_api,
-        download_semaphore: Arc::new(tokio::sync::Semaphore::new(10)), // 增加到 10 个并发下载
+        download_semaphore: Arc::new(tokio::sync::Semaphore::new(3)), // 限制为 3 个并发下载以减少内存峰值
         bot_username,
     });
 
@@ -951,6 +951,9 @@ async fn download_and_send_music(
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
 
+    // Give tokio time to clean up spawned tasks before forcing memory release
+    tokio::task::yield_now().await;
+    
     // Force memory release after download completes
     crate::memory::force_memory_release();
     crate::memory::log_memory_stats();

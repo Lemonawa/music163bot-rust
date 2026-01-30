@@ -1468,7 +1468,6 @@ dependencies = [
  "id3",
  "image",
  "ini",
- "libc",
  "md5",
  "metaflac",
  "once_cell",
