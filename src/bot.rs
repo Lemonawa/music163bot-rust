@@ -2,20 +2,21 @@ use std::sync::Arc;
 
 use anyhow;
 use futures_util::StreamExt;
+use teloxide::RequestError;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::RequestError;
 use teloxide::types::{
-    CallbackQuery, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResult,
-    InlineQueryResultArticle, InputFile, InputMessageContent, InputMessageContentText, Message,
-    MessageKind, MaybeInaccessibleMessage, ParseMode, ReplyMarkup, ReplyParameters,
+    CallbackQuery, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery,
+    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMessageContent,
+    InputMessageContentText, MaybeInaccessibleMessage, Message, MessageKind, ParseMode,
+    ReplyMarkup, ReplyParameters,
 };
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::Config;
 use crate::database::{Database, SongInfo};
 use crate::error::Result;
-use crate::music_api::{format_artists, MusicApi};
+use crate::music_api::{MusicApi, format_artists};
 use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id};
 
 pub struct BotState {
@@ -82,9 +83,14 @@ pub async fn run(config: Config) -> Result<()> {
                             || error_msg.contains("cloudflare")
                             || error_msg.contains("challenge")
                         {
-                            tracing::warn!("❌ Custom API blocked by CloudFlare protection. Falling back to official API.");
+                            tracing::warn!(
+                                "❌ Custom API blocked by CloudFlare protection. Falling back to official API."
+                            );
                         } else {
-                            tracing::warn!("❌ Custom API connection failed: {}. Falling back to official API.", e);
+                            tracing::warn!(
+                                "❌ Custom API connection failed: {}. Falling back to official API.",
+                                e
+                            );
                         }
                         tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
                         Bot::new(&config.bot_token)
@@ -152,33 +158,32 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> ResponseResult<()> {
-    if let MessageKind::Common(common) = &msg.kind {
-        if let teloxide::types::MediaKind::Text(text_content) = &common.media_kind {
-            let text = text_content.text.clone();
-            let bot = bot.clone();
-            let msg = msg.clone();
-            let state = state.clone();
+    if let MessageKind::Common(common) = &msg.kind
+        && let teloxide::types::MediaKind::Text(text_content) = &common.media_kind
+    {
+        let text = text_content.text.clone();
+        let bot = bot.clone();
+        let msg = msg.clone();
+        let state = state.clone();
 
-            // Spawn a new task to handle the message concurrently
-            // This allows multiple messages to be processed in parallel
-            tokio::spawn(async move {
-                // Handle commands
-                if text.starts_with('/') {
-                    if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
-                        tracing::error!("Error handling command: {}", e);
-                    }
+        // Spawn a new task to handle the message concurrently
+        // This allows multiple messages to be processed in parallel
+        tokio::spawn(async move {
+            // Handle commands
+            if text.starts_with('/') {
+                if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
+                    tracing::error!("Error handling command: {}", e);
                 }
-                // Handle music URLs
-                else if text.contains("music.163.com")
-                    || text.contains("163cn.tv")
-                    || text.contains("163cn.link")
-                {
-                    if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
-                        tracing::error!("Error handling music URL: {}", e);
-                    }
-                }
-            });
-        }
+            }
+            // Handle music URLs
+            else if (text.contains("music.163.com")
+                || text.contains("163cn.tv")
+                || text.contains("163cn.link"))
+                && let Err(e) = handle_music_url(&bot, &msg, &state, &text).await
+            {
+                tracing::error!("Error handling music URL: {}", e);
+            }
+        });
     }
     Ok(())
 }
@@ -245,63 +250,67 @@ async fn handle_start_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    if let Some(arg) = args {
-        if let Ok(music_id) = arg.parse::<u64>() {
-            // Check if we already have this in database
-            if let Ok(Some(song_info)) = state.database.get_song_by_music_id(music_id as i64).await
-            {
-                if let Some(file_id) = song_info.file_id {
-                    let caption = build_caption(
-                        &song_info.song_name,
-                        &song_info.song_artists,
-                        &song_info.song_album,
-                        &song_info.file_ext,
-                        song_info.music_size,
-                        song_info.bit_rate,
-                        &state.bot_username,
-                    );
-                    let keyboard = create_music_keyboard(
-                        song_info.music_id as u64,
-                        &song_info.song_name,
-                        &song_info.song_artists,
-                    );
+    if let Some(arg) = args
+        && let Ok(music_id) = arg.parse::<u64>()
+    {
+        // Check if we already have this in database
+        if let Ok(Some(song_info)) = state.database.get_song_by_music_id(music_id as i64).await
+            && let Some(file_id) = song_info.file_id
+        {
+            let caption = build_caption(
+                &song_info.song_name,
+                &song_info.song_artists,
+                &song_info.song_album,
+                &song_info.file_ext,
+                song_info.music_size,
+                song_info.bit_rate,
+                &state.bot_username,
+            );
+            let keyboard = create_music_keyboard(
+                song_info.music_id as u64,
+                &song_info.song_name,
+                &song_info.song_artists,
+            );
 
-                    let mut send_audio = bot.send_audio(msg.chat.id, InputFile::file_id(FileId(file_id)))
-                        .caption(caption)
-                        .reply_markup(ReplyMarkup::InlineKeyboard(keyboard))
-                        .reply_parameters(ReplyParameters::new(msg.id));
+            let mut send_audio = bot
+                .send_audio(msg.chat.id, InputFile::file_id(FileId(file_id)))
+                .caption(caption)
+                .reply_markup(ReplyMarkup::InlineKeyboard(keyboard))
+                .reply_parameters(ReplyParameters::new(msg.id));
 
-                    if let Some(thumb_id) = song_info.thumb_file_id {
-                        send_audio = send_audio.thumbnail(InputFile::file_id(FileId(thumb_id)));
-                    }
+            if let Some(thumb_id) = song_info.thumb_file_id {
+                send_audio = send_audio.thumbnail(InputFile::file_id(FileId(thumb_id)));
+            }
 
-                    match send_audio.await {
-                        Ok(_) => return Ok(()),
-                        Err(e) => {
-                            let err_str = format!("{e}");
-                            if err_str.contains("invalid remote file identifier") {
-                                tracing::warn!(
-                                    "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
-                                    music_id, e
-                                );
-                                let _ = state.database.delete_song_by_music_id(music_id as i64).await;
-                            } else {
-                                return Err(e);
-                            }
-                        }
+            match send_audio.await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    let err_str = format!("{e}");
+                    if err_str.contains("invalid remote file identifier") {
+                        tracing::warn!(
+                            "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
+                            music_id,
+                            e
+                        );
+                        let _ = state
+                            .database
+                            .delete_song_by_music_id(music_id as i64)
+                            .await;
+                    } else {
+                        return Err(e);
                     }
                 }
             }
-
-            // Not in database or no file_id, trigger download flow
-            return handle_music_url(
-                bot,
-                msg,
-                state,
-                &format!("https://music.163.com/song?id={music_id}"),
-            )
-            .await;
         }
+
+        // Not in database or no file_id, trigger download flow
+        return handle_music_url(
+            bot,
+            msg,
+            state,
+            &format!("https://music.163.com/song?id={music_id}"),
+        )
+        .await;
     }
 
     let welcome_text = format!(
@@ -452,7 +461,8 @@ async fn process_music(
                         if err_str.contains("invalid remote file identifier") {
                             tracing::warn!(
                                 "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
-                                music_id, e
+                                music_id,
+                                e
                             );
                             let _ = state.database.delete_song_by_music_id(music_id_i64).await;
                             // Continue to download flow below
@@ -955,10 +965,10 @@ async fn download_and_send_music(
             );
 
             // Extract file_id from sent message
-            if let MessageKind::Common(common) = &sent_msg.kind {
-                if let teloxide::types::MediaKind::Audio(audio) = &common.media_kind {
-                    song_info.file_id = Some(audio.audio.file.id.to_string());
-                }
+            if let MessageKind::Common(common) = &sent_msg.kind
+                && let teloxide::types::MediaKind::Audio(audio) = &common.media_kind
+            {
+                song_info.file_id = Some(audio.audio.file.id.to_string());
             }
 
             // No cleanup needed - both audio_buffer and thumbnail_buffer were consumed
@@ -1084,7 +1094,11 @@ async fn handle_search_command(
 
             for (i, song) in songs.iter().take(8).enumerate() {
                 let artists = format_artists(&song.artists);
-                std::fmt::write(&mut results, format_args!("{}.「{}」 - {}\n", i + 1, song.name, artists)).unwrap();
+                std::fmt::write(
+                    &mut results,
+                    format_args!("{}.「{}」 - {}\n", i + 1, song.name, artists),
+                )
+                .unwrap();
                 buttons.push(InlineKeyboardButton::callback(
                     format!("{}", i + 1),
                     format!("music {}", song.id),
@@ -1210,7 +1224,9 @@ async fn handle_lyric_command(
             let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
             let lrc_path = format!("{}/{}", state.config.cache_dir, lrc_filename);
 
-            tokio::fs::write(&lrc_path, &lyric).await.map_err(|e| RequestError::Io(Arc::new(e)))?;
+            tokio::fs::write(&lrc_path, &lyric)
+                .await
+                .map_err(|e| RequestError::Io(Arc::new(e)))?;
 
             bot.send_document(
                 msg.chat.id,
@@ -1434,25 +1450,25 @@ async fn handle_callback(
 ) -> ResponseResult<()> {
     if let Some(data) = query.data {
         let parts: Vec<&str> = data.split_whitespace().collect();
-         if parts.len() >= 2 && parts[0] == "music" {
-            if let Ok(music_id) = parts[1].parse::<u64>() {
-                if let Some(MaybeInaccessibleMessage::Regular(msg)) = &query.message {
-                    match process_music(&bot, msg, &state, music_id).await {
-                    Ok(()) => {
-                        bot.answer_callback_query(query.id)
-                            .text("✅ 开始下载")
-                            .await?;
-                    }
-                    Err(e) => {
-                        tracing::error!("Error processing music from callback: {}", e);
-                        bot.answer_callback_query(query.id)
-                            .text(format!("❌ 失败: {e}"))
-                            .await?;
-                    }
-                    }
-                    return Ok(());
+        if parts.len() >= 2
+            && parts[0] == "music"
+            && let Ok(music_id) = parts[1].parse::<u64>()
+            && let Some(MaybeInaccessibleMessage::Regular(msg)) = &query.message
+        {
+            match process_music(&bot, msg, &state, music_id).await {
+                Ok(()) => {
+                    bot.answer_callback_query(query.id)
+                        .text("✅ 开始下载")
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!("Error processing music from callback: {}", e);
+                    bot.answer_callback_query(query.id)
+                        .text(format!("❌ 失败: {e}"))
+                        .await?;
                 }
             }
+            return Ok(());
         }
     }
 
@@ -1489,7 +1505,7 @@ async fn handle_inline_query(
                     "使用方法：在 @{} 后面输入 search 关键词 搜索音乐",
                     state.bot_username
                 ))),
-             )
+            )
             .description("输入关键词开始搜索");
 
             bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(help_article)])
@@ -1527,10 +1543,10 @@ async fn handle_inline_query(
                 )
                 .description(artists);
 
-                if let Some(ref pic_url) = song.album.pic_url {
-                    if let Ok(url) = reqwest::Url::parse(pic_url) {
-                        article = article.thumbnail_url(url);
-                    }
+                if let Some(ref pic_url) = song.album.pic_url
+                    && let Ok(url) = reqwest::Url::parse(pic_url)
+                {
+                    article = article.thumbnail_url(url);
                 }
 
                 results.push(InlineQueryResult::Article(article));
@@ -1546,7 +1562,7 @@ async fn handle_inline_query(
                 "search_error",
                 "搜索失败",
                 InputMessageContent::Text(InputMessageContentText::new(format!("搜索失败: {e}"))),
-             )
+            )
             .description("搜索失败，请稍后重试");
 
             bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(error_article)])

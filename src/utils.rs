@@ -19,19 +19,18 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
     let text = text.replace(['\n', ' '], "");
 
     // Try to extract from URL
-    if let Some(captures) = SONG_REGEX.captures(&text) {
-        if let Some(id_str) = captures.get(1) {
-            return id_str.as_str().parse().ok();
-        }
+    if let Some(captures) = SONG_REGEX.captures(&text)
+        && let Some(id_str) = captures.get(1)
+    {
+        return id_str.as_str().parse().ok();
     }
 
     // Try to extract from share link
-    if let Some(url_match) = SHARE_LINK_REGEX.find(&text) {
-        if url_match.as_str().contains("song") {
-            if let Some(id_match) = NUMBER_REGEX.find(url_match.as_str()) {
-                return id_match.as_str().parse().ok();
-            }
-        }
+    if let Some(url_match) = SHARE_LINK_REGEX.find(&text)
+        && url_match.as_str().contains("song")
+        && let Some(id_match) = NUMBER_REGEX.find(url_match.as_str())
+    {
+        return id_match.as_str().parse().ok();
     }
 
     // Try to parse as direct number (only if the entire text is a number)

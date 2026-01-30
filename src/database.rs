@@ -35,10 +35,10 @@ impl Database {
     /// Create a new database connection with limited pool size
     pub async fn new(database_url: &str) -> Result<Self> {
         // Create database directory if it doesn't exist
-        if let Some(parent) = std::path::Path::new(database_url).parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = std::path::Path::new(database_url).parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent)?;
         }
 
         // Configure connection pool with limited connections for SQLite
