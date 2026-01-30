@@ -1084,7 +1084,7 @@ async fn handle_search_command(
 
             for (i, song) in songs.iter().take(8).enumerate() {
                 let artists = format_artists(&song.artists);
-                results.push_str(&format!("{}.「{}」 - {}\n", i + 1, song.name, artists));
+                std::fmt::write(&mut results, format_args!("{}.「{}」 - {}\n", i + 1, song.name, artists)).unwrap();
                 buttons.push(InlineKeyboardButton::callback(
                     format!("{}", i + 1),
                     format!("music {}", song.id),

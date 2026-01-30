@@ -10,8 +10,7 @@
     clippy::too_many_lines,
     clippy::struct_excessive_bools,
     clippy::doc_markdown,
-    clippy::needless_pass_by_value,
-    clippy::format_push_string
+    clippy::needless_pass_by_value
 )]
 
 // Use jemalloc with tuning for better memory return to OS
