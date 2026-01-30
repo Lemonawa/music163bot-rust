@@ -941,11 +941,18 @@ async fn download_and_send_music(
         }
     }
 
+    // Explicitly drop upload_bot to release HTTP connection pool immediately
+    drop(upload_bot);
+
     // Save to database
     state.database.save_song_info(&song_info).await?;
 
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
+
+    // Force memory release after download completes
+    crate::memory::force_memory_release();
+    crate::memory::log_memory_stats();
 
     Ok(())
 }

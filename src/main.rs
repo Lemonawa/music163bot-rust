@@ -27,6 +27,7 @@ pub mod bot;
 pub mod config;
 pub mod database;
 pub mod error;
+pub mod memory;
 pub mod music_api;
 pub mod utils;
 
