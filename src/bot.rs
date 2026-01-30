@@ -51,10 +51,11 @@ pub async fn run(config: Config) -> Result<()> {
                 tracing::info!("Using custom Telegram API URL: {}", api_url);
 
                 // Create a custom HTTP client tuned for Cloudflare compatibility (mimic Go http client)
+                // pool_max_idle_per_host(0) prevents connection pool memory accumulation
                 let client = reqwest::Client::builder()
                     .use_rustls_tls()
                     .user_agent("Go-http-client/2.0")
-                    .pool_max_idle_per_host(2)
+                    .pool_max_idle_per_host(0)
                     .danger_accept_invalid_certs(false)
                     .timeout(std::time::Duration::from_secs(30))
                     .no_gzip()
@@ -151,22 +152,29 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
     if let MessageKind::Common(common) = &msg.kind {
         if let teloxide::types::MediaKind::Text(text_content) = &common.media_kind {
             let text = text_content.text.clone();
+            let bot = bot.clone();
+            let msg = msg.clone();
+            let state = state.clone();
 
-            // Handle commands
-            if text.starts_with('/') {
-                if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
-                    tracing::error!("Error handling command: {}", e);
+            // Spawn a new task to handle the message concurrently
+            // This allows multiple messages to be processed in parallel
+            tokio::spawn(async move {
+                // Handle commands
+                if text.starts_with('/') {
+                    if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
+                        tracing::error!("Error handling command: {}", e);
+                    }
                 }
-            }
-            // Handle music URLs
-            else if text.contains("music.163.com")
-                || text.contains("163cn.tv")
-                || text.contains("163cn.link")
-            {
-                if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
-                    tracing::error!("Error handling music URL: {}", e);
+                // Handle music URLs
+                else if text.contains("music.163.com")
+                    || text.contains("163cn.tv")
+                    || text.contains("163cn.link")
+                {
+                    if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
+                        tracing::error!("Error handling music URL: {}", e);
+                    }
                 }
-            }
+            });
         }
     }
     Ok(())
@@ -856,10 +864,11 @@ async fn download_and_send_music(
             tracing::info!("Using custom API for upload: {}", api_url);
 
             // Create a client optimized for multipart uploads
+            // pool_max_idle_per_host(0) prevents connection pool memory accumulation after upload
             let client = reqwest::Client::builder()
                 .use_rustls_tls()
                 .timeout(std::time::Duration::from_secs(300)) // large files need longer timeouts
-                .pool_max_idle_per_host(2)
+                .pool_max_idle_per_host(0)
                 .no_gzip() // avoid gzip interference on multipart boundaries via proxies
                 .user_agent("Go-http-client/2.0")
                 .default_headers(reqwest::header::HeaderMap::new())
