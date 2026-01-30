@@ -117,11 +117,12 @@ impl MusicApi {
         // Use rustls TLS for better compatibility
         client_builder = client_builder.use_rustls_tls();
 
-        // Performance optimizations
+        // Conservative connection pool settings to prevent memory accumulation
+        // Lower idle timeout and connections per host to reduce memory footprint
         client_builder = client_builder
             .tcp_nodelay(true)
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .pool_max_idle_per_host(8)
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .pool_max_idle_per_host(2)
             .connect_timeout(std::time::Duration::from_secs(10));
 
         // Add user agent
@@ -367,6 +368,7 @@ impl MusicApi {
     }
 
     /// Download and resize album art image into memory
+    /// Uses spawn_blocking for CPU-intensive image processing to avoid blocking async runtime
     pub async fn download_album_art_data(&self, pic_url: &str) -> Result<Vec<u8>> {
         if pic_url.is_empty() {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
@@ -396,21 +398,29 @@ impl MusicApi {
         }
 
         let bytes = response.bytes().await?;
+        let bytes_vec = bytes.to_vec();
 
-        // Process image inline - spawn_blocking can cause memory retention in thread pool
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
+        // Process image in spawn_blocking to avoid blocking async runtime
+        // Use a dedicated blocking task that completes and releases resources
+        let processed = tokio::task::spawn_blocking(move || {
+            let img = image::load_from_memory(&bytes_vec)
+                .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
 
-        // Resize to 320x320 with black padding (like original Go project)
-        let resized = resize_image_with_padding(img, 320, 320);
+            // Resize to 320x320 with black padding (like original Go project)
+            let resized = resize_image_with_padding(img, 320, 320);
 
-        // Save as JPEG into memory
-        let mut cursor = Cursor::new(Vec::new());
-        resized
-            .write_to(&mut cursor, ImageFormat::Jpeg)
-            .map_err(|e| BotError::MusicApi(format!("Failed to encode image: {e}")))?;
+            // Save as JPEG into memory
+            let mut cursor = Cursor::new(Vec::new());
+            resized
+                .write_to(&mut cursor, ImageFormat::Jpeg)
+                .map_err(|e| BotError::MusicApi(format!("Failed to encode image: {e}")))?;
 
-        Ok(cursor.into_inner())
+            Ok::<Vec<u8>, BotError>(cursor.into_inner())
+        })
+        .await
+        .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
+
+        Ok(processed)
     }
 
     /// Download original high-resolution album art without resizing (for embedding in audio files)
