@@ -62,3 +62,7 @@ metaflac = "0.2"
 
 # System info (for memory detection in smart storage)
 sysinfo = "0.30"
+
+# Memory allocator with better memory return behavior
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }

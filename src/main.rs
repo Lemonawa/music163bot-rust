@@ -14,6 +14,14 @@
     clippy::format_push_string
 )]
 
+// Use jemalloc with tuning for better memory return to OS
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 pub mod audio_buffer;
 pub mod bot;
 pub mod config;
