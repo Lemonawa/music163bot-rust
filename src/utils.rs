@@ -88,7 +88,7 @@ pub fn verify_md5(file_path: &str, expected_md5: &str) -> anyhow::Result<bool> {
         hasher.consume(&buffer[..count]);
     }
 
-    let result = hasher.compute();
+    let result = hasher.finalize();
     let hash = format!("{result:x}");
 
     Ok(hash.eq_ignore_ascii_case(expected_md5))
