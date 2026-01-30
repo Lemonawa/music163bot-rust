@@ -175,12 +175,7 @@ impl AudioBuffer {
 
     /// Get available system memory in MB
     fn get_available_memory_mb() -> u64 {
-        // Use a static System instance to avoid creating new allocations each time
-        use std::sync::Mutex;
-        use std::sync::OnceLock;
-        
-        static SYSTEM: OnceLock<Mutex<System>> = OnceLock::new();
-        let mut sys = SYSTEM.get_or_init(|| Mutex::new(System::new())).lock().unwrap();
+        let mut sys = System::new();
         sys.refresh_memory();
         sys.available_memory() / (1024 * 1024)
     }
@@ -310,25 +305,22 @@ impl AudioBuffer {
                     .context("Failed to write ID3 tags to memory")?;
 
                 // For MP3: ID3v2 tag goes at the beginning
-                // The original data is raw MP3 frames, we need to prepend the tag
-                // However, if the file already has an ID3 tag, we need to handle that
-                // For simplicity, we assume downloaded files don't have ID3 tags
-                // and we just prepend our new tag
-
                 // Check if data already starts with ID3
                 let has_existing_id3 = data.len() >= 3 && &data[0..3] == b"ID3";
                 if has_existing_id3 {
                     // Skip existing ID3 tag and replace with new one
                     let audio_start = Self::find_mp3_audio_start(data);
-                    let audio_data = data[audio_start..].to_vec();
-                    data.clear();
-                    data.extend_from_slice(&tag_buffer);
-                    data.extend_from_slice(&audio_data);
+                    // Use a single reallocation approach
+                    let mut new_data = Vec::with_capacity(tag_buffer.len() + data.len() - audio_start);
+                    new_data.extend_from_slice(&tag_buffer);
+                    new_data.extend_from_slice(&data[audio_start..]);
+                    *data = new_data;
                 } else {
-                    // No existing ID3, just prepend
-                    let old_data = std::mem::take(data);
-                    data.extend_from_slice(&tag_buffer);
-                    data.extend_from_slice(&old_data);
+                    // No existing ID3, just prepend - use single allocation
+                    let mut new_data = Vec::with_capacity(tag_buffer.len() + data.len());
+                    new_data.extend_from_slice(&tag_buffer);
+                    new_data.extend_from_slice(data);
+                    *data = new_data;
                 }
             }
         }
@@ -441,30 +433,24 @@ impl AudioBuffer {
 
         // 1. Find where audio data starts
         let audio_start = Self::find_flac_audio_start(data)?;
-        let audio_data = data[audio_start..].to_vec();
+        // Clone only the audio portion we need
+        let audio_data = &data[audio_start..];
 
         // 2. Read existing metadata
         let mut cursor = Cursor::new(&data[..]);
         let mut tag = Tag::read_from(&mut cursor).unwrap_or_else(|_| Tag::new());
 
         // 3. Add Vorbis Comments (text metadata)
-        // Title
         tag.set_vorbis("TITLE", vec![song_detail.name.clone()]);
 
-        // Album
         let album_name = song_detail
             .al
             .as_ref()
             .map_or("Unknown Album", |al| al.name.as_str());
         tag.set_vorbis("ALBUM", vec![album_name.to_string()]);
 
-        // Artist (Performer)
         let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
         tag.set_vorbis("ARTIST", vec![artist]);
-
-        // Description (163 key) - preserve existing value if present, otherwise don't add
-        // The original FLAC file from NetEase may already contain the 163 key
-        // We don't generate a fake key, just preserve what's already there
 
         // 4. Add album artwork if provided
         if let Some(artwork_data) = artwork_data {
@@ -488,11 +474,12 @@ impl AudioBuffer {
             tag.push_block(metaflac::Block::Picture(pic));
         }
 
-        // 5. Write new metadata + audio data
-        data.clear();
-        tag.write_to(data)
+        // 5. Build new data with single allocation
+        let mut new_data = Vec::new();
+        tag.write_to(&mut new_data)
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
-        data.extend_from_slice(&audio_data);
+        new_data.extend_from_slice(audio_data);
+        *data = new_data;
 
         Ok(())
     }
