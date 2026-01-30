@@ -55,7 +55,7 @@ futures-util = "0.3"
 id3 = "1.0"
 
 # Image processing
-image = { version = "0.24", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
 # FLAC 元数据（写入封面）
 metaflac = "0.2"
