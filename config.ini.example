@@ -30,12 +30,6 @@ url = ./data/music_bot.db
 # 下载目录
 dir = ./downloads
 
-# 是否启用文件缓存
-cache_enabled = true
-
-# 缓存大小限制 (MB)
-max_cache_size = 1024
-
 # 临时文件存储模式 (v1.1.0+)
 # - disk: 传统磁盘文件方式 (稳定，低内存占用，兼容所有场景)
 # - memory: 内存处理 (更快，减少磁盘I/O，需要足够RAM)
