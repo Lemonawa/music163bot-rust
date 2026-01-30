@@ -121,7 +121,7 @@ impl MusicApi {
         client_builder = client_builder
             .tcp_nodelay(true)
             .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .pool_max_idle_per_host(32)
+            .pool_max_idle_per_host(8)
             .connect_timeout(std::time::Duration::from_secs(10));
 
         // Add user agent
@@ -395,16 +395,13 @@ impl MusicApi {
             )));
         }
 
-        let bytes = response.bytes().await?.to_vec();
+        let bytes = response.bytes().await?;
 
         // Process image inline - spawn_blocking can cause memory retention in thread pool
         let img = image::load_from_memory(&bytes)
             .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
-        
-        // Drop original bytes immediately to free memory
-        drop(bytes);
 
-        // Resize to 320x320 with black padding (like the original Go project)
+        // Resize to 320x320 with black padding (like original Go project)
         let resized = resize_image_with_padding(img, 320, 320);
 
         // Save as JPEG into memory
@@ -445,7 +442,9 @@ impl MusicApi {
             )));
         }
 
-        Ok(response.bytes().await?.to_vec())
+        let bytes = response.bytes().await?;
+
+        Ok(bytes.to_vec())
     }
 }
 

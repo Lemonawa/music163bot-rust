@@ -54,7 +54,7 @@ pub async fn run(config: Config) -> Result<()> {
                 let client = reqwest::Client::builder()
                     .use_rustls_tls()
                     .user_agent("Go-http-client/2.0")
-                    .pool_max_idle_per_host(0)
+                    .pool_max_idle_per_host(2)
                     .danger_accept_invalid_certs(false)
                     .timeout(std::time::Duration::from_secs(30))
                     .no_gzip()
@@ -859,7 +859,7 @@ async fn download_and_send_music(
             let client = reqwest::Client::builder()
                 .use_rustls_tls()
                 .timeout(std::time::Duration::from_secs(300)) // large files need longer timeouts
-                .pool_max_idle_per_host(0)
+                .pool_max_idle_per_host(2)
                 .no_gzip() // avoid gzip interference on multipart boundaries via proxies
                 .user_agent("Go-http-client/2.0")
                 .default_headers(reqwest::header::HeaderMap::new())
@@ -898,15 +898,9 @@ async fn download_and_send_music(
         .reply_to_message_id(msg.id);
 
     // Attach thumbnail if available
-    if let Some(ref thumb_buf) = thumbnail_buffer {
-        match thumb_buf.to_input_file() {
-            Ok(thumb_input) => {
-                audio_req = audio_req.thumb(thumb_input);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to attach thumbnail: {}", e);
-            }
-        }
+    if let Some(thumb_buf) = thumbnail_buffer {
+        let thumb_input = thumb_buf.into_input_file();
+        audio_req = audio_req.thumb(thumb_input);
     }
 
     // Thumbnail will be embedded into tags for MP3 and FLAC (when possible)
@@ -926,10 +920,7 @@ async fn download_and_send_music(
                 }
             }
 
-            // Clean up thumbnail only (audio_buffer was consumed by into_input_file)
-            if let Some(thumb_buf) = thumbnail_buffer {
-                thumb_buf.cleanup().await.ok();
-            }
+            // No cleanup needed - both audio_buffer and thumbnail_buffer were consumed
         }
         Err(e) => {
             tracing::warn!("Audio send failed: {}, trying document fallback", e);
@@ -938,11 +929,6 @@ async fn download_and_send_music(
             // Since the buffer was moved, we cannot retry - this is a limitation
             // For fallback, we would need to re-download or keep a backup
             // For now, just clean up and return error
-
-            // Clean up thumbnail
-            if let Some(thumb_buf) = thumbnail_buffer {
-                thumb_buf.cleanup().await.ok();
-            }
 
             bot.edit_message_text(
                 msg.chat.id,

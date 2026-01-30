@@ -639,6 +639,15 @@ impl ThumbnailBuffer {
         }
     }
 
+    /// Convert to InputFile for Telegram (consumes self, avoids cloning)
+    #[must_use]
+    pub fn into_input_file(self) -> InputFile {
+        match self {
+            Self::Disk { path } => InputFile::file(path),
+            Self::Memory { data } => InputFile::memory(data).file_name("thumb.jpg"),
+        }
+    }
+
     /// Cleanup resources
     pub async fn cleanup(self) -> Result<()> {
         match self {
