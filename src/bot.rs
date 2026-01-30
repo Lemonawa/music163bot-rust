@@ -44,11 +44,8 @@ pub async fn run(config: Config) -> Result<()> {
     // Initialize bot with custom API URL support
     let bot = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org" {
         // 使用自定义API URL
-        let api_url_str = if config.bot_api.ends_with("/bot") {
-            config.bot_api.clone()
-        } else {
-            format!("{}/bot", config.bot_api)
-        };
+        // API URL must be base URL without "/bot" suffix - teloxide appends "bot<TOKEN>/" automatically
+        let api_url_str = format!("{}/", config.bot_api.trim_end_matches("/bot"));
 
         match reqwest::Url::parse(&api_url_str) {
             Ok(api_url) => {
@@ -895,20 +892,21 @@ async fn download_and_send_music(
     // Always create a separate client with longer timeout and disabled connection pooling
     // to prevent "token invalid" errors caused by stale connections after long uploads.
     let upload_bot = {
+        // API URL must match teloxide's internal format: base URL without "/bot" suffix
+        // teloxide automatically appends "bot<TOKEN>/" to the path
         let api_url_str = if !state.config.bot_api.is_empty() && state.config.bot_api != "https://api.telegram.org" {
-            if state.config.bot_api.ends_with("/bot") {
-                state.config.bot_api.clone()
-            } else {
-                format!("{}/bot", state.config.bot_api)
-            }
+            // Custom API: strip "/bot" suffix if present to match teloxide's expected format
+            let base = state.config.bot_api.trim_end_matches("/bot");
+            format!("{base}/")
         } else {
-            "https://api.telegram.org/bot".to_string()
+            // Default API: use base URL without "/bot" (matches Bot::new() behavior)
+            "https://api.telegram.org/".to_string()
         };
 
         let api_url = reqwest::Url::parse(&api_url_str)
-            .unwrap_or_else(|_| reqwest::Url::parse("https://api.telegram.org/bot").unwrap());
+            .unwrap_or_else(|_| reqwest::Url::parse("https://api.telegram.org/").unwrap());
         
-        if api_url_str != "https://api.telegram.org/bot" {
+        if api_url_str != "https://api.telegram.org/" {
             tracing::info!("Using custom API for upload: {}", api_url);
         }
 
