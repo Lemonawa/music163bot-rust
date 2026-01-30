@@ -81,7 +81,8 @@ jobs:
           fi
           cargo build --release --target ${{ matrix.platform.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p dist
@@ -95,24 +96,48 @@ jobs:
           [ -f LICENSE ] && cp LICENSE dist/
           [ -f README.md ] && cp README.md dist/
           
-          # Create platform-specific archive
+          # Create tar.gz archive
           cd dist
           ARCHIVE_NAME="${BINARY_NAME}-${{ matrix.platform.os_name }}"
-          if [ "${{ matrix.platform.os_name }}" = "Windows-x86_64" ]; then
-            zip -r "../${ARCHIVE_NAME}.zip" .
-            echo "archive=${ARCHIVE_NAME}.zip" >> "$GITHUB_OUTPUT"
-          else
-            tar czf "../${ARCHIVE_NAME}.tar.gz" .
-            echo "archive=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
-          fi
+          tar czf "../${ARCHIVE_NAME}.tar.gz" .
+          echo "archive=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
           cd ..
-        id: package
+        id: package-unix
 
-      - name: Upload artifacts
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $BINARY_NAME = "music163bot-rust"
+          $SRC = "target/${{ matrix.platform.target }}/release/${BINARY_NAME}.exe"
+          $DEST = "dist/${BINARY_NAME}.exe"
+          Copy-Item $SRC $DEST
+          
+          # Copy auxiliary files
+          if (Test-Path "config.ini.example") { Copy-Item "config.ini.example" "dist/" }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "dist/" }
+          if (Test-Path "README.md") { Copy-Item "README.md" "dist/" }
+          
+          # Create zip archive using PowerShell
+          $ARCHIVE_NAME = "${BINARY_NAME}-${{ matrix.platform.os_name }}"
+          Compress-Archive -Path "dist/*" -DestinationPath "${ARCHIVE_NAME}.zip" -Force
+          "archive=${ARCHIVE_NAME}.zip" >> $env:GITHUB_OUTPUT
+        id: package-windows
+
+      - name: Upload artifacts (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.os_name }}
-          path: ${{ steps.package.outputs.archive }}
+          path: ${{ steps.package-unix.outputs.archive }}
+
+      - name: Upload artifacts (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform.os_name }}
+          path: ${{ steps.package-windows.outputs.archive }}
 
   release:
     name: Create Release
