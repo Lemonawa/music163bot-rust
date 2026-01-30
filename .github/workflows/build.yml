@@ -87,19 +87,32 @@ jobs:
           mkdir -p dist
           BINARY_NAME="music163bot-rust"
           SRC="target/${{ matrix.platform.target }}/release/${BINARY_NAME}${{ matrix.platform.suffix }}"
-          DEST="dist/${BINARY_NAME}-${{ matrix.platform.os_name }}${{ matrix.platform.suffix }}"
+          DEST="dist/${BINARY_NAME}${{ matrix.platform.suffix }}"
           cp "$SRC" "$DEST"
           
           # Copy auxiliary files
           [ -f config.ini.example ] && cp config.ini.example dist/
           [ -f LICENSE ] && cp LICENSE dist/
           [ -f README.md ] && cp README.md dist/
+          
+          # Create platform-specific archive
+          cd dist
+          ARCHIVE_NAME="${BINARY_NAME}-${{ matrix.platform.os_name }}"
+          if [ "${{ matrix.platform.os_name }}" = "Windows-x86_64" ]; then
+            zip -r "../${ARCHIVE_NAME}.zip" .
+            echo "archive=${ARCHIVE_NAME}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar czf "../${ARCHIVE_NAME}.tar.gz" .
+            echo "archive=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+          cd ..
+        id: package
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.os_name }}
-          path: dist/*
+          path: ${{ steps.package.outputs.archive }}
 
   release:
     name: Create Release
