@@ -1,4 +1,8 @@
-use crate::error::{BotError, Result};
+use std::collections::HashMap;
+use std::io::Cursor;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use aes::Aes128;
 use cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyInit};
 use ecb::{Decryptor, Encryptor};
@@ -7,11 +11,9 @@ use image::{DynamicImage, GenericImageView, ImageFormat};
 use md5::compute as md5_compute;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::io::Cursor;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+use crate::error::{BotError, Result};
 
 #[derive(Debug, Clone)]
 pub struct MusicApi {
