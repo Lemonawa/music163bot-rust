@@ -2,13 +2,6 @@
 //!
 //! Provides functions to force memory release and reduce process footprint.
 
-#![allow(
-    clippy::ptr_as_ptr,
-    clippy::manual_c_str_literals,
-    clippy::borrow_as_ptr,
-    clippy::ref_as_ptr
-)]
-
 /// Force jemalloc to release unused memory back to the OS
 ///
 /// This should be called periodically (e.g., after large operations)
@@ -21,7 +14,7 @@ pub fn force_memory_release() {
         // mallctl signature: name, oldp, oldlenp, newp, newlen
         // For arena.all.purge: no read value, no write value (command only)
         let _ = tikv_jemalloc_sys::mallctl(
-            b"arena.all.purge\0".as_ptr().cast(),
+            c"arena.all.purge".as_ptr().cast(),
             std::ptr::null_mut(), // oldp - not reading
             std::ptr::null_mut(), // oldlenp - not reading
             std::ptr::null_mut(), // newp - no input parameter
@@ -43,9 +36,9 @@ pub fn log_memory_stats() {
         let mut epoch: u64 = 1;
         let mut epoch_size = std::mem::size_of::<u64>();
         let _ = tikv_jemalloc_sys::mallctl(
-            b"epoch\0".as_ptr().cast(),
-            (&mut epoch as *mut u64).cast(),
-            &mut epoch_size,
+            c"epoch".as_ptr().cast(),
+            (&raw mut epoch).cast(),
+            &raw mut epoch_size,
             std::ptr::null_mut(),
             0,
         );
@@ -53,18 +46,18 @@ pub fn log_memory_stats() {
         let mut allocated: usize = 0;
         let mut size = std::mem::size_of::<usize>();
         let _ = tikv_jemalloc_sys::mallctl(
-            b"stats.allocated\0".as_ptr().cast(),
-            (&mut allocated as *mut usize).cast(),
-            &mut size,
+            c"stats.allocated".as_ptr().cast(),
+            (&raw mut allocated).cast(),
+            &raw mut size,
             std::ptr::null_mut(),
             0,
         );
 
         let mut resident: usize = 0;
         let _ = tikv_jemalloc_sys::mallctl(
-            b"stats.resident\0".as_ptr().cast(),
-            (&mut resident as *mut usize).cast(),
-            &mut size,
+            c"stats.resident".as_ptr().cast(),
+            (&raw mut resident).cast(),
+            &raw mut size,
             std::ptr::null_mut(),
             0,
         );
