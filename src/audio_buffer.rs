@@ -212,10 +212,12 @@ impl AudioBuffer {
         Ok(())
     }
 
-    /// Get the current size of the buffer
-    pub fn size(&self) -> u64 {
+    /// Get the current size of the buffer (async to avoid blocking)
+    pub async fn size(&self) -> u64 {
         match self {
-            Self::Disk { path, .. } => std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+            Self::Disk { path, .. } => {
+                tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0)
+            }
             Self::Memory { data, .. } => data.len() as u64,
         }
     }

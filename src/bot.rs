@@ -763,8 +763,8 @@ async fn download_and_send_music(
         }
     );
 
-    // Validate file size
-    let actual_size = audio_buffer.size();
+    // Validate file size (async to avoid blocking I/O)
+    let actual_size = audio_buffer.size().await;
 
     if actual_size == 0 {
         audio_buffer.cleanup().await.ok();
@@ -810,17 +810,20 @@ async fn download_and_send_music(
         }
     }
 
+    // Get file size for database (async to avoid blocking)
+    let audio_file_size = audio_buffer.size().await as i64;
+
     // Create song info for database
     let mut song_info = SongInfo {
         music_id: song_detail.id as i64,
         song_name: song_detail.name.clone(),
-        song_artists: artists.clone(),
+        song_artists: artists,
         song_album: song_detail
             .al
             .as_ref()
             .map_or_else(|| "Unknown Album".to_string(), |al| al.name.clone()),
         file_ext: file_ext.to_string(),
-        music_size: audio_buffer.size() as i64,
+        music_size: audio_file_size,
         pic_size: 0,
         emb_pic_size: 0,
         bit_rate: song_url.br as i64,
@@ -867,8 +870,8 @@ async fn download_and_send_music(
         &song_info.song_artists,
     );
 
-    // Get file size for logging
-    let file_size = audio_buffer.size();
+    // Get file size for logging (async to avoid blocking)
+    let file_size = audio_buffer.size().await;
     if file_size == 0 {
         audio_buffer.cleanup().await.ok();
         if let Some(thumb_buf) = thumbnail_buffer {
