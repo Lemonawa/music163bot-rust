@@ -273,8 +273,21 @@ async fn handle_start_command(
                         send_audio.thumb = Some(InputFile::file_id(thumb_id));
                     }
 
-                    send_audio.await?;
-                    return Ok(());
+                    match send_audio.await {
+                        Ok(_) => return Ok(()),
+                        Err(e) => {
+                            let err_str = format!("{e}");
+                            if err_str.contains("invalid remote file identifier") {
+                                tracing::warn!(
+                                    "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
+                                    music_id, e
+                                );
+                                let _ = state.database.delete_song_by_music_id(music_id as i64).await;
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -424,13 +437,28 @@ async fn process_music(
                     &cached_song.song_artists,
                 );
 
-                bot.send_audio(msg.chat.id, InputFile::file_id(file_id))
+                match bot
+                    .send_audio(msg.chat.id, InputFile::file_id(file_id))
                     .caption(caption)
                     .reply_markup(keyboard)
                     .reply_to_message_id(msg.id)
-                    .await?;
-
-                return Ok(());
+                    .await
+                {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        let err_str = format!("{e}");
+                        if err_str.contains("invalid remote file identifier") {
+                            tracing::warn!(
+                                "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
+                                music_id, e
+                            );
+                            let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+                            // Continue to download flow below
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
             }
             // Invalid cached file (too small), remove from database
             tracing::warn!(
