@@ -482,8 +482,8 @@ impl AudioBuffer {
         tag.write_to(&mut new_data)
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
         new_data.extend_from_slice(audio_data);
-        new_data.shrink_to_fit();
         *data = new_data;
+        data.shrink_to_fit();
 
         Ok(())
     }

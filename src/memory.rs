@@ -16,18 +16,16 @@
 /// in the allocator's pools.
 #[cfg(not(target_env = "msvc"))]
 pub fn force_memory_release() {
-    // Flush dirty pages and purge unused arenas
-    // This forces jemalloc to return memory to the OS
     unsafe {
-        // Use jemalloc's mallctl to trigger purge
-        let mut ptr: *mut libc::c_void = std::ptr::null_mut();
-        let mut zero = 0_usize;
+        // Trigger purge of all arenas' dirty pages
+        // mallctl signature: name, oldp, oldlenp, newp, newlen
+        // For arena.all.purge: no read value, no write value (command only)
         let _ = tikv_jemalloc_sys::mallctl(
-            b"arena.all.purge\0".as_ptr() as *const _,
-            std::ptr::null_mut(),
-            &mut zero,
-            &mut ptr as *mut _ as *mut libc::c_void,
-            0,
+            b"arena.all.purge\0".as_ptr().cast(),
+            std::ptr::null_mut(), // oldp - not reading
+            std::ptr::null_mut(), // oldlenp - not reading
+            std::ptr::null_mut(), // newp - no input parameter
+            0,                    // newlen - no input parameter
         );
     }
 }
@@ -45,8 +43,8 @@ pub fn log_memory_stats() {
         let mut epoch: u64 = 1;
         let mut epoch_size = std::mem::size_of::<u64>();
         let _ = tikv_jemalloc_sys::mallctl(
-            b"epoch\0".as_ptr() as *const _,
-            &mut epoch as *mut _ as *mut libc::c_void,
+            b"epoch\0".as_ptr().cast(),
+            (&mut epoch as *mut u64).cast(),
             &mut epoch_size,
             std::ptr::null_mut(),
             0,
@@ -55,8 +53,8 @@ pub fn log_memory_stats() {
         let mut allocated: usize = 0;
         let mut size = std::mem::size_of::<usize>();
         let _ = tikv_jemalloc_sys::mallctl(
-            b"stats.allocated\0".as_ptr() as *const _,
-            &mut allocated as *mut _ as *mut libc::c_void,
+            b"stats.allocated\0".as_ptr().cast(),
+            (&mut allocated as *mut usize).cast(),
             &mut size,
             std::ptr::null_mut(),
             0,
@@ -64,8 +62,8 @@ pub fn log_memory_stats() {
 
         let mut resident: usize = 0;
         let _ = tikv_jemalloc_sys::mallctl(
-            b"stats.resident\0".as_ptr() as *const _,
-            &mut resident as *mut _ as *mut libc::c_void,
+            b"stats.resident\0".as_ptr().cast(),
+            (&mut resident as *mut usize).cast(),
             &mut size,
             std::ptr::null_mut(),
             0,

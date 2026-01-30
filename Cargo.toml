@@ -65,6 +65,5 @@ sysinfo = "0.30"
 
 # Memory allocator with better memory return behavior
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemallocator = { version = "0.6" }
 tikv-jemalloc-sys = { version = "0.6" }
-libc = "0.2"
