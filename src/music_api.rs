@@ -117,12 +117,11 @@ impl MusicApi {
         // Use rustls TLS for better compatibility
         client_builder = client_builder.use_rustls_tls();
 
-        // Conservative connection pool settings to prevent memory accumulation
-        // Lower idle timeout and connections per host to reduce memory footprint
+        // Performance optimizations
+        // pool_max_idle_per_host(0) prevents connection pool memory accumulation
         client_builder = client_builder
             .tcp_nodelay(true)
-            .pool_idle_timeout(std::time::Duration::from_secs(30))
-            .pool_max_idle_per_host(2)
+            .pool_max_idle_per_host(0)
             .connect_timeout(std::time::Duration::from_secs(10));
 
         // Add user agent
