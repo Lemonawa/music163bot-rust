@@ -1,7 +1,8 @@
-use crate::error::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+
+use crate::error::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SongInfo {
