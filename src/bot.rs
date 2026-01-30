@@ -1,6 +1,7 @@
+use std::sync::Arc;
+
 use anyhow;
 use futures_util::StreamExt;
-use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResult,
