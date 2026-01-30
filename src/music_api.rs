@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes::Aes128;
-use cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyInit};
+use cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, block_padding::Pkcs7};
 use ecb::{Decryptor, Encryptor};
 use hex::encode_upper;
 use image::{DynamicImage, GenericImageView, ImageFormat};

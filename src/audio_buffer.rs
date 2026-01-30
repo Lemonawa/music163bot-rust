@@ -247,7 +247,7 @@ impl AudioBuffer {
         artwork_data: Option<&[u8]>,
     ) -> Result<()> {
         use crate::music_api::format_artists;
-        use id3::{frame, Tag, TagLike, Version};
+        use id3::{Tag, TagLike, Version, frame};
 
         match self {
             Self::Disk { path, .. } => {
@@ -373,8 +373,8 @@ impl AudioBuffer {
         artwork_data: Option<&[u8]>,
     ) -> Result<()> {
         use crate::music_api::format_artists;
-        use metaflac::block::{Picture, PictureType};
         use metaflac::Tag;
+        use metaflac::block::{Picture, PictureType};
 
         let mut tag = Tag::read_from_path(path).unwrap_or_else(|_| Tag::new());
 
@@ -432,8 +432,8 @@ impl AudioBuffer {
         artwork_data: Option<&[u8]>,
     ) -> Result<()> {
         use crate::music_api::format_artists;
-        use metaflac::block::{Picture, PictureType};
         use metaflac::Tag;
+        use metaflac::block::{Picture, PictureType};
 
         // 1. Find where audio data starts
         let audio_start = Self::find_flac_audio_start(data)?;
