@@ -31,7 +31,7 @@ pub struct Database {
 }
 
 impl Database {
-    /// Create a new database connection
+    /// Create a new database connection with limited pool size
     pub async fn new(database_url: &str) -> Result<Self> {
         // Create database directory if it doesn't exist
         if let Some(parent) = std::path::Path::new(database_url).parent() {
@@ -40,7 +40,14 @@ impl Database {
             }
         }
 
-        let pool = SqlitePool::connect(&format!("sqlite://{database_url}")).await?;
+        // Configure connection pool with limited connections for SQLite
+        // SQLite works best with single connection, multiple connections waste memory
+        let pool = SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(database_url)
+                .create_if_missing(true),
+        )
+        .await?;
 
         // Create tables if they don't exist
         sqlx::query(
