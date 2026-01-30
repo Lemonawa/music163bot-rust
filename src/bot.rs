@@ -125,7 +125,7 @@ pub async fn run(config: Config) -> Result<()> {
         config: config.clone(),
         database,
         music_api,
-        download_semaphore: Arc::new(tokio::sync::Semaphore::new(3)), // 限制为 3 个并发下载以减少内存峰值
+        download_semaphore: Arc::new(tokio::sync::Semaphore::new(10)), // 10 个并发下载
         bot_username,
     });
 
