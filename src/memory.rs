@@ -2,6 +2,13 @@
 //!
 //! Provides functions to force memory release and reduce process footprint.
 
+#![allow(
+    clippy::ptr_as_ptr,
+    clippy::manual_c_str_literals,
+    clippy::borrow_as_ptr,
+    clippy::ref_as_ptr
+)]
+
 /// Force jemalloc to release unused memory back to the OS
 ///
 /// This should be called periodically (e.g., after large operations)
