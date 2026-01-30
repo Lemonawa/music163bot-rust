@@ -3,10 +3,12 @@ use std::sync::Arc;
 use anyhow;
 use futures_util::StreamExt;
 use teloxide::prelude::*;
+use teloxide::sugar::request::RequestLinkPreviewExt;
+use teloxide::RequestError;
 use teloxide::types::{
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResult,
+    CallbackQuery, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResult,
     InlineQueryResultArticle, InputFile, InputMessageContent, InputMessageContentText, Message,
-    MessageKind, ParseMode, ReplyMarkup,
+    MessageKind, MaybeInaccessibleMessage, ParseMode, ReplyMarkup, ReplyParameters,
 };
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
@@ -264,13 +266,13 @@ async fn handle_start_command(
                         &song_info.song_artists,
                     );
 
-                    let mut send_audio = bot.send_audio(msg.chat.id, InputFile::file_id(file_id));
-                    send_audio.caption = Some(caption);
-                    send_audio.reply_markup = Some(ReplyMarkup::InlineKeyboard(keyboard));
-                    send_audio.reply_to_message_id = Some(msg.id);
+                    let mut send_audio = bot.send_audio(msg.chat.id, InputFile::file_id(FileId(file_id)))
+                        .caption(caption)
+                        .reply_markup(ReplyMarkup::InlineKeyboard(keyboard))
+                        .reply_parameters(ReplyParameters::new(msg.id));
 
                     if let Some(thumb_id) = song_info.thumb_file_id {
-                        send_audio.thumb = Some(InputFile::file_id(thumb_id));
+                        send_audio = send_audio.thumbnail(InputFile::file_id(FileId(thumb_id)));
                     }
 
                     match send_audio.await {
@@ -316,8 +318,8 @@ async fn handle_start_command(
 
     bot.send_message(msg.chat.id, welcome_text)
         .parse_mode(ParseMode::Html)
-        .disable_web_page_preview(true)
-        .reply_to_message_id(msg.id)
+        .disable_link_preview(true)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     Ok(())
@@ -348,8 +350,8 @@ async fn handle_help_command(
 
     bot.send_message(msg.chat.id, help_text)
         .parse_mode(ParseMode::Html)
-        .disable_web_page_preview(true)
-        .reply_to_message_id(msg.id)
+        .disable_link_preview(true)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     Ok(())
@@ -365,7 +367,7 @@ async fn handle_music_command(
 
     if args.is_empty() {
         bot.send_message(msg.chat.id, "请输入歌曲ID或歌曲关键词")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
         return Ok(());
     }
@@ -382,14 +384,14 @@ async fn handle_music_command(
                 process_music(bot, msg, state, song.id).await
             } else {
                 bot.send_message(msg.chat.id, "未找到相关歌曲")
-                    .reply_to_message_id(msg.id)
+                    .reply_parameters(ReplyParameters::new(msg.id))
                     .await?;
                 Ok(())
             }
         }
         Err(e) => {
             bot.send_message(msg.chat.id, format!("搜索失败: {e}"))
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .await?;
             Ok(())
         }
@@ -438,10 +440,10 @@ async fn process_music(
                 );
 
                 match bot
-                    .send_audio(msg.chat.id, InputFile::file_id(file_id))
+                    .send_audio(msg.chat.id, InputFile::file_id(FileId(file_id.clone())))
                     .caption(caption)
                     .reply_markup(keyboard)
-                    .reply_to_message_id(msg.id)
+                    .reply_parameters(ReplyParameters::new(msg.id))
                     .await
                 {
                     Ok(_) => return Ok(()),
@@ -473,7 +475,7 @@ async fn process_music(
     // Send initial message
     let status_msg = bot
         .send_message(msg.chat.id, "🔄 正在获取歌曲信息...")
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     // Get song details
@@ -818,9 +820,10 @@ async fn download_and_send_music(
         duration: (song_detail.dt.unwrap_or(0) / 1000) as i64,
         file_id: None,
         thumb_file_id: None,
-        from_user_id: msg.from().map_or(0, |u| u.id.0 as i64),
+        from_user_id: msg.from.as_ref().map_or(0, |u| u.id.0 as i64),
         from_user_name: msg
-            .from()
+            .from
+            .as_ref()
             .and_then(|u| u.username.clone())
             .unwrap_or_default(),
         from_chat_id: msg.chat.id.0,
@@ -933,12 +936,12 @@ async fn download_and_send_music(
         .performer(&song_info.song_artists)
         .duration(song_info.duration as u32)
         .reply_markup(keyboard.clone())
-        .reply_to_message_id(msg.id);
+        .reply_parameters(ReplyParameters::new(msg.id));
 
     // Attach thumbnail if available
     if let Some(thumb_buf) = thumbnail_buffer {
         let thumb_input = thumb_buf.into_input_file();
-        audio_req = audio_req.thumb(thumb_input);
+        audio_req = audio_req.thumbnail(thumb_input);
     }
 
     // Thumbnail will be embedded into tags for MP3 and FLAC (when possible)
@@ -954,7 +957,7 @@ async fn download_and_send_music(
             // Extract file_id from sent message
             if let MessageKind::Common(common) = &sent_msg.kind {
                 if let teloxide::types::MediaKind::Audio(audio) = &common.media_kind {
-                    song_info.file_id = Some(audio.audio.file.id.clone());
+                    song_info.file_id = Some(audio.audio.file.id.to_string());
                 }
             }
 
@@ -1020,7 +1023,7 @@ async fn handle_music_url(
 
     let Some(url) = extract_first_url(text) else {
         bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
         return Ok(());
     };
@@ -1030,7 +1033,7 @@ async fn handle_music_url(
         Err(e) => {
             tracing::warn!("Failed to resolve share link: {}", e);
             bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .await?;
             return Ok(());
         }
@@ -1041,7 +1044,7 @@ async fn handle_music_url(
         process_music(bot, msg, state, music_id).await
     } else {
         bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
         Ok(())
     }
@@ -1057,7 +1060,7 @@ async fn handle_search_command(
         Some(kw) if !kw.is_empty() => kw,
         _ => {
             bot.send_message(msg.chat.id, "请输入搜索关键词")
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .await?;
             return Ok(());
         }
@@ -1065,7 +1068,7 @@ async fn handle_search_command(
 
     let search_msg = bot
         .send_message(msg.chat.id, "🔍 搜索中...")
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     match state.music_api.search_songs(&keyword, 10).await {
@@ -1131,8 +1134,8 @@ async fn handle_about_command(
     );
 
     bot.send_message(msg.chat.id, about_text)
-        .reply_to_message_id(msg.id)
-        .disable_web_page_preview(true)
+        .reply_parameters(ReplyParameters::new(msg.id))
+        .disable_link_preview(true)
         .await?;
 
     Ok(())
@@ -1148,7 +1151,7 @@ async fn handle_lyric_command(
 
     if args.is_empty() {
         bot.send_message(msg.chat.id, "请输入歌曲ID或关键词")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
         return Ok(());
     }
@@ -1162,14 +1165,14 @@ async fn handle_lyric_command(
                     song.id
                 } else {
                     bot.send_message(msg.chat.id, "未找到相关歌曲")
-                        .reply_to_message_id(msg.id)
+                        .reply_parameters(ReplyParameters::new(msg.id))
                         .await?;
                     return Ok(());
                 }
             }
             Err(e) => {
                 bot.send_message(msg.chat.id, format!("搜索失败: {e}"))
-                    .reply_to_message_id(msg.id)
+                    .reply_parameters(ReplyParameters::new(msg.id))
                     .await?;
                 return Ok(());
             }
@@ -1178,7 +1181,7 @@ async fn handle_lyric_command(
 
     let status_msg = bot
         .send_message(msg.chat.id, "🎵 正在获取歌词...")
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     match state.music_api.get_song_lyric(music_id).await {
@@ -1207,13 +1210,13 @@ async fn handle_lyric_command(
             let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
             let lrc_path = format!("{}/{}", state.config.cache_dir, lrc_filename);
 
-            tokio::fs::write(&lrc_path, &lyric).await?;
+            tokio::fs::write(&lrc_path, &lyric).await.map_err(|e| RequestError::Io(Arc::new(e)))?;
 
             bot.send_document(
                 msg.chat.id,
                 InputFile::file(std::path::Path::new(&lrc_path)),
             )
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
 
             tokio::fs::remove_file(&lrc_path).await.ok();
@@ -1233,7 +1236,7 @@ async fn handle_status_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let user_id = msg.from().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
     let chat_id = msg.chat.id.0;
 
     let total_count = state.database.count_total_songs().await.unwrap_or(0);
@@ -1263,7 +1266,7 @@ async fn handle_status_command(
 
     bot.send_message(msg.chat.id, status_text)
         .parse_mode(ParseMode::MarkdownV2)
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     Ok(())
@@ -1276,7 +1279,7 @@ async fn handle_rmcache_command(
     args: Option<String>,
 ) -> ResponseResult<()> {
     // Check if user is admin
-    let user_id = msg.from().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
 
     tracing::info!(
         "rmcache command from user_id: {}, configured admins: {:?}",
@@ -1286,7 +1289,7 @@ async fn handle_rmcache_command(
 
     if !state.config.bot_admin.contains(&user_id) {
         bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
         return Ok(());
     }
@@ -1298,7 +1301,7 @@ async fn handle_rmcache_command(
             msg.chat.id,
             "请输入要删除缓存的歌曲ID\n\n用法: `/rmcache <音乐ID>`",
         )
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
         return Ok(());
     }
@@ -1315,28 +1318,28 @@ async fn handle_rmcache_command(
                             msg.chat.id,
                             format!("✅ 已删除歌曲缓存: {}", song_info.song_name),
                         )
-                        .reply_to_message_id(msg.id)
+                        .reply_parameters(ReplyParameters::new(msg.id))
                         .await?;
                     } else {
                         bot.send_message(msg.chat.id, "歌曲未缓存")
-                            .reply_to_message_id(msg.id)
+                            .reply_parameters(ReplyParameters::new(msg.id))
                             .await?;
                     }
                 }
                 Err(e) => {
                     bot.send_message(msg.chat.id, format!("删除缓存失败: {e}"))
-                        .reply_to_message_id(msg.id)
+                        .reply_parameters(ReplyParameters::new(msg.id))
                         .await?;
                 }
             }
         } else {
             bot.send_message(msg.chat.id, "歌曲未缓存")
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .await?;
         }
     } else {
         bot.send_message(msg.chat.id, "无效的歌曲ID")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
     }
 
@@ -1349,7 +1352,7 @@ async fn handle_clearallcache_command(
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
     // Check if user is admin
-    let user_id = msg.from().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
 
     tracing::info!(
         "clearallcache command from user_id: {}, configured admins: {:?}",
@@ -1359,7 +1362,7 @@ async fn handle_clearallcache_command(
 
     if !state.config.bot_admin.contains(&user_id) {
         bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
         return Ok(());
     }
@@ -1367,7 +1370,7 @@ async fn handle_clearallcache_command(
     // Send confirmation message
     bot
         .send_message(msg.chat.id, "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 `/clearallcache confirm` 确认操作。")
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     Ok(())
@@ -1379,18 +1382,18 @@ async fn handle_clearallcache_confirm_command(
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
     // Check if user is admin
-    let user_id = msg.from().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
 
     if !state.config.bot_admin.contains(&user_id) {
         bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
-            .reply_to_message_id(msg.id)
+            .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
         return Ok(());
     }
 
     let status_msg = bot
         .send_message(msg.chat.id, "🗑️ 正在清除所有缓存...")
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     match state.database.clear_all_songs().await {
@@ -1431,28 +1434,29 @@ async fn handle_callback(
 ) -> ResponseResult<()> {
     if let Some(data) = query.data {
         let parts: Vec<&str> = data.split_whitespace().collect();
-        if parts.len() >= 2 && parts[0] == "music" {
+         if parts.len() >= 2 && parts[0] == "music" {
             if let Ok(music_id) = parts[1].parse::<u64>() {
-                let msg = query.message.as_ref().unwrap();
-                match process_music(&bot, msg, &state, music_id).await {
+                if let Some(MaybeInaccessibleMessage::Regular(msg)) = &query.message {
+                    match process_music(&bot, msg, &state, music_id).await {
                     Ok(()) => {
-                        bot.answer_callback_query(&query.id)
+                        bot.answer_callback_query(query.id)
                             .text("✅ 开始下载")
                             .await?;
                     }
                     Err(e) => {
                         tracing::error!("Error processing music from callback: {}", e);
-                        bot.answer_callback_query(&query.id)
+                        bot.answer_callback_query(query.id)
                             .text(format!("❌ 失败: {e}"))
                             .await?;
                     }
+                    }
+                    return Ok(());
                 }
-                return Ok(());
             }
         }
     }
 
-    bot.answer_callback_query(&query.id)
+    bot.answer_callback_query(query.id)
         .text("❌ 无效的操作")
         .await?;
 
@@ -1485,10 +1489,10 @@ async fn handle_inline_query(
                     "使用方法：在 @{} 后面输入 search 关键词 搜索音乐",
                     state.bot_username
                 ))),
-            )
+             )
             .description("输入关键词开始搜索");
 
-            bot.answer_inline_query(&query.id, vec![InlineQueryResult::Article(help_article)])
+            bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(help_article)])
                 .await?;
         } else {
             let help_article = InlineQueryResultArticle::new(
@@ -1497,10 +1501,10 @@ async fn handle_inline_query(
                 InputMessageContent::Text(InputMessageContentText::new(
                     "使用方法：\n1. 直接输入关键词搜索音乐\n2. 输入 search 关键词 搜索音乐\n3. 粘贴网易云音乐链接\n4. 输入歌曲 ID".to_string()
                 )),
-            )
+             )
             .description("在输入框中输入关键词开始搜索音乐");
 
-            bot.answer_inline_query(&query.id, vec![InlineQueryResult::Article(help_article)])
+            bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(help_article)])
                 .await?;
         }
         return Ok(());
@@ -1524,13 +1528,15 @@ async fn handle_inline_query(
                 .description(artists);
 
                 if let Some(ref pic_url) = song.album.pic_url {
-                    article.thumb_url = Some(reqwest::Url::parse(pic_url).unwrap());
+                    if let Ok(url) = reqwest::Url::parse(pic_url) {
+                        article = article.thumbnail_url(url);
+                    }
                 }
 
                 results.push(InlineQueryResult::Article(article));
             }
 
-            bot.answer_inline_query(&query.id, results)
+            bot.answer_inline_query(query.id, results)
                 .cache_time(300)
                 .await?;
         }
@@ -1540,10 +1546,10 @@ async fn handle_inline_query(
                 "search_error",
                 "搜索失败",
                 InputMessageContent::Text(InputMessageContentText::new(format!("搜索失败: {e}"))),
-            )
+             )
             .description("搜索失败，请稍后重试");
 
-            bot.answer_inline_query(&query.id, vec![InlineQueryResult::Article(error_article)])
+            bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(error_article)])
                 .await?;
         }
     }
