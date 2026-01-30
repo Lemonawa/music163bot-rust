@@ -311,7 +311,8 @@ impl AudioBuffer {
                     // Skip existing ID3 tag and replace with new one
                     let audio_start = Self::find_mp3_audio_start(data);
                     // Use a single reallocation approach
-                    let mut new_data = Vec::with_capacity(tag_buffer.len() + data.len() - audio_start);
+                    let mut new_data =
+                        Vec::with_capacity(tag_buffer.len() + data.len() - audio_start);
                     new_data.extend_from_slice(&tag_buffer);
                     new_data.extend_from_slice(&data[audio_start..]);
                     *data = new_data;
@@ -533,9 +534,7 @@ impl AudioBuffer {
     pub fn into_input_file(self) -> InputFile {
         match self {
             Self::Disk { path, .. } => InputFile::file(path),
-            Self::Memory { data, filename, .. } => {
-                InputFile::memory(data).file_name(filename)
-            }
+            Self::Memory { data, filename, .. } => InputFile::memory(data).file_name(filename),
         }
     }
 

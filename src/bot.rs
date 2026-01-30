@@ -940,13 +940,9 @@ async fn download_and_send_music(
             // For fallback, we would need to re-download or keep a backup
             // For now, just clean up and return error
 
-            bot.edit_message_text(
-                msg.chat.id,
-                status_msg.id,
-                format!("发送失败: {e}"),
-            )
-            .await
-            .ok();
+            bot.edit_message_text(msg.chat.id, status_msg.id, format!("发送失败: {e}"))
+                .await
+                .ok();
             return Err(e.into());
         }
     }
@@ -963,7 +959,7 @@ async fn download_and_send_music(
 
     // Give tokio time to clean up spawned tasks before forcing memory release
     tokio::task::yield_now().await;
-    
+
     // Force memory release after download completes
     crate::memory::force_memory_release();
     crate::memory::log_memory_stats();
