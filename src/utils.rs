@@ -1,5 +1,6 @@
-use regex::Regex;
 use std::path::Path;
+
+use regex::Regex;
 
 /// Global regex patterns for URL parsing
 static SONG_REGEX: std::sync::LazyLock<Regex> =
