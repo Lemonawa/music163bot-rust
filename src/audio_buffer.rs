@@ -523,12 +523,22 @@ impl AudioBuffer {
         Ok(pos)
     }
 
-    /// Convert to InputFile for Telegram upload
+    /// Convert to InputFile for Telegram upload (borrows)
     pub fn to_input_file(&self) -> InputFile {
         match self {
             Self::Disk { path, .. } => InputFile::file(path),
             Self::Memory { data, filename, .. } => {
                 InputFile::memory(data.clone()).file_name(filename.clone())
+            }
+        }
+    }
+
+    /// Convert to InputFile for Telegram upload (consumes self, avoids cloning)
+    pub fn into_input_file(self) -> InputFile {
+        match self {
+            Self::Disk { path, .. } => InputFile::file(path),
+            Self::Memory { data, filename, .. } => {
+                InputFile::memory(data).file_name(filename)
             }
         }
     }
