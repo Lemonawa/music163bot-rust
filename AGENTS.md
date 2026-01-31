@@ -61,6 +61,21 @@ This project follows a frequent-commit workflow to enable easy rollback and trac
 - This creates a detailed history where each commit represents a single logical change
 - Makes it easy to revert specific changes without affecting others
 
+### Commit Message Format
+Use conventional commits format: `<type>: <description>`
+
+Types:
+- `fix:` Bug fixes
+- `feat:` New features
+- `docs:` Documentation changes
+- `chore:` Maintenance tasks, tool updates
+- `perf:` Performance improvements
+
+Examples:
+- `fix: add thumbnail dimensions to inline search results`
+- `docs: add max_concurrent config option`
+- `chore: bump version to 1.1.11`
+
 ### Push Policy
 - **Avoid pushing to remote** unless explicitly requested
 - Keep all work local until user decides to publish
