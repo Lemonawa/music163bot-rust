@@ -54,17 +54,17 @@ cargo test module_name::
 
 ## Git Workflow
 
-**IMPORTANT: User's specific workflow requirement**
+This project follows a frequent-commit workflow to enable easy rollback and tracking:
 
-```
-动一下，就commit一次
-永远不要push
-```
+### Commit Strategy
+- **Every change gets its own commit** - After any file modification, run `cargo check` and `cargo clippy`, then commit immediately
+- This creates a detailed history where each commit represents a single logical change
+- Makes it easy to revert specific changes without affecting others
 
-- Every file change must be committed immediately after `cargo check` and `cargo clippy` pass
-- Never push to remote repository (unless explicitly requested by user)
-- Frequent commits allow easy rollback of individual changes
-- Use descriptive commit messages following conventional commits format
+### Push Policy
+- **Avoid pushing to remote** unless explicitly requested
+- Keep all work local until user decides to publish
+- This prevents accidental remote updates and gives user full control over when to push
 
 ## Code Style Guidelines
 
