@@ -820,6 +820,24 @@ async fn download_and_send_music(
 
     // Get file size for database (async to avoid blocking)
     let audio_file_size = audio_buffer.size().await as i64;
+    let duration_sec = (song_detail.dt.unwrap_or(0) / 1000) as i64;
+
+    // Calculate actual bitrate from file size and duration
+    // API's song_url.br is often theoretical (e.g., 1411kbps for FLAC) but
+    // actual file may be compressed (e.g., 960kbps). Use real calculated value.
+    let actual_bitrate_bps = if duration_sec > 0 {
+        (8 * audio_file_size) / duration_sec
+    } else {
+        // Fallback to API value if duration is missing
+        song_url.br as i64
+    };
+
+    tracing::info!(
+        "Bitrate - API: {} bps, Calculated from file: {} bps (duration: {}s)",
+        song_url.br,
+        actual_bitrate_bps,
+        duration_sec
+    );
 
     // Create song info for database
     let mut song_info = SongInfo {
@@ -834,8 +852,8 @@ async fn download_and_send_music(
         music_size: audio_file_size,
         pic_size: 0,
         emb_pic_size: 0,
-        bit_rate: song_url.br as i64,
-        duration: (song_detail.dt.unwrap_or(0) / 1000) as i64,
+        bit_rate: actual_bitrate_bps,
+        duration: duration_sec,
         file_id: None,
         thumb_file_id: None,
         from_user_id: msg.from.as_ref().map_or(0, |u| u.id.0 as i64),
