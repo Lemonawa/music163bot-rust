@@ -1564,7 +1564,7 @@ async fn handle_inline_query(
             for (i, song) in songs.iter().take(10).enumerate() {
                 let artists = format_artists(&song.artists);
 
-                let mut article = InlineQueryResultArticle::new(
+                let article = InlineQueryResultArticle::new(
                     format!("{}_{}", song.id, i),
                     &song.name,
                     InputMessageContent::Text(InputMessageContentText::new(format!(
@@ -1573,15 +1573,6 @@ async fn handle_inline_query(
                     ))),
                 )
                 .description(artists);
-
-                if let Some(ref pic_url) = song.album.pic_url
-                    && let Ok(url) = reqwest::Url::parse(pic_url)
-                {
-                    article = article
-                        .thumbnail_url(url)
-                        .thumbnail_width(640)
-                        .thumbnail_height(640);
-                }
 
                 results.push(InlineQueryResult::Article(article));
             }
