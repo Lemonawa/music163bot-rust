@@ -126,17 +126,6 @@ impl AudioBuffer {
 
     /// Determine if memory mode should be used based on configuration and system state
     fn should_use_memory(config: &Config, content_length: u64) -> bool {
-        // 硬性上限保护：超过 50MB 的文件强制使用磁盘模式
-        const MAX_MEMORY_FILE_SIZE_MB: u64 = 50;
-        if content_length > MAX_MEMORY_FILE_SIZE_MB * 1024 * 1024 {
-            tracing::info!(
-                "File size {}MB exceeds maximum memory limit {}MB, forcing disk mode",
-                content_length / (1024 * 1024),
-                MAX_MEMORY_FILE_SIZE_MB
-            );
-            return false;
-        }
-
         match config.storage_mode {
             StorageMode::Disk => false,
             StorageMode::Memory => {
