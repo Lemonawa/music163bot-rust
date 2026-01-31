@@ -44,7 +44,6 @@ hex = "0.4"
 
 # Config
 config = { version = "0.15", default-features = false, features = ["ini"] }
-ini = "1.3"
 clap = { version = "4.0", features = ["derive"] }
 
 # File operations
