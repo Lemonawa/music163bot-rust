@@ -72,7 +72,7 @@ Types:
 - `perf:` Performance improvements
 
 Examples:
-- `fix: add thumbnail dimensions to inline search results`
+- `feat: add lyrics command to fetch song lyrics`
 - `docs: add max_concurrent config option`
 - `chore: bump version to 1.1.11`
 
