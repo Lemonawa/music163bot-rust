@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use std::time::Duration;
 
 use crate::error::Result;
 
@@ -41,14 +42,17 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Configure connection pool with limited connections for SQLite
-        // SQLite works best with single connection, multiple connections waste memory
-        let pool = SqlitePool::connect_with(
-            sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(database_url)
-                .create_if_missing(true),
-        )
-        .await?;
+        // Configure connection pool with WAL mode for better concurrency
+        // WAL mode allows readers and writers to operate concurrently
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(database_url)
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)      // 启用 WAL 模式
+            .busy_timeout(Duration::from_secs(30))                   // 忙等待超时
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)    // 平衡性能和耐久性
+            .foreign_keys(true);
+
+        let pool = SqlitePool::connect_with(options).await?;
 
         // Create tables if they don't exist
         sqlx::query(
