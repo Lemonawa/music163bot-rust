@@ -10,15 +10,24 @@
 #[cfg(not(target_env = "msvc"))]
 pub fn force_memory_release() {
     unsafe {
-        // Trigger purge of all arenas' dirty pages
-        // mallctl signature: name, oldp, oldlenp, newp, newlen
-        // For arena.all.purge: no read value, no write value (command only)
+        // Strategy 1: Trigger decay to encourage memory return
+        // This is less aggressive than purge but more efficient
+        let _ = tikv_jemalloc_sys::mallctl(
+            c"arena.all.decay".as_ptr().cast(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        );
+
+        // Strategy 2: Force purge of dirty pages if decay didn't free enough
+        // This is more aggressive and ensures immediate memory return
         let _ = tikv_jemalloc_sys::mallctl(
             c"arena.all.purge".as_ptr().cast(),
-            std::ptr::null_mut(), // oldp - not reading
-            std::ptr::null_mut(), // oldlenp - not reading
-            std::ptr::null_mut(), // newp - no input parameter
-            0,                    // newlen - no input parameter
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
         );
     }
 }
