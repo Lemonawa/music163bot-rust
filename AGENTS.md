@@ -1,7 +1,5 @@
 # AGENTS.md - Agent Instructions for music163bot-rust
 
-## Project Overview
-
 A Rust-based Telegram bot for NetEase Cloud Music (网易云音乐). Downloads, shares, and searches songs with smart caching.
 
 ## Build Commands
@@ -10,7 +8,7 @@ A Rust-based Telegram bot for NetEase Cloud Music (网易云音乐). Downloads, 
 # Development build
 cargo build
 
-# Release build (optimized for production)
+# Release build (optimized for production - 5.6MB binary)
 cargo build --release
 
 # Run with custom config
@@ -26,13 +24,13 @@ cargo build --release --target x86_64-unknown-linux-gnu
 ## Lint Commands
 
 ```bash
-# Run clippy (linter - configured in main.rs)
+# Run clippy (linter - configured in main.rs with strict settings)
 cargo clippy
 
 # Run clippy with warnings as errors (CI style)
 cargo clippy -- -D warnings
 
-# Format code (uses default rustfmt settings)
+# Format code
 cargo fmt
 
 # Check formatting without modifying
@@ -41,7 +39,7 @@ cargo fmt -- --check
 
 ## Test Commands
 
-**Note: This project currently has NO tests configured.**
+**Note: This project currently has NO tests configured.** Use compilation as verification.
 
 ```bash
 # Run tests (none exist currently)
@@ -84,21 +82,21 @@ use crate::config::Config;
 - Use `thiserror` for custom error types (see `src/error.rs`)
 - Use `anyhow` for general error propagation
 - Prefer `?` operator over explicit match/unwrap
-- Log errors with `tracing::error!()` before returning when appropriate
+- Log errors with `tracing::error!()` before returning
 
 Example:
 ```rust
 use crate::error::{BotError, Result};
 
 pub async fn fetch_data() -> Result<Data> {
-    let response = client.get(url).await?; // anyhow::Error auto-converts
+    let response = client.get(url).await?;
     let data = response.json::<Data>().await?;
     Ok(data)
 }
 ```
 
-### Async/Await Patterns
-- Always use `async fn` for I/O operations
+### Async Patterns
+- Use `async fn` for I/O operations
 - Use `tokio::spawn()` for concurrent tasks
 - Use `tokio::join!()` for parallel awaits
 - Use `tokio::time::timeout()` for timeouts
@@ -106,77 +104,60 @@ pub async fn fetch_data() -> Result<Data> {
 Example:
 ```rust
 let (result1, result2) = tokio::join!(task1, task2);
-
-let handle = tokio::spawn(async move {
-    process_data().await
-});
+let handle = tokio::spawn(async move { process_data().await });
 ```
 
 ### Clippy Configuration
-Clippy is configured in `main.rs` with these settings:
-- `#![warn(clippy::all, clippy::pedantic)]` - Enable all lints
-- Extensive allow list for acceptable patterns (see main.rs lines 3-15)
-
-**DO NOT suppress warnings with `#[allow(...)]` unless matching existing patterns.**
+- Configured in `main.rs` with `#![warn(clippy::all, clippy::pedantic)]`
+- Extensive allow list for acceptable patterns (main.rs lines 3-15)
+- **DO NOT** use `#[allow(...)]` unless matching existing patterns
 
 ### Logging
-- Use `tracing::info!()`, `tracing::warn!()`, `tracing::error!()` for structured logging
+- Use `tracing::info!()`, `tracing::warn!()`, `tracing::error!()`
 - Use `tracing::debug!()` for verbose debugging
-- Include context in log messages (e.g., music_id, file sizes)
+- Include context (e.g., music_id, file sizes)
 
 ### Comments
 - Use `///` for public API documentation
 - Use `//` for inline comments
-- Comments can be in Chinese or English (project uses both)
+- Comments in Chinese or English both acceptable
 
 ### Structs and Serialization
-- Use `#[derive(Debug, Clone, Serialize, Deserialize)]` for data structures
+- Use `#[derive(Debug, Clone, Serialize, Deserialize)]`
 - Use `#[serde(rename = "...")]` for API field mapping
 - Use `#[serde(alias = "...")]` for backward compatibility
-
-Example:
-```rust
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SongDetail {
-    pub id: u64,
-    pub name: String,
-    #[serde(alias = "duration")]
-    pub dt: Option<u64>,
-}
-```
 
 ## Project Structure
 
 ```
 src/
-├── main.rs           # Entry point, clippy config
+├── main.rs           # Entry point, clippy config, jemalloc
 ├── bot.rs            # Telegram bot handlers (largest file)
 ├── music_api.rs      # NetEase API client
-├── audio_buffer.rs   # Audio download/storage abstraction
-├── database.rs       # SQLite operations
-├── config.rs         # Configuration parsing (INI format)
-├── error.rs          # Error types
-├── memory.rs         # Memory management utilities
+├── audio_buffer.rs   # Audio download/storage (smart storage)
+├── database.rs       # SQLite operations (WAL mode enabled)
+├── config.rs         # INI configuration parsing
+├── error.rs          # Error types (thiserror)
+├── memory.rs         # Memory management (jemalloc)
 └── utils.rs          # Helper functions
 ```
 
-## Dependencies to Know
+## Dependencies
 
-- **tokio** - Async runtime (always use `tokio::main`)
+- **tokio** - Async runtime
 - **teloxide** - Telegram bot framework
-- **reqwest** - HTTP client
-- **sqlx** - Async SQLite
+- **reqwest** - HTTP client (connection pool tuned)
+- **sqlx** - Async SQLite (WAL mode)
 - **serde** - Serialization
-- **tracing** - Logging
+- **tracing** - Structured logging
 - **anyhow/thiserror** - Error handling
 - **id3/metaflac** - Audio metadata
+- **tikv-jemallocator** - Memory allocator
 
 ## CI/CD
 
-GitHub Actions builds for:
-- Linux (x86_64, aarch64)
-- macOS (x86_64, aarch64)
-- Windows (x86_64)
+GitHub Actions builds for Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64).
+Release builds are created automatically on tag push.
 
 ## License
 
