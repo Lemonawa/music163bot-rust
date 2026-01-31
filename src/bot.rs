@@ -140,7 +140,7 @@ pub async fn run(config: Config) -> Result<()> {
         config: config.clone(),
         database,
         music_api,
-        download_semaphore: Arc::new(tokio::sync::Semaphore::new(10)), // 10 个并发下载
+        download_semaphore: Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_downloads as usize)),
         bot_username,
     });
 
