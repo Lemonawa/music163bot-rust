@@ -67,3 +67,22 @@ sysinfo = "0.38"
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.6", features = ["profiling", "stats"] }
 tikv-jemalloc-sys = { version = "0.6" }
+
+[profile.release]
+# 优化级别: z=最小体积, s=平衡
+opt-level = "z"
+
+# 链接时优化
+lto = true
+
+# 单一代码生成单元（更好优化但编译更慢）
+codegen-units = 1
+
+# 移除 panic 展开代码
+panic = "abort"
+
+# 启用 strip 移除符号表
+strip = true
+
+# 禁用增量编译（对于 release 构建更好优化）
+incremental = false
