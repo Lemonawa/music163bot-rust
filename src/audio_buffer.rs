@@ -6,12 +6,21 @@
 //! - Hybrid: Smart selection based on file size and available memory (recommended)
 
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use sysinfo::System;
 use teloxide::types::InputFile;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+
+/// 缓存的 System 实例，避免每次检查内存都创建新对象
+static SYSTEM: Lazy<Mutex<System>> = Lazy::new(|| {
+    let mut sys = System::new();
+    sys.refresh_memory();
+    Mutex::new(sys)
+});
 
 use crate::config::{Config, StorageMode};
 use crate::music_api::SongDetail;
@@ -173,11 +182,16 @@ impl AudioBuffer {
         }
     }
 
-    /// Get available system memory in MB
+    /// Get available system memory in MB (使用缓存的 System 实例)
     fn get_available_memory_mb() -> u64 {
-        let mut sys = System::new();
-        sys.refresh_memory();
-        sys.available_memory() / (1024 * 1024)
+        if let Ok(mut sys) = SYSTEM.lock() {
+            sys.refresh_memory();
+            sys.available_memory() / (1024 * 1024)
+        } else {
+            // 降级方案：返回保守估计
+            tracing::warn!("Failed to lock SYSTEM mutex, using conservative memory estimate");
+            512 // 保守估计 512MB 可用
+        }
     }
 
     /// Write a chunk of data to the buffer
