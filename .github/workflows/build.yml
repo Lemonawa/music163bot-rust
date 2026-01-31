@@ -64,6 +64,11 @@ jobs:
         with:
           targets: ${{ matrix.platform.target }}
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform.target }}
+
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
