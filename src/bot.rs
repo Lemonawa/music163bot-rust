@@ -1577,7 +1577,10 @@ async fn handle_inline_query(
                 if let Some(ref pic_url) = song.album.pic_url
                     && let Ok(url) = reqwest::Url::parse(pic_url)
                 {
-                    article = article.thumbnail_url(url);
+                    article = article
+                        .thumbnail_url(url)
+                        .thumbnail_width(640)
+                        .thumbnail_height(640);
                 }
 
                 results.push(InlineQueryResult::Article(article));
