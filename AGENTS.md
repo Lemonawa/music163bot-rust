@@ -52,6 +52,20 @@ cargo test test_name
 cargo test module_name::
 ```
 
+## Git Workflow
+
+**IMPORTANT: User's specific workflow requirement**
+
+```
+动一下，就commit一次
+永远不要push
+```
+
+- Every file change must be committed immediately after `cargo check` and `cargo clippy` pass
+- Never push to remote repository (unless explicitly requested by user)
+- Frequent commits allow easy rollback of individual changes
+- Use descriptive commit messages following conventional commits format
+
 ## Code Style Guidelines
 
 ### Imports Ordering
