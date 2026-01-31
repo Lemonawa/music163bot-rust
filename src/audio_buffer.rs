@@ -6,17 +6,16 @@
 //! - Hybrid: Smart selection based on file size and available memory (recommended)
 
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use sysinfo::System;
 use teloxide::types::InputFile;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 /// 缓存的 System 实例，避免每次检查内存都创建新对象
-static SYSTEM: Lazy<Mutex<System>> = Lazy::new(|| {
+static SYSTEM: LazyLock<Mutex<System>> = LazyLock::new(|| {
     let mut sys = System::new();
     sys.refresh_memory();
     Mutex::new(sys)
