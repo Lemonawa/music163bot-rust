@@ -154,7 +154,6 @@ src/
 ├── music_api.rs      # NetEase API client
 ├── audio_buffer.rs   # Audio download/storage abstraction
 ├── database.rs       # SQLite operations
-├── database2.rs      # Additional DB utilities
 ├── config.rs         # Configuration parsing (INI format)
 ├── error.rs          # Error types
 ├── memory.rs         # Memory management utilities
