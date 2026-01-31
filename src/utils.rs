@@ -16,17 +16,18 @@ static NUMBER_REGEX: std::sync::LazyLock<Regex> =
 
 /// Extract music ID from text
 pub fn parse_music_id(text: &str) -> Option<u64> {
-    let text = text.replace(['\n', ' '], "");
+    // 优化：直接对原始 text 使用正则，避免创建新 String
+    // SONG_REGEX 和 SHARE_LINK_REGEX 都能正确处理包含空白的字符串
 
     // Try to extract from URL
-    if let Some(captures) = SONG_REGEX.captures(&text)
+    if let Some(captures) = SONG_REGEX.captures(text)
         && let Some(id_str) = captures.get(1)
     {
         return id_str.as_str().parse().ok();
     }
 
     // Try to extract from share link
-    if let Some(url_match) = SHARE_LINK_REGEX.find(&text)
+    if let Some(url_match) = SHARE_LINK_REGEX.find(text)
         && url_match.as_str().contains("song")
         && let Some(id_match) = NUMBER_REGEX.find(url_match.as_str())
     {
@@ -34,8 +35,10 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
     }
 
     // Try to parse as direct number (only if the entire text is a number)
-    if text.parse::<u64>().is_ok() {
-        return text.parse().ok();
+    // 去除空白后再检查是否为纯数字
+    let trimmed = text.trim();
+    if trimmed.parse::<u64>().is_ok() {
+        return trimmed.parse().ok();
     }
     None
 }
