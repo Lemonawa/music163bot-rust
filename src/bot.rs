@@ -52,11 +52,12 @@ pub async fn run(config: Config) -> Result<()> {
                 tracing::info!("Using custom Telegram API URL: {}", api_url);
 
                 // Create a custom HTTP client tuned for Cloudflare compatibility (mimic Go http client)
-                // pool_max_idle_per_host(0) prevents connection pool memory accumulation
+                // pool_max_idle_per_host(2) keeps reasonable connection pool for API efficiency
                 let client = reqwest::Client::builder()
                     .use_rustls_tls()
                     .user_agent("Go-http-client/2.0")
-                    .pool_max_idle_per_host(0)
+                    .pool_max_idle_per_host(2)
+                    .pool_idle_timeout(std::time::Duration::from_secs(60))
                     .danger_accept_invalid_certs(false)
                     .timeout(std::time::Duration::from_secs(30))
                     .no_gzip()
@@ -112,9 +113,16 @@ pub async fn run(config: Config) -> Result<()> {
             }
         }
     } else {
-        // 使用默认API URL
+        // 使用默认API URL，但配置连接池以提高效率
         tracing::info!("Using default Telegram API URL: https://api.telegram.org");
-        Bot::new(&config.bot_token)
+        let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap();
+        Bot::with_client(&config.bot_token, client)
     };
 
     // Log the API configuration
