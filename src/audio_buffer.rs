@@ -416,10 +416,12 @@ impl AudioBuffer {
         if let Some(artwork_data) = artwork_data {
             tag.remove_picture_type(PictureType::CoverFront);
 
-            let (width, height) = match image::load_from_memory(artwork_data) {
-                Ok(img) => (img.width(), img.height()),
-                Err(_) => (0, 0),
-            };
+            // 优化：使用 ImageReader 避免完整解码，减少内存占用
+            let (width, height) = image::ImageReader::new(std::io::Cursor::new(artwork_data))
+                .with_guessed_format()
+                .ok()
+                .and_then(|r| r.into_dimensions().ok())
+                .unwrap_or((0, 0));
 
             let mut pic = Picture::new();
             pic.picture_type = PictureType::CoverFront;
@@ -475,10 +477,12 @@ impl AudioBuffer {
         if let Some(artwork_data) = artwork_data {
             tag.remove_picture_type(PictureType::CoverFront);
 
-            let (width, height) = match image::load_from_memory(artwork_data) {
-                Ok(img) => (img.width(), img.height()),
-                Err(_) => (0, 0),
-            };
+            // 优化：使用 ImageReader 避免完整解码，减少内存占用
+            let (width, height) = image::ImageReader::new(std::io::Cursor::new(artwork_data))
+                .with_guessed_format()
+                .ok()
+                .and_then(|r| r.into_dimensions().ok())
+                .unwrap_or((0, 0));
 
             let mut pic = Picture::new();
             pic.picture_type = PictureType::CoverFront;
