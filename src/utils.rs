@@ -129,6 +129,19 @@ pub fn throughput_mbps(bytes: u64, duration: std::time::Duration) -> f64 {
     mb / duration_secs
 }
 
+pub fn update_peak(counter: &std::sync::atomic::AtomicU32, value: u32) -> u32 {
+    use std::sync::atomic::Ordering;
+
+    let mut current = counter.load(Ordering::Relaxed);
+    while value > current {
+        match counter.compare_exchange(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return value,
+            Err(latest) => current = latest,
+        }
+    }
+    current
+}
+
 /// Check if an error is a timeout error
 pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
     error.to_string().contains("timeout") || error.to_string().contains("deadline")
@@ -138,7 +151,7 @@ pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use super::throughput_mbps;
+    use super::{throughput_mbps, update_peak};
 
     #[test]
     fn throughput_mbps_calculates_expected_value() {
@@ -146,5 +159,14 @@ mod tests {
         let duration = Duration::from_secs(2);
         let value = throughput_mbps(bytes, duration);
         assert!((value - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn update_peak_tracks_highest_value() {
+        let counter = std::sync::atomic::AtomicU32::new(0);
+        assert_eq!(update_peak(&counter, 1), 1);
+        assert_eq!(update_peak(&counter, 2), 2);
+        assert_eq!(update_peak(&counter, 2), 2);
+        assert_eq!(update_peak(&counter, 1), 2);
     }
 }

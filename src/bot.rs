@@ -18,7 +18,7 @@ use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
 use crate::error::Result;
 use crate::music_api::{MusicApi, format_artists};
-use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps};
+use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps, update_peak};
 
 pub struct BotState {
     pub config: Config,
@@ -28,12 +28,19 @@ pub struct BotState {
     pub bot_username: String,
     pub upload_client_state: Arc<Mutex<UploadClientState>>,
     pub maintenance_counters: MaintenanceCounters,
+    pub upload_counters: UploadCounters,
 }
 
 #[derive(Debug)]
 pub struct UploadClientState {
     pub bot: Option<Bot>,
     pub reuse_count: u32,
+}
+
+#[derive(Debug, Default)]
+pub struct UploadCounters {
+    pub in_flight: AtomicU32,
+    pub peak_in_flight: AtomicU32,
 }
 
 #[derive(Debug)]
@@ -199,6 +206,7 @@ pub async fn run(config: Config) -> Result<()> {
             reuse_count: 0,
         })),
         maintenance_counters: MaintenanceCounters::new(),
+        upload_counters: UploadCounters::default(),
     });
 
     // Create dispatcher
@@ -1150,6 +1158,8 @@ async fn download_and_send_music(
 
     // Try sending as audio with basic metadata
     // Use into_input_file to consume audio_buffer and avoid cloning memory
+    let in_flight = state.upload_counters.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+    let peak_in_flight = update_peak(&state.upload_counters.peak_in_flight, in_flight);
     let upload_start = std::time::Instant::now();
     let mut audio_req = upload_bot
         .send_audio(msg.chat.id, audio_buffer.into_input_file())
@@ -1169,14 +1179,17 @@ async fn download_and_send_music(
     // Thumbnail will be embedded into tags for MP3 and FLAC (when possible)
     let audio_result = audio_req.await;
     let upload_duration = upload_start.elapsed();
+    let in_flight_after = state.upload_counters.in_flight.fetch_sub(1, Ordering::Relaxed) - 1;
 
     match audio_result {
         Ok(sent_msg) => {
             let upload_mbps = throughput_mbps(file_size, upload_duration);
             tracing::info!(
-                "Upload completed in {:.2}s ({:.2} MB/s)",
+                "Upload completed in {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
                 upload_duration.as_secs_f64(),
-                upload_mbps
+                upload_mbps,
+                in_flight_after,
+                peak_in_flight
             );
             tracing::info!(
                 "Successfully sent as audio: {}",
@@ -1195,9 +1208,11 @@ async fn download_and_send_music(
         Err(e) => {
             let upload_mbps = throughput_mbps(file_size, upload_duration);
             tracing::warn!(
-                "Upload failed after {:.2}s ({:.2} MB/s)",
+                "Upload failed after {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
                 upload_duration.as_secs_f64(),
-                upload_mbps
+                upload_mbps,
+                in_flight_after,
+                peak_in_flight
             );
             tracing::warn!("Audio send failed: {}, trying document fallback", e);
 
