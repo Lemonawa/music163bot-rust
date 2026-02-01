@@ -291,7 +291,7 @@ impl Config {
             config.memory_buffer_mb = buffer.parse().unwrap_or(100);
         }
         if let Some(max_file) = config_map.get("download.memory_max_file_mb") {
-            config.memory_max_file_mb = max_file.parse().unwrap_or(64);
+            config.memory_max_file_mb = max_file.parse().unwrap_or(config.memory_max_file_mb);
         }
         if let Some(concurrent) = config_map.get("download.max_concurrent") {
             config.max_concurrent_downloads = concurrent.parse().unwrap_or(3);
@@ -321,10 +321,14 @@ impl Config {
         }
 
         if let Some(interval) = config_map.get("maintenance.memory_release_interval_requests") {
-            config.memory_release_interval_requests = interval.parse().unwrap_or(1);
+            config.memory_release_interval_requests = interval
+                .parse()
+                .unwrap_or(config.memory_release_interval_requests);
         }
         if let Some(interval) = config_map.get("maintenance.db_analyze_interval_requests") {
-            config.db_analyze_interval_requests = interval.parse().unwrap_or(1);
+            config.db_analyze_interval_requests = interval
+                .parse()
+                .unwrap_or(config.db_analyze_interval_requests);
         }
 
         // Validate required fields
@@ -338,6 +342,8 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::{Config, CoverMode};
 
     #[test]
@@ -377,5 +383,35 @@ mod tests {
     fn default_cover_mode_is_thumbnail() {
         let config = Config::default();
         assert_eq!(config.cover_mode, CoverMode::Thumbnail);
+    }
+
+    #[test]
+    fn invalid_numeric_config_keeps_defaults() {
+        let default_config = Config::default();
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path = std::env::temp_dir().join(format!("music163bot_config_{temp_name}.ini"));
+        let content = "bot.token=token\n\
+download.memory_max_file_mb=not-a-number\n\
+maintenance.memory_release_interval_requests=bad\n\
+maintenance.db_analyze_interval_requests=bad\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.memory_max_file_mb, default_config.memory_max_file_mb);
+        assert_eq!(
+            loaded.memory_release_interval_requests,
+            default_config.memory_release_interval_requests
+        );
+        assert_eq!(
+            loaded.db_analyze_interval_requests,
+            default_config.db_analyze_interval_requests
+        );
     }
 }
