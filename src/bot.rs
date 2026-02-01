@@ -732,11 +732,29 @@ async fn download_and_send_music(
 
         let mut stream = response.bytes_stream();
         let mut downloaded = 0u64;
+        let chunk_size = state.config.download_chunk_size_kb * 1024;
+        let mut buffer = Vec::with_capacity(chunk_size);
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             downloaded += chunk.len() as u64;
-            audio_buffer.write_chunk(&chunk).await?;
+
+            if buffer.len() + chunk.len() > chunk_size {
+                if !buffer.is_empty() {
+                    audio_buffer.write_chunk(&buffer).await?;
+                    buffer.clear();
+                }
+                if chunk.len() >= chunk_size {
+                    audio_buffer.write_chunk(&chunk).await?;
+                } else {
+                    buffer.extend_from_slice(&chunk);
+                }
+            } else {
+                buffer.extend_from_slice(&chunk);
+            }
+        }
+        if !buffer.is_empty() {
+            audio_buffer.write_chunk(&buffer).await?;
         }
         audio_buffer.finish().await?;
 

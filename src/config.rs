@@ -79,6 +79,8 @@ pub struct Config {
     pub download_pool_max_idle_per_host: usize,
     /// Download connect timeout (seconds)
     pub download_connect_timeout_secs: u64,
+    /// Download chunk size in KB for buffering
+    pub download_chunk_size_kb: usize,
 }
 
 impl Default for Config {
@@ -105,6 +107,7 @@ impl Default for Config {
             max_concurrent_downloads: 3, // 从 10 减少到 3，减少内存峰值
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
+            download_chunk_size_kb: 256,
         }
     }
 }
@@ -248,6 +251,9 @@ impl Config {
         if let Some(timeout) = config_map.get("download.connect_timeout_secs") {
             config.download_connect_timeout_secs = timeout.parse().unwrap_or(10);
         }
+        if let Some(chunk_kb) = config_map.get("download.chunk_size_kb") {
+            config.download_chunk_size_kb = chunk_kb.parse().unwrap_or(256);
+        }
 
         // Validate required fields
         if config.bot_token.is_empty() {
@@ -265,7 +271,13 @@ mod tests {
     #[test]
     fn download_pool_defaults_are_tunable() {
         let config = Config::default();
-        assert!(config.download_pool_max_idle_per_host >= 0);
+        assert!(config.download_pool_max_idle_per_host > 0);
         assert!(config.download_connect_timeout_secs > 0);
+    }
+
+    #[test]
+    fn download_chunk_size_has_default() {
+        let config = Config::default();
+        assert!(config.download_chunk_size_kb >= 64);
     }
 }
