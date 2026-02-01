@@ -38,7 +38,7 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!("Database initialized");
 
     // Initialize music API
-    let music_api = MusicApi::new(config.music_u.clone(), config.music_api.clone());
+    let music_api = MusicApi::new_with_config(&config);
     tracing::info!("Music API initialized");
 
     // Initialize bot with custom API URL support

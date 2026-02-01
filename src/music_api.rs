@@ -13,6 +13,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::config::Config;
 use crate::error::{BotError, Result};
 
 #[derive(Debug, Clone)]
@@ -114,6 +115,25 @@ pub struct SearchSong {
 impl MusicApi {
     #[must_use]
     pub fn new(music_u: Option<String>, base_url: String) -> Self {
+        Self::new_with_options(music_u, base_url, 0, 10)
+    }
+
+    #[must_use]
+    pub fn new_with_config(config: &Config) -> Self {
+        Self::new_with_options(
+            config.music_u.clone(),
+            config.music_api.clone(),
+            config.download_pool_max_idle_per_host,
+            config.download_connect_timeout_secs,
+        )
+    }
+
+    fn new_with_options(
+        music_u: Option<String>,
+        base_url: String,
+        pool_max_idle_per_host: usize,
+        connect_timeout_secs: u64,
+    ) -> Self {
         let mut client_builder = Client::builder();
 
         // Use rustls TLS for better compatibility
@@ -123,8 +143,8 @@ impl MusicApi {
         // pool_max_idle_per_host(0) prevents connection pool memory accumulation
         client_builder = client_builder
             .tcp_nodelay(true)
-            .pool_max_idle_per_host(0)
-            .connect_timeout(std::time::Duration::from_secs(10));
+            .pool_max_idle_per_host(pool_max_idle_per_host)
+            .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs));
 
         // Add user agent
         client_builder = client_builder

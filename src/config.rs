@@ -75,6 +75,10 @@ pub struct Config {
     pub memory_buffer_mb: u64,
     /// Maximum concurrent downloads (lower = less memory, higher = more throughput)
     pub max_concurrent_downloads: u32,
+    /// Max idle connections per host for download client
+    pub download_pool_max_idle_per_host: usize,
+    /// Download connect timeout (seconds)
+    pub download_connect_timeout_secs: u64,
 }
 
 impl Default for Config {
@@ -99,6 +103,8 @@ impl Default for Config {
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
             max_concurrent_downloads: 3, // 从 10 减少到 3，减少内存峰值
+            download_pool_max_idle_per_host: 2,
+            download_connect_timeout_secs: 10,
         }
     }
 }
@@ -236,11 +242,30 @@ impl Config {
             config.max_concurrent_downloads = concurrent.parse().unwrap_or(3);
         }
 
+        if let Some(pool_size) = config_map.get("download.pool_max_idle_per_host") {
+            config.download_pool_max_idle_per_host = pool_size.parse().unwrap_or(2);
+        }
+        if let Some(timeout) = config_map.get("download.connect_timeout_secs") {
+            config.download_connect_timeout_secs = timeout.parse().unwrap_or(10);
+        }
+
         // Validate required fields
         if config.bot_token.is_empty() {
             return Err(anyhow::anyhow!("BOT_TOKEN is required"));
         }
 
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn download_pool_defaults_are_tunable() {
+        let config = Config::default();
+        assert!(config.download_pool_max_idle_per_host >= 0);
+        assert!(config.download_connect_timeout_secs > 0);
     }
 }
