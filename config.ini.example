@@ -43,6 +43,11 @@ memory_threshold = 100
 # 系统可用内存必须 > (文件大小 + 此缓冲区) 才使用内存模式
 memory_buffer = 100
 
+# 内存模式文件大小上限 (MB)
+# 无论 memory 或 hybrid，文件大于此值都强制使用磁盘模式
+# 建议与 memory_threshold 保持一致或略大
+memory_max_file_mb = 100
+
 # 最大并发下载数 (v1.1.9+)
 # 控制同时下载的歌曲数量，较低的值减少内存峰值
 # 推荐值: 3-5 (默认值: 3)

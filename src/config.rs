@@ -147,7 +147,7 @@ impl Default for Config {
             storage_mode: StorageMode::Disk, // Backward compatible
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
-            memory_max_file_mb: 64,
+            memory_max_file_mb: 100,
             max_concurrent_downloads: 3, // 从 10 减少到 3，减少内存峰值
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn memory_max_file_has_default() {
         let config = Config::default();
-        assert!(config.memory_max_file_mb > 0);
+        assert_eq!(config.memory_max_file_mb, 100);
     }
 
     #[test]
