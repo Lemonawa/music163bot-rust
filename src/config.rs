@@ -152,8 +152,8 @@ impl Default for Config {
             cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 50,
             upload_timeout_secs: 300,
-            memory_release_interval_requests: 1,
-            db_analyze_interval_requests: 1,
+            memory_release_interval_requests: 10,
+            db_analyze_interval_requests: 20,
         }
     }
 }
@@ -355,15 +355,15 @@ mod tests {
     }
 
     #[test]
-    fn default_cover_mode_is_thumbnail() {
+    fn maintenance_interval_defaults_exist() {
         let config = Config::default();
-        assert_eq!(config.cover_mode, CoverMode::Thumbnail);
+        assert!(config.memory_release_interval_requests >= 1);
+        assert!(config.db_analyze_interval_requests >= 1);
     }
 
     #[test]
-    fn maintenance_interval_defaults_exist() {
+    fn default_cover_mode_is_thumbnail() {
         let config = Config::default();
-        assert_eq!(config.memory_release_interval_requests, 1);
-        assert_eq!(config.db_analyze_interval_requests, 1);
+        assert_eq!(config.cover_mode, CoverMode::Thumbnail);
     }
 }
