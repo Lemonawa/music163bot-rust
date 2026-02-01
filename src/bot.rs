@@ -18,7 +18,7 @@ use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
 use crate::error::Result;
 use crate::music_api::{MusicApi, format_artists};
-use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id};
+use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps};
 
 pub struct BotState {
     pub config: Config,
@@ -833,6 +833,7 @@ async fn download_and_send_music(
 
     // Download audio file using smart storage
     let audio_future = async {
+        let download_start = std::time::Instant::now();
         let response = state.music_api.download_file(&song_url.url).await?;
 
         // Check response status
@@ -883,6 +884,13 @@ async fn download_and_send_music(
             audio_buffer.write_chunk(&buffer).await?;
         }
         audio_buffer.finish().await?;
+        let download_duration = download_start.elapsed();
+        let download_mbps = throughput_mbps(downloaded, download_duration);
+        tracing::info!(
+            "Audio download completed in {:.2}s ({:.2} MB/s)",
+            download_duration.as_secs_f64(),
+            download_mbps
+        );
 
         Ok::<(AudioBuffer, u64), anyhow::Error>((audio_buffer, downloaded))
     };
@@ -1142,6 +1150,7 @@ async fn download_and_send_music(
 
     // Try sending as audio with basic metadata
     // Use into_input_file to consume audio_buffer and avoid cloning memory
+    let upload_start = std::time::Instant::now();
     let mut audio_req = upload_bot
         .send_audio(msg.chat.id, audio_buffer.into_input_file())
         .caption(&caption)
@@ -1159,9 +1168,16 @@ async fn download_and_send_music(
 
     // Thumbnail will be embedded into tags for MP3 and FLAC (when possible)
     let audio_result = audio_req.await;
+    let upload_duration = upload_start.elapsed();
 
     match audio_result {
         Ok(sent_msg) => {
+            let upload_mbps = throughput_mbps(file_size, upload_duration);
+            tracing::info!(
+                "Upload completed in {:.2}s ({:.2} MB/s)",
+                upload_duration.as_secs_f64(),
+                upload_mbps
+            );
             tracing::info!(
                 "Successfully sent as audio: {}",
                 if is_flac { "FLAC" } else { "MP3" }
@@ -1177,6 +1193,12 @@ async fn download_and_send_music(
             // No cleanup needed - both audio_buffer and thumbnail_buffer were consumed
         }
         Err(e) => {
+            let upload_mbps = throughput_mbps(file_size, upload_duration);
+            tracing::warn!(
+                "Upload failed after {:.2}s ({:.2} MB/s)",
+                upload_duration.as_secs_f64(),
+                upload_mbps
+            );
             tracing::warn!("Audio send failed: {}, trying document fallback", e);
 
             // Note: audio_buffer was consumed above, we need to check if we can retry
@@ -1204,15 +1226,14 @@ async fn download_and_send_music(
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
 
-    // Give tokio time to clean up spawned tasks before forcing memory release
-    tokio::task::yield_now().await;
-
     // Force memory release after download completes
     let release_interval = state.config.memory_release_interval_requests;
     if MaintenanceCounters::should_run(
         &state.maintenance_counters.memory_release_requests,
         release_interval,
     ) {
+        // Give tokio time to clean up spawned tasks before forcing memory release
+        tokio::task::yield_now().await;
         crate::memory::force_memory_release();
         crate::memory::log_memory_stats();
     }

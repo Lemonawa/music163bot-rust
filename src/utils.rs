@@ -119,7 +119,32 @@ pub fn format_duration(seconds: u64) -> String {
     format!("{minutes:02}:{seconds:02}")
 }
 
+#[must_use]
+pub fn throughput_mbps(bytes: u64, duration: std::time::Duration) -> f64 {
+    let duration_secs = duration.as_secs_f64();
+    if duration_secs <= 0.0 {
+        return 0.0;
+    }
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    mb / duration_secs
+}
+
 /// Check if an error is a timeout error
 pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
     error.to_string().contains("timeout") || error.to_string().contains("deadline")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::throughput_mbps;
+
+    #[test]
+    fn throughput_mbps_calculates_expected_value() {
+        let bytes = 10 * 1024 * 1024;
+        let duration = Duration::from_secs(2);
+        let value = throughput_mbps(bytes, duration);
+        assert!((value - 5.0).abs() < 0.01);
+    }
 }
