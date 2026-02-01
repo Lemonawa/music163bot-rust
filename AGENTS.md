@@ -39,7 +39,7 @@ cargo fmt -- --check
 
 ## Test Commands
 
-**Note: This project currently has NO tests configured.** Use compilation as verification.
+**Note: This project has unit tests.** Use `cargo test` for verification; use compilation only when no tests apply.
 
 ```bash
 # Run tests (none exist currently)
@@ -112,6 +112,15 @@ use crate::config::Config;
 - Use `anyhow` for general error propagation
 - Prefer `?` operator over explicit match/unwrap
 - Log errors with `tracing::error!()` before returning
+- Avoid `unwrap()`/`expect()` in production paths (URL parsing, HTTP client creation, semaphore acquisition)
+- Non-critical failures should log a warning and fall back safely
+
+### Config Parsing
+- Keep defaults on parse errors (no hard-coded fallback values)
+- Log invalid values with context
+
+### Quality Practices
+- Stability fixes and behavior-preserving refactors should include minimal tests (TDD preferred)
 
 Example:
 ```rust
