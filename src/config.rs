@@ -104,6 +104,8 @@ pub struct Config {
     pub memory_threshold_mb: u64,
     /// Memory buffer in MB (available memory must exceed file size + buffer to use memory mode)
     pub memory_buffer_mb: u64,
+    /// Maximum file size in MB allowed for memory mode (larger files use disk)
+    pub memory_max_file_mb: u64,
     /// Maximum concurrent downloads (lower = less memory, higher = more throughput)
     pub max_concurrent_downloads: u32,
     /// Max idle connections per host for download client
@@ -145,6 +147,7 @@ impl Default for Config {
             storage_mode: StorageMode::Disk, // Backward compatible
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
+            memory_max_file_mb: 64,
             max_concurrent_downloads: 3, // 从 10 减少到 3，减少内存峰值
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
@@ -287,6 +290,9 @@ impl Config {
         if let Some(buffer) = config_map.get("download.memory_buffer") {
             config.memory_buffer_mb = buffer.parse().unwrap_or(100);
         }
+        if let Some(max_file) = config_map.get("download.memory_max_file_mb") {
+            config.memory_max_file_mb = max_file.parse().unwrap_or(64);
+        }
         if let Some(concurrent) = config_map.get("download.max_concurrent") {
             config.max_concurrent_downloads = concurrent.parse().unwrap_or(3);
         }
@@ -345,6 +351,12 @@ mod tests {
     fn download_chunk_size_has_default() {
         let config = Config::default();
         assert!(config.download_chunk_size_kb >= 64);
+    }
+
+    #[test]
+    fn memory_max_file_has_default() {
+        let config = Config::default();
+        assert!(config.memory_max_file_mb > 0);
     }
 
     #[test]

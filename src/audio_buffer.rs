@@ -129,6 +129,18 @@ impl AudioBuffer {
         match config.storage_mode {
             StorageMode::Disk => false,
             StorageMode::Memory => {
+                if content_length > 0 {
+                    let file_size_mb = content_length / (1024 * 1024);
+                    if file_size_mb > config.memory_max_file_mb {
+                        tracing::debug!(
+                            "Memory mode: file size {}MB exceeds max {}MB, using disk",
+                            file_size_mb,
+                            config.memory_max_file_mb
+                        );
+                        return false;
+                    }
+                }
+
                 // Always use memory, but check if we have enough
                 let available_mb = Self::get_available_memory_mb();
                 let required_mb = (content_length / (1024 * 1024)) + config.memory_buffer_mb;
@@ -153,6 +165,15 @@ impl AudioBuffer {
                         "Hybrid mode: file size {}MB exceeds threshold {}MB, using disk",
                         file_size_mb,
                         config.memory_threshold_mb
+                    );
+                    return false;
+                }
+
+                if file_size_mb > config.memory_max_file_mb {
+                    tracing::debug!(
+                        "Hybrid mode: file size {}MB exceeds max {}MB, using disk",
+                        file_size_mb,
+                        config.memory_max_file_mb
                     );
                     return false;
                 }
