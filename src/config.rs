@@ -17,6 +17,37 @@ pub enum StorageMode {
     Hybrid,
 }
 
+/// Cover art handling mode for downloads
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverMode {
+    /// Only download a thumbnail for Telegram display
+    Thumbnail,
+    /// Only download original cover art for embedding
+    Original,
+    /// Download both original and thumbnail (legacy behavior)
+    Both,
+}
+
+impl Default for CoverMode {
+    fn default() -> Self {
+        Self::Thumbnail
+    }
+}
+
+impl std::str::FromStr for CoverMode {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "thumbnail" => Ok(Self::Thumbnail),
+            "original" => Ok(Self::Original),
+            "both" => Ok(Self::Both),
+            _ => Err(anyhow::anyhow!("Invalid cover mode: {s}")),
+        }
+    }
+}
+
 impl Default for StorageMode {
     fn default() -> Self {
         Self::Disk // Backward compatible default
@@ -81,6 +112,8 @@ pub struct Config {
     pub download_connect_timeout_secs: u64,
     /// Download chunk size in KB for buffering
     pub download_chunk_size_kb: usize,
+    /// Cover art mode: thumbnail, original, or both
+    pub cover_mode: CoverMode,
     /// Upload client reuse request limit
     pub upload_client_reuse_requests: u32,
     /// Upload timeout (seconds)
@@ -112,6 +145,7 @@ impl Default for Config {
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,
+            cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 50,
             upload_timeout_secs: 300,
         }
@@ -260,6 +294,12 @@ impl Config {
         if let Some(chunk_kb) = config_map.get("download.chunk_size_kb") {
             config.download_chunk_size_kb = chunk_kb.parse().unwrap_or(256);
         }
+        if let Some(mode) = config_map.get("download.cover_mode") {
+            match mode.parse::<CoverMode>() {
+                Ok(m) => config.cover_mode = m,
+                Err(e) => tracing::warn!("Invalid cover_mode '{}': {}, using default", mode, e),
+            }
+        }
 
         if let Some(reuse_requests) = config_map.get("upload.client_reuse_requests") {
             config.upload_client_reuse_requests = reuse_requests.parse().unwrap_or(50);
@@ -279,7 +319,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, CoverMode};
 
     #[test]
     fn download_pool_defaults_are_tunable() {
@@ -299,5 +339,11 @@ mod tests {
         let config = Config::default();
         assert!(config.upload_client_reuse_requests > 0);
         assert!(config.upload_timeout_secs > 0);
+    }
+
+    #[test]
+    fn default_cover_mode_is_thumbnail() {
+        let config = Config::default();
+        assert_eq!(config.cover_mode, CoverMode::Thumbnail);
     }
 }

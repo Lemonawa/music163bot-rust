@@ -14,7 +14,7 @@ use teloxide::types::{
 };
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
-use crate::config::Config;
+use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
 use crate::error::Result;
 use crate::music_api::{MusicApi, format_artists};
@@ -33,6 +33,26 @@ pub struct BotState {
 pub struct UploadClientState {
     pub bot: Option<Bot>,
     pub reuse_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CoverPolicy {
+    download_original: bool,
+    download_thumbnail: bool,
+    embed_tags: bool,
+    embed_cover: bool,
+}
+
+fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
+    let download_original = matches!(cover_mode, CoverMode::Original | CoverMode::Both);
+    let download_thumbnail = matches!(cover_mode, CoverMode::Thumbnail | CoverMode::Both);
+
+    CoverPolicy {
+        download_original,
+        download_thumbnail,
+        embed_tags: true,
+        embed_cover: download_original,
+    }
 }
 
 pub async fn run(config: Config) -> Result<()> {
@@ -631,6 +651,11 @@ async fn download_and_send_music(
     // Ensure cache directory exists
     ensure_dir(&state.config.cache_dir)?;
 
+    let cover_mode = state.config.cover_mode;
+    let cover_policy = resolve_cover_policy(cover_mode);
+    let download_original = cover_policy.download_original;
+    let download_thumbnail = cover_policy.download_thumbnail;
+
     // Start parallel downloads: audio file and album art
     let artwork_future = async {
         if let Some(ref al) = song_detail.al {
@@ -641,71 +666,135 @@ async fn download_and_send_music(
                     (None, None)
                 } else {
                     tracing::info!(
-                        "Starting album art download for music_id {}, pic_url: {}",
+                        "Starting album art download for music_id {} (mode: {:?}), pic_url: {}",
                         song_detail.id,
+                        cover_mode,
                         pic_url
                     );
 
-                    // Download both versions in parallel: original (for embedding) and resized (for Telegram thumbnail)
-                    let original_future = state.music_api.download_album_art_original(pic_url);
-                    let thumbnail_future = state.music_api.download_album_art_data(pic_url);
+                    if download_original && download_thumbnail {
+                        // Download both versions in parallel: original (for embedding) and resized (for Telegram thumbnail)
+                        let original_future =
+                            state.music_api.download_album_art_original(pic_url);
+                        let thumbnail_future = state.music_api.download_album_art_data(pic_url);
 
-                    let (original_result, thumbnail_result) =
-                        tokio::join!(original_future, thumbnail_future);
+                        let (original_result, thumbnail_result) =
+                            tokio::join!(original_future, thumbnail_future);
 
-                    // Process original high-res image for embedding
-                    let original_data = match original_result {
-                        Ok(data) => {
-                            tracing::info!(
-                                "Downloaded original album art for music_id {} ({} bytes)",
-                                song_detail.id,
-                                data.len()
-                            );
-                            Some(data)
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to download original album art for music_id {}: {}",
-                                song_detail.id,
-                                e
-                            );
+                        // Process original high-res image for embedding
+                        let original_data = match original_result {
+                            Ok(data) => {
+                                tracing::info!(
+                                    "Downloaded original album art for music_id {} ({} bytes)",
+                                    song_detail.id,
+                                    data.len()
+                                );
+                                Some(data)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to download original album art for music_id {}: {}",
+                                    song_detail.id,
+                                    e
+                                );
+                                None
+                            }
+                        };
+
+                        // Process 320x320 thumbnail for Telegram display
+                        let thumbnail_buffer = match thumbnail_result {
+                            Ok(data) => {
+                                tracing::info!(
+                                    "Downloaded thumbnail for music_id {} ({} bytes)",
+                                    song_detail.id,
+                                    data.len()
+                                );
+                                let thumb_filename = format!(
+                                    "thumb_{}_{}.jpg",
+                                    song_detail.id,
+                                    chrono::Utc::now().timestamp()
+                                );
+                                ThumbnailBuffer::new(
+                                    &state.config,
+                                    data,
+                                    &state.config.cache_dir,
+                                    &thumb_filename,
+                                )
+                                .await
+                                .ok()
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to download thumbnail for music_id {}: {}",
+                                    song_detail.id,
+                                    e
+                                );
+                                None
+                            }
+                        };
+
+                        (original_data, thumbnail_buffer)
+                    } else {
+                        let original_data = if download_original {
+                            match state.music_api.download_album_art_original(pic_url).await {
+                                Ok(data) => {
+                                    tracing::info!(
+                                        "Downloaded original album art for music_id {} ({} bytes)",
+                                        song_detail.id,
+                                        data.len()
+                                    );
+                                    Some(data)
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to download original album art for music_id {}: {}",
+                                        song_detail.id,
+                                        e
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
                             None
-                        }
-                    };
+                        };
 
-                    // Process 320x320 thumbnail for Telegram display
-                    let thumbnail_buffer = match thumbnail_result {
-                        Ok(data) => {
-                            tracing::info!(
-                                "Downloaded thumbnail for music_id {} ({} bytes)",
-                                song_detail.id,
-                                data.len()
-                            );
-                            let thumb_filename = format!(
-                                "thumb_{}_{}.jpg",
-                                song_detail.id,
-                                chrono::Utc::now().timestamp()
-                            );
-                            ThumbnailBuffer::new(
-                                &state.config,
-                                data,
-                                &state.config.cache_dir,
-                                &thumb_filename,
-                            )
-                            .await
-                            .ok()
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to download thumbnail for music_id {}: {}",
-                                song_detail.id,
-                                e
-                            );
+                        let thumbnail_buffer = if download_thumbnail {
+                            match state.music_api.download_album_art_data(pic_url).await {
+                                Ok(data) => {
+                                    tracing::info!(
+                                        "Downloaded thumbnail for music_id {} ({} bytes)",
+                                        song_detail.id,
+                                        data.len()
+                                    );
+                                    let thumb_filename = format!(
+                                        "thumb_{}_{}.jpg",
+                                        song_detail.id,
+                                        chrono::Utc::now().timestamp()
+                                    );
+                                    ThumbnailBuffer::new(
+                                        &state.config,
+                                        data,
+                                        &state.config.cache_dir,
+                                        &thumb_filename,
+                                    )
+                                    .await
+                                    .ok()
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to download thumbnail for music_id {}: {}",
+                                        song_detail.id,
+                                        e
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
                             None
-                        }
-                    };
+                        };
 
-                    (original_data, thumbnail_buffer)
+                        (original_data, thumbnail_buffer)
+                    }
                 }
             } else {
                 tracing::warn!("No pic_url found in album for music_id {}", song_detail.id);
@@ -787,18 +876,28 @@ async fn download_and_send_music(
             "disk"
         }
     );
-    tracing::info!(
-        "Cover download result - Original: {}, Thumbnail: {}",
+    let original_status = if download_original {
         if original_artwork_data.is_some() {
             "Available"
         } else {
             "None"
-        },
+        }
+    } else {
+        "Skipped"
+    };
+    let thumbnail_status = if download_thumbnail {
         if thumbnail_buffer.is_some() {
             "Available"
         } else {
             "None"
         }
+    } else {
+        "Skipped"
+    };
+    tracing::info!(
+        "Cover download result - Original: {}, Thumbnail: {}",
+        original_status,
+        thumbnail_status
     );
 
     // Validate file size (async to avoid blocking I/O)
@@ -825,26 +924,41 @@ async fn download_and_send_music(
     tracing::info!("File validation passed: {} bytes", actual_size);
 
     // 封面处理：使用原始高分辨率图片嵌入文件，缩略图用于Telegram显示
-    tracing::info!("Processing cover art for {} format", file_ext);
+    tracing::info!("Processing tags for {} format", file_ext);
+    let embed_artwork = if cover_policy.embed_cover {
+        original_artwork_data.as_deref()
+    } else {
+        None
+    };
 
     // 根据文件格式嵌入封面（使用原始高分辨率图片）
     match file_ext {
         "mp3" => {
-            tracing::info!("Adding ID3 tags to MP3");
-            match audio_buffer.add_id3_tags(song_detail, original_artwork_data.as_deref()) {
+            let cover_label = if cover_policy.embed_cover {
+                "original"
+            } else {
+                "none"
+            };
+            tracing::info!("Adding ID3 tags to MP3 (cover: {})", cover_label);
+            match audio_buffer.add_id3_tags(song_detail, embed_artwork) {
                 Ok(()) => tracing::info!("MP3 tags added successfully"),
                 Err(e) => tracing::warn!("Failed to add MP3 tags: {}", e),
             }
         }
         "flac" => {
-            tracing::info!("Adding FLAC metadata (vorbis comments + picture)");
-            match audio_buffer.add_flac_metadata(song_detail, original_artwork_data.as_deref()) {
+            let cover_label = if cover_policy.embed_cover {
+                "original"
+            } else {
+                "none"
+            };
+            tracing::info!("Adding FLAC metadata (cover: {})", cover_label);
+            match audio_buffer.add_flac_metadata(song_detail, embed_artwork) {
                 Ok(()) => tracing::info!("FLAC metadata added successfully"),
                 Err(e) => tracing::warn!("Failed to add FLAC metadata: {}", e),
             }
         }
         _ => {
-            tracing::info!("Unknown format {}, skipping cover embedding", file_ext);
+            tracing::info!("Unknown format {}, skipping tag embedding", file_ext);
         }
     }
 
@@ -900,14 +1014,7 @@ async fn download_and_send_music(
     };
 
     // Log final thumbnail status
-    tracing::info!(
-        "Final thumbnail status: {}",
-        if thumbnail_buffer.is_some() {
-            "Available"
-        } else {
-            "None"
-        }
-    );
+    tracing::info!("Final thumbnail status: {}", thumbnail_status);
 
     // Send the audio file
     let caption = build_caption(
