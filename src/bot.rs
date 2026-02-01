@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use anyhow;
 use futures_util::StreamExt;
 use tokio::sync::Mutex;
 use teloxide::RequestError;
