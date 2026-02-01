@@ -150,7 +150,10 @@ impl MusicApi {
         client_builder = client_builder
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
 
-        let client = client_builder.build().unwrap();
+        let client = build_http_client(client_builder).unwrap_or_else(|e| {
+            tracing::error!("Failed to build HTTP client: {e}");
+            Client::new()
+        });
 
         Self {
             client,
@@ -190,33 +193,40 @@ impl MusicApi {
         format!("{path}-{marker}-{json}-{marker}-{digest}")
     }
 
-    fn eapi_encrypt(data: &str) -> String {
+    fn eapi_encrypt(data: &str) -> Result<String> {
+        Self::eapi_encrypt_with_key(data, b"e82ckenh8dichen8")
+    }
+
+    fn eapi_encrypt_with_key(data: &str, key: &[u8]) -> Result<String> {
         let block_size = 16;
         let data_len = data.len();
         let padded_len = ((data_len + block_size) / block_size) * block_size;
         let mut buf = vec![0u8; padded_len];
         buf[..data_len].copy_from_slice(data.as_bytes());
-        let encrypted = Encryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8")
-            .expect("eapi key length")
+        let encrypted = Encryptor::<Aes128>::new_from_slice(key)
+            .map_err(|_| BotError::MusicApi("Invalid eapi key length".to_string()))?
             .encrypt_padded_mut::<Pkcs7>(&mut buf, data_len)
-            .map_err(|_| BotError::MusicApi("Failed to encrypt eapi payload".to_string()))
-            .unwrap_or(&[]);
-        encode_upper(encrypted)
+            .map_err(|_| BotError::MusicApi("Failed to encrypt eapi payload".to_string()))?;
+        Ok(encode_upper(encrypted))
     }
 
     fn eapi_decrypt(hex_data: &str) -> Result<String> {
+        Self::eapi_decrypt_with_key(hex_data, b"e82ckenh8dichen8")
+    }
+
+    fn eapi_decrypt_with_key(hex_data: &str, key: &[u8]) -> Result<String> {
         let mut bytes = hex::decode(hex_data).map_err(|e| BotError::MusicApi(e.to_string()))?;
-        let decrypted = Decryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8")
-            .expect("eapi key length")
+        let decrypted = Decryptor::<Aes128>::new_from_slice(key)
+            .map_err(|_| BotError::MusicApi("Invalid eapi key length".to_string()))?
             .decrypt_padded_mut::<Pkcs7>(&mut bytes)
             .map_err(|e| BotError::MusicApi(e.to_string()))?;
         String::from_utf8(decrypted.to_vec()).map_err(|e| BotError::MusicApi(e.to_string()))
     }
 
-    fn eapi_params(path: &str, json: &str) -> String {
+    fn eapi_params(path: &str, json: &str) -> Result<String> {
         let data = Self::eapi_splice(path, json);
-        let encrypted = Self::eapi_encrypt(&data);
-        format!("params={encrypted}")
+        let encrypted = Self::eapi_encrypt(&data)?;
+        Ok(format!("params={encrypted}"))
     }
 
     fn choose_eapi_user_agent() -> &'static str {
@@ -319,7 +329,7 @@ impl MusicApi {
             "limit": limit.max(1),
         });
         let payload_str = payload.to_string();
-        let body = Self::eapi_params(path, &payload_str);
+        let body = Self::eapi_params(path, &payload_str)?;
         let request = self
             .client
             .post(url)
@@ -476,6 +486,53 @@ impl MusicApi {
         let bytes = response.bytes().await?;
 
         Ok(bytes.to_vec())
+    }
+}
+
+fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
+    builder.build().map_err(|e| {
+        tracing::error!("Failed to build HTTP client: {}", e);
+        BotError::Network(e)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MusicApi;
+    use super::build_http_client;
+
+    #[test]
+    fn eapi_encrypt_rejects_invalid_key_length() {
+        let result = MusicApi::eapi_encrypt_with_key("data", b"short");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn eapi_encrypt_accepts_valid_key_length() {
+        let result = MusicApi::eapi_encrypt_with_key("data", b"e82ckenh8dichen8");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn build_http_client_returns_client() {
+        let client = build_http_client(reqwest::Client::builder())
+            .expect("client should be built");
+        let _ = client;
+    }
+
+    #[test]
+    fn eapi_decrypt_rejects_invalid_key_length() {
+        let result = MusicApi::eapi_decrypt_with_key("deadbeef", b"short");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn eapi_encrypt_decrypt_round_trip() {
+        let key = b"e82ckenh8dichen8";
+        let plaintext = "roundtrip";
+        let encrypted = MusicApi::eapi_encrypt_with_key(plaintext, key).expect("encrypted");
+        let decrypted = MusicApi::eapi_decrypt_with_key(&encrypted, key).expect("decrypted");
+        assert_eq!(decrypted, plaintext);
     }
 }
 
