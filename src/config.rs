@@ -118,6 +118,10 @@ pub struct Config {
     pub upload_client_reuse_requests: u32,
     /// Upload timeout (seconds)
     pub upload_timeout_secs: u64,
+    /// Memory release interval in handled requests
+    pub memory_release_interval_requests: u32,
+    /// Database analyze interval in handled requests
+    pub db_analyze_interval_requests: u32,
 }
 
 impl Default for Config {
@@ -148,6 +152,8 @@ impl Default for Config {
             cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 50,
             upload_timeout_secs: 300,
+            memory_release_interval_requests: 1,
+            db_analyze_interval_requests: 1,
         }
     }
 }
@@ -308,6 +314,13 @@ impl Config {
             config.upload_timeout_secs = timeout.parse().unwrap_or(300);
         }
 
+        if let Some(interval) = config_map.get("maintenance.memory_release_interval_requests") {
+            config.memory_release_interval_requests = interval.parse().unwrap_or(1);
+        }
+        if let Some(interval) = config_map.get("maintenance.db_analyze_interval_requests") {
+            config.db_analyze_interval_requests = interval.parse().unwrap_or(1);
+        }
+
         // Validate required fields
         if config.bot_token.is_empty() {
             return Err(anyhow::anyhow!("BOT_TOKEN is required"));
@@ -345,5 +358,12 @@ mod tests {
     fn default_cover_mode_is_thumbnail() {
         let config = Config::default();
         assert_eq!(config.cover_mode, CoverMode::Thumbnail);
+    }
+
+    #[test]
+    fn maintenance_interval_defaults_exist() {
+        let config = Config::default();
+        assert_eq!(config.memory_release_interval_requests, 1);
+        assert_eq!(config.db_analyze_interval_requests, 1);
     }
 }

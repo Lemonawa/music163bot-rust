@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow;
@@ -27,12 +28,36 @@ pub struct BotState {
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
     pub bot_username: String,
     pub upload_client_state: Arc<Mutex<UploadClientState>>,
+    pub maintenance_counters: MaintenanceCounters,
 }
 
 #[derive(Debug)]
 pub struct UploadClientState {
     pub bot: Option<Bot>,
     pub reuse_count: u32,
+}
+
+#[derive(Debug)]
+pub struct MaintenanceCounters {
+    pub memory_release_requests: AtomicU32,
+    pub db_analyze_requests: AtomicU32,
+}
+
+impl MaintenanceCounters {
+    fn new() -> Self {
+        Self {
+            memory_release_requests: AtomicU32::new(0),
+            db_analyze_requests: AtomicU32::new(0),
+        }
+    }
+
+    fn should_run(counter: &AtomicU32, interval: u32) -> bool {
+        if interval == 0 {
+            return false;
+        }
+        let next = counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        next.is_multiple_of(interval)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +199,7 @@ pub async fn run(config: Config) -> Result<()> {
             bot: None,
             reuse_count: 0,
         })),
+        maintenance_counters: MaintenanceCounters::new(),
     });
 
     // Create dispatcher
@@ -1168,7 +1194,13 @@ async fn download_and_send_music(
 
     // Save to database and update query statistics
     state.database.save_song_info(&song_info).await?;
-    state.database.analyze().await.ok(); // Non-critical, ignore errors
+    let analyze_interval = state.config.db_analyze_interval_requests;
+    if MaintenanceCounters::should_run(
+        &state.maintenance_counters.db_analyze_requests,
+        analyze_interval,
+    ) {
+        state.database.analyze().await.ok(); // Non-critical, ignore errors
+    }
 
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
@@ -1177,8 +1209,14 @@ async fn download_and_send_music(
     tokio::task::yield_now().await;
 
     // Force memory release after download completes
-    crate::memory::force_memory_release();
-    crate::memory::log_memory_stats();
+    let release_interval = state.config.memory_release_interval_requests;
+    if MaintenanceCounters::should_run(
+        &state.maintenance_counters.memory_release_requests,
+        release_interval,
+    ) {
+        crate::memory::force_memory_release();
+        crate::memory::log_memory_stats();
+    }
 
     Ok(())
 }
