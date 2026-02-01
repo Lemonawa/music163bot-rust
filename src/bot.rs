@@ -16,7 +16,7 @@ use teloxide::types::{
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
-use crate::error::Result;
+use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, format_artists};
 use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps, update_peak};
 
@@ -112,16 +112,15 @@ pub async fn run(config: Config) -> Result<()> {
 
                 // Create a custom HTTP client tuned for Cloudflare compatibility (mimic Go http client)
                 // pool_max_idle_per_host(2) keeps reasonable connection pool for API efficiency
-                let client = reqwest::Client::builder()
+                let client_builder = reqwest::Client::builder()
                     .use_rustls_tls()
                     .user_agent("Go-http-client/2.0")
                     .pool_max_idle_per_host(2)
                     .pool_idle_timeout(std::time::Duration::from_secs(60))
                     .danger_accept_invalid_certs(false)
                     .timeout(std::time::Duration::from_secs(30))
-                    .no_gzip()
-                    .build()
-                    .unwrap();
+                    .no_gzip();
+                let client = build_reqwest_client(client_builder)?;
 
                 // Create bot with custom client and API URL
                 let bot = Bot::with_client(&config.bot_token, client).set_api_url(api_url.clone());
@@ -174,13 +173,12 @@ pub async fn run(config: Config) -> Result<()> {
     } else {
         // 使用默认API URL，但配置连接池以提高效率
         tracing::info!("Using default Telegram API URL: https://api.telegram.org");
-        let client = reqwest::Client::builder()
+        let client_builder = reqwest::Client::builder()
             .use_rustls_tls()
             .pool_max_idle_per_host(2)
             .pool_idle_timeout(std::time::Duration::from_secs(60))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap();
+            .timeout(std::time::Duration::from_secs(30));
+        let client = build_reqwest_client(client_builder)?;
         Bot::with_client(&config.bot_token, client)
     };
 
@@ -664,7 +662,7 @@ async fn download_and_send_music(
     song_url: &crate::music_api::SongUrl,
     status_msg: &Message,
 ) -> Result<()> {
-    let _permit = state.download_semaphore.acquire().await.unwrap();
+    let _permit = acquire_download_permit(&state.download_semaphore).await?;
 
     // Determine file extension
     let file_ext = if song_url.url.contains(".flac") {
@@ -1115,8 +1113,25 @@ async fn download_and_send_music(
                 "https://api.telegram.org/".to_string()
             };
 
-            let api_url = reqwest::Url::parse(&api_url_str)
-                .unwrap_or_else(|_| reqwest::Url::parse("https://api.telegram.org/").unwrap());
+            let api_url = match parse_api_url(&api_url_str) {
+                Ok(url) => url,
+                Err(e) => {
+                    tracing::warn!(
+                        "Invalid upload API URL '{}': {}. Using default.",
+                        api_url_str,
+                        e
+                    );
+                    match parse_api_url("https://api.telegram.org/") {
+                        Ok(url) => url,
+                        Err(err) => {
+                            tracing::error!("Failed to parse fallback API URL: {}", err);
+                            return Err(BotError::Other(anyhow::anyhow!(
+                                "failed to parse fallback API URL"
+                            )));
+                        }
+                    }
+                }
+            };
 
             if api_url_str != "https://api.telegram.org/" {
                 tracing::info!("Using custom API for upload: {}", api_url);
@@ -1126,22 +1141,22 @@ async fn download_and_send_music(
             // - longer timeout for large files
             // - pool_max_idle_per_host(0) prevents stale connection issues after long uploads
             // - no_gzip avoids gzip interference on multipart boundaries
-            let client = reqwest::Client::builder()
-                .use_rustls_tls()
-                .timeout(std::time::Duration::from_secs(state.config.upload_timeout_secs))
-                .pool_max_idle_per_host(0)
-                .no_gzip()
-                .user_agent("Go-http-client/2.0")
-                .default_headers(reqwest::header::HeaderMap::new())
-                .build()
-                .unwrap();
+            let client = build_reqwest_client(
+                reqwest::Client::builder()
+                    .use_rustls_tls()
+                    .timeout(std::time::Duration::from_secs(state.config.upload_timeout_secs))
+                    .pool_max_idle_per_host(0)
+                    .no_gzip()
+                    .user_agent("Go-http-client/2.0")
+                    .default_headers(reqwest::header::HeaderMap::new()),
+            )?;
 
             upload_state.bot = Some(Bot::with_client(&state.config.bot_token, client).set_api_url(api_url));
             upload_state.reuse_count = 0;
         }
 
         upload_state.reuse_count = upload_state.reuse_count.saturating_add(1);
-        upload_state.bot.clone().unwrap()
+        get_upload_bot(&upload_state)?
     };
 
     // Send audio file with enhanced error handling and proper MIME type
@@ -1257,16 +1272,162 @@ async fn download_and_send_music(
 }
 
 fn create_music_keyboard(music_id: u64, song_name: &str, artists: &str) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::url(
-            format!("{song_name} - {artists}"),
-            reqwest::Url::parse(&format!("https://music.163.com/song?id={music_id}")).unwrap(),
-        )],
-        vec![InlineKeyboardButton::switch_inline_query(
-            "分享给朋友",
-            format!("https://music.163.com/song?id={music_id}"),
-        )],
-    ])
+    let mut rows = Vec::new();
+    match build_music_url("https://music.163.com", music_id) {
+        Ok(url) => {
+            rows.push(vec![InlineKeyboardButton::url(
+                format!("{song_name} - {artists}"),
+                url,
+            )]);
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to build music URL for music_id {}: {}",
+                music_id,
+                e
+            );
+        }
+    }
+
+    rows.push(vec![InlineKeyboardButton::switch_inline_query(
+        "分享给朋友",
+        format!("https://music.163.com/song?id={music_id}"),
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+fn build_music_url(
+    base_url: &str,
+    music_id: u64,
+) -> std::result::Result<reqwest::Url, url::ParseError> {
+    let mut url = reqwest::Url::parse(base_url)?;
+    url.set_path("song");
+    url.set_query(Some(&format!("id={music_id}")));
+    Ok(url)
+}
+
+fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseError> {
+    reqwest::Url::parse(api_url)
+}
+
+fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
+    builder.build().map_err(|e| {
+        tracing::error!("Failed to build HTTP client: {}", e);
+        e.into()
+    })
+}
+
+fn append_search_result_line(
+    results: &mut String,
+    index: usize,
+    song_name: &str,
+    artists: &str,
+) {
+    use std::fmt::Write;
+
+    if let Err(e) = writeln!(results, "{index}.「{song_name}」 - {artists}") {
+        tracing::error!("Failed to format search result line: {}", e);
+    }
+}
+
+fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
+    if let Some(bot) = upload_state.bot.clone() {
+        Ok(bot)
+    } else {
+        tracing::error!("Upload bot not initialized");
+        Err(BotError::Other(anyhow::anyhow!(
+            "upload bot not initialized"
+        )))
+    }
+}
+
+async fn acquire_download_permit(
+    semaphore: &tokio::sync::Semaphore,
+) -> Result<tokio::sync::SemaphorePermit<'_>> {
+    semaphore.acquire().await.map_err(|e| {
+        tracing::error!("Download semaphore closed: {}", e);
+        BotError::Other(anyhow::anyhow!("download semaphore closed"))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acquire_download_permit;
+    use super::append_search_result_line;
+    use super::build_music_url;
+    use super::build_reqwest_client;
+    use super::get_upload_bot;
+    use super::parse_api_url;
+    use super::UploadClientState;
+    use teloxide::Bot;
+
+    #[test]
+    fn build_music_url_accepts_valid_base() {
+        let url = build_music_url("https://music.163.com", 123).expect("valid url");
+        assert_eq!(url.as_str(), "https://music.163.com/song?id=123");
+    }
+
+    #[test]
+    fn build_music_url_rejects_invalid_base() {
+        assert!(build_music_url("ht!tp:// bad", 1).is_err());
+    }
+
+    #[test]
+    fn parse_api_url_accepts_valid_base() {
+        let url = parse_api_url("https://api.telegram.org/").expect("valid url");
+        assert_eq!(url.as_str(), "https://api.telegram.org/");
+    }
+
+    #[test]
+    fn parse_api_url_rejects_invalid_base() {
+        assert!(parse_api_url("not a url").is_err());
+    }
+
+    #[test]
+    fn build_reqwest_client_returns_client() {
+        let client = build_reqwest_client(reqwest::Client::builder())
+            .expect("client should be built");
+        let _ = client;
+    }
+
+    #[test]
+    fn get_upload_bot_returns_error_when_missing() {
+        let state = UploadClientState {
+            bot: None,
+            reuse_count: 0,
+        };
+        assert!(get_upload_bot(&state).is_err());
+    }
+
+    #[test]
+    fn get_upload_bot_returns_bot_when_present() {
+        let bot = Bot::new("token");
+        let state = UploadClientState {
+            bot: Some(bot),
+            reuse_count: 0,
+        };
+        assert!(get_upload_bot(&state).is_ok());
+    }
+
+    #[tokio::test]
+    async fn acquire_download_permit_returns_error_when_closed() {
+        let semaphore = tokio::sync::Semaphore::new(1);
+        semaphore.close();
+
+        let err = acquire_download_permit(&semaphore)
+            .await
+            .expect_err("expected error for closed semaphore");
+        let err_str = format!("{err}");
+        assert!(err_str.contains("download semaphore closed"));
+    }
+
+    #[test]
+    fn append_search_result_line_formats_output() {
+        let mut results = String::new();
+        append_search_result_line(&mut results, 1, "Song", "Artist");
+        assert_eq!(results, "1.「Song」 - Artist\n");
+    }
 }
 
 async fn handle_music_url(
@@ -1342,11 +1503,7 @@ async fn handle_search_command(
 
             for (i, song) in songs.iter().take(8).enumerate() {
                 let artists = format_artists(&song.artists);
-                std::fmt::write(
-                    &mut results,
-                    format_args!("{}.「{}」 - {}\n", i + 1, song.name, artists),
-                )
-                .unwrap();
+                append_search_result_line(&mut results, i + 1, &song.name, &artists);
                 buttons.push(InlineKeyboardButton::callback(
                     format!("{}", i + 1),
                     format!("music {}", song.id),
