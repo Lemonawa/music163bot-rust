@@ -81,6 +81,10 @@ pub struct Config {
     pub download_connect_timeout_secs: u64,
     /// Download chunk size in KB for buffering
     pub download_chunk_size_kb: usize,
+    /// Upload client reuse request limit
+    pub upload_client_reuse_requests: u32,
+    /// Upload timeout (seconds)
+    pub upload_timeout_secs: u64,
 }
 
 impl Default for Config {
@@ -108,6 +112,8 @@ impl Default for Config {
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,
+            upload_client_reuse_requests: 50,
+            upload_timeout_secs: 300,
         }
     }
 }
@@ -255,6 +261,13 @@ impl Config {
             config.download_chunk_size_kb = chunk_kb.parse().unwrap_or(256);
         }
 
+        if let Some(reuse_requests) = config_map.get("upload.client_reuse_requests") {
+            config.upload_client_reuse_requests = reuse_requests.parse().unwrap_or(50);
+        }
+        if let Some(timeout) = config_map.get("upload.timeout_secs") {
+            config.upload_timeout_secs = timeout.parse().unwrap_or(300);
+        }
+
         // Validate required fields
         if config.bot_token.is_empty() {
             return Err(anyhow::anyhow!("BOT_TOKEN is required"));
@@ -279,5 +292,12 @@ mod tests {
     fn download_chunk_size_has_default() {
         let config = Config::default();
         assert!(config.download_chunk_size_kb >= 64);
+    }
+
+    #[test]
+    fn upload_client_reuse_has_default() {
+        let config = Config::default();
+        assert!(config.upload_client_reuse_requests > 0);
+        assert!(config.upload_timeout_secs > 0);
     }
 }

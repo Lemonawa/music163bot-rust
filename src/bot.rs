@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow;
 use futures_util::StreamExt;
+use tokio::sync::Mutex;
 use teloxide::RequestError;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
@@ -25,6 +26,13 @@ pub struct BotState {
     pub music_api: MusicApi,
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
     pub bot_username: String,
+    pub upload_client_state: Arc<Mutex<UploadClientState>>,
+}
+
+#[derive(Debug)]
+pub struct UploadClientState {
+    pub bot: Option<Bot>,
+    pub reuse_count: u32,
 }
 
 pub async fn run(config: Config) -> Result<()> {
@@ -142,6 +150,10 @@ pub async fn run(config: Config) -> Result<()> {
         music_api,
         download_semaphore: Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_downloads as usize)),
         bot_username,
+        upload_client_state: Arc::new(Mutex::new(UploadClientState {
+            bot: None,
+            reuse_count: 0,
+        })),
     });
 
     // Create dispatcher
@@ -936,42 +948,52 @@ async fn download_and_send_music(
     );
 
     // Build a dedicated upload bot with optimized HTTP client for large file uploads.
-    // Always create a separate client with longer timeout and disabled connection pooling
-    // to prevent "token invalid" errors caused by stale connections after long uploads.
+    // Reuse the upload client for a bounded number of requests.
     let upload_bot = {
-        // API URL must match teloxide's internal format: base URL without "/bot" suffix
-        // teloxide automatically appends "bot<TOKEN>/" to the path
-        let api_url_str = if !state.config.bot_api.is_empty() && state.config.bot_api != "https://api.telegram.org" {
-            // Custom API: strip "/bot" suffix if present to match teloxide's expected format
-            let base = state.config.bot_api.trim_end_matches("/bot");
-            format!("{base}/")
-        } else {
-            // Default API: use base URL without "/bot" (matches Bot::new() behavior)
-            "https://api.telegram.org/".to_string()
-        };
+        let mut upload_state = state.upload_client_state.lock().await;
+        if upload_state.bot.is_none()
+            || upload_state.reuse_count >= state.config.upload_client_reuse_requests
+        {
+            // API URL must match teloxide's internal format: base URL without "/bot" suffix
+            // teloxide automatically appends "bot<TOKEN>/" to the path
+            let api_url_str = if !state.config.bot_api.is_empty()
+                && state.config.bot_api != "https://api.telegram.org"
+            {
+                // Custom API: strip "/bot" suffix if present to match teloxide's expected format
+                let base = state.config.bot_api.trim_end_matches("/bot");
+                format!("{base}/")
+            } else {
+                // Default API: use base URL without "/bot" (matches Bot::new() behavior)
+                "https://api.telegram.org/".to_string()
+            };
 
-        let api_url = reqwest::Url::parse(&api_url_str)
-            .unwrap_or_else(|_| reqwest::Url::parse("https://api.telegram.org/").unwrap());
-        
-        if api_url_str != "https://api.telegram.org/" {
-            tracing::info!("Using custom API for upload: {}", api_url);
+            let api_url = reqwest::Url::parse(&api_url_str)
+                .unwrap_or_else(|_| reqwest::Url::parse("https://api.telegram.org/").unwrap());
+
+            if api_url_str != "https://api.telegram.org/" {
+                tracing::info!("Using custom API for upload: {}", api_url);
+            }
+
+            // Create a client optimized for multipart uploads
+            // - longer timeout for large files
+            // - pool_max_idle_per_host(0) prevents stale connection issues after long uploads
+            // - no_gzip avoids gzip interference on multipart boundaries
+            let client = reqwest::Client::builder()
+                .use_rustls_tls()
+                .timeout(std::time::Duration::from_secs(state.config.upload_timeout_secs))
+                .pool_max_idle_per_host(0)
+                .no_gzip()
+                .user_agent("Go-http-client/2.0")
+                .default_headers(reqwest::header::HeaderMap::new())
+                .build()
+                .unwrap();
+
+            upload_state.bot = Some(Bot::with_client(&state.config.bot_token, client).set_api_url(api_url));
+            upload_state.reuse_count = 0;
         }
 
-        // Create a client optimized for multipart uploads
-        // - 300s timeout for large files
-        // - pool_max_idle_per_host(0) prevents stale connection issues after long uploads
-        // - no_gzip avoids gzip interference on multipart boundaries
-        let client = reqwest::Client::builder()
-            .use_rustls_tls()
-            .timeout(std::time::Duration::from_secs(300))
-            .pool_max_idle_per_host(0)
-            .no_gzip()
-            .user_agent("Go-http-client/2.0")
-            .default_headers(reqwest::header::HeaderMap::new())
-            .build()
-            .unwrap();
-
-        Bot::with_client(&state.config.bot_token, client).set_api_url(api_url)
+        upload_state.reuse_count = upload_state.reuse_count.saturating_add(1);
+        upload_state.bot.clone().unwrap()
     };
 
     // Send audio file with enhanced error handling and proper MIME type
@@ -1036,9 +1058,6 @@ async fn download_and_send_music(
             return Err(e.into());
         }
     }
-
-    // Explicitly drop upload_bot to release HTTP connection pool immediately
-    drop(upload_bot);
 
     // Save to database and update query statistics
     state.database.save_song_info(&song_info).await?;
