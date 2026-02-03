@@ -66,6 +66,15 @@ pool_max_idle_per_host = 0
 # 0 表示不设置 idle timeout (v1.1.13 默认行为)
 pool_idle_timeout_secs = 0
 
+# 上传诊断日志级别 (v1.1.15+)
+# 可选: NONE/ERROR/WARNING/INFO/DEBUG (不区分大小写, WARN=WARNING)
+# 注意: 仍受全局 loglevel 影响 (loglevel=info 时 DEBUG 不会显示)
+log_level = INFO
+
+# 性能排查 A/B 建议 (可选, 测试后恢复为 0):
+# client_reuse_requests = 10
+# pool_max_idle_per_host = 1
+
 # 上传超时时间 (秒)
 timeout_secs = 300
 
