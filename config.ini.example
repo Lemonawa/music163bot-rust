@@ -53,6 +53,22 @@ memory_max_file_mb = 100
 # 推荐值: 3-5 (默认值: 3)
 max_concurrent = 3
 
+[upload]
+# 上传客户端复用请求次数 (v1.1.14+)
+# 0 表示不复用 (v1.1.13 默认行为)
+client_reuse_requests = 0
+
+# 上传连接池每主机最大空闲连接数 (v1.1.14+)
+# 0 表示不保留空闲连接 (v1.1.13 默认行为)
+pool_max_idle_per_host = 0
+
+# 上传连接池空闲超时秒数 (v1.1.14+)
+# 0 表示不设置 idle timeout (v1.1.13 默认行为)
+pool_idle_timeout_secs = 0
+
+# 上传超时时间 (秒)
+timeout_secs = 300
+
 # 配置说明和使用指南
 # 
 # 1. 基本配置:

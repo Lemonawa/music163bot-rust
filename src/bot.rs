@@ -1136,18 +1136,21 @@ async fn download_and_send_music(
             // - longer timeout for large files
             // - pool_max_idle_per_host configurable for reuse vs. freshness
             // - no_gzip avoids gzip interference on multipart boundaries
-            let client = build_reqwest_client(
-                reqwest::Client::builder()
-                    .use_rustls_tls()
-                    .timeout(std::time::Duration::from_secs(state.config.upload_timeout_secs))
-                    .pool_max_idle_per_host(state.config.upload_pool_max_idle_per_host)
-                    .pool_idle_timeout(std::time::Duration::from_secs(
-                        state.config.upload_pool_idle_timeout_secs,
-                    ))
-                    .no_gzip()
-                    .user_agent("Go-http-client/2.0")
-                    .default_headers(reqwest::header::HeaderMap::new()),
-            )?;
+            let mut client_builder = reqwest::Client::builder()
+                .use_rustls_tls()
+                .timeout(std::time::Duration::from_secs(state.config.upload_timeout_secs))
+                .pool_max_idle_per_host(state.config.upload_pool_max_idle_per_host)
+                .no_gzip()
+                .user_agent("Go-http-client/2.0")
+                .default_headers(reqwest::header::HeaderMap::new());
+
+            if should_set_upload_pool_idle_timeout(state.config.upload_pool_idle_timeout_secs) {
+                client_builder = client_builder.pool_idle_timeout(std::time::Duration::from_secs(
+                    state.config.upload_pool_idle_timeout_secs,
+                ));
+            }
+
+            let client = build_reqwest_client(client_builder)?;
 
             upload_state.bot = Some(Bot::with_client(&state.config.bot_token, client).set_api_url(api_url));
             upload_state.reuse_count = 0;
@@ -1321,6 +1324,10 @@ fn format_perf(label: &str, duration: std::time::Duration) -> String {
     format!("[{label}] {}ms", duration.as_millis())
 }
 
+fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
+    secs > 0
+}
+
 fn append_search_result_line(
     results: &mut String,
     index: usize,
@@ -1462,6 +1469,12 @@ mod tests {
     fn perf_log_includes_stage_label() {
         let s = format_perf("download", std::time::Duration::from_millis(50));
         assert!(s.contains("download"));
+    }
+
+    #[test]
+    fn upload_pool_idle_timeout_disabled_when_zero() {
+        assert!(!super::should_set_upload_pool_idle_timeout(0));
+        assert!(super::should_set_upload_pool_idle_timeout(60));
     }
 }
 

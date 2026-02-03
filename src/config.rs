@@ -157,9 +157,9 @@ impl Default for Config {
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,
             cover_mode: CoverMode::Thumbnail,
-            upload_client_reuse_requests: 50,
+            upload_client_reuse_requests: 0,
             upload_pool_max_idle_per_host: 0,
-            upload_pool_idle_timeout_secs: 60,
+            upload_pool_idle_timeout_secs: 0,
             upload_timeout_secs: 300,
             memory_release_interval_requests: 10,
             db_analyze_interval_requests: 20,
@@ -320,13 +320,17 @@ impl Config {
         }
 
         if let Some(reuse_requests) = config_map.get("upload.client_reuse_requests") {
-            config.upload_client_reuse_requests = reuse_requests.parse().unwrap_or(50);
+            config.upload_client_reuse_requests = reuse_requests
+                .parse()
+                .unwrap_or(config.upload_client_reuse_requests);
         }
         if let Some(pool_size) = config_map.get("upload.pool_max_idle_per_host") {
             config.upload_pool_max_idle_per_host = pool_size.parse().unwrap_or(0);
         }
         if let Some(timeout) = config_map.get("upload.pool_idle_timeout_secs") {
-            config.upload_pool_idle_timeout_secs = timeout.parse().unwrap_or(60);
+            config.upload_pool_idle_timeout_secs = timeout
+                .parse()
+                .unwrap_or(config.upload_pool_idle_timeout_secs);
         }
         if let Some(timeout) = config_map.get("upload.timeout_secs") {
             config.upload_timeout_secs = timeout.parse().unwrap_or(300);
@@ -378,9 +382,9 @@ mod tests {
     }
 
     #[test]
-    fn upload_client_reuse_has_default() {
+    fn upload_client_reuse_defaults_to_zero() {
         let config = Config::default();
-        assert!(config.upload_client_reuse_requests > 0);
+        assert_eq!(config.upload_client_reuse_requests, 0);
         assert!(config.upload_timeout_secs > 0);
     }
 
