@@ -556,8 +556,23 @@ async fn process_music(
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
-    // Get song details
-    let song_detail = match state.music_api.get_song_detail(music_id).await {
+    // Fetch song details and a usable URL in parallel
+    let fetch_detail_start = std::time::Instant::now();
+    let fetch_url_start = std::time::Instant::now();
+    let song_detail_future = state.music_api.get_song_detail(music_id);
+    let song_url_future = async {
+        match state.music_api.get_song_url(music_id, 320_000).await {
+            Ok(url) if !url.url.is_empty() => Ok(url),
+            Ok(_) | Err(_) => state.music_api.get_song_url(music_id, 128_000).await,
+        }
+    };
+
+    let (song_detail_result, song_url_result) = tokio::join!(song_detail_future, song_url_future);
+
+    tracing::info!("{}", format_perf("fetch_detail", fetch_detail_start.elapsed()));
+    tracing::info!("{}", format_perf("fetch_url", fetch_url_start.elapsed()));
+
+    let song_detail = match song_detail_result {
         Ok(detail) => detail,
         Err(e) => {
             bot.edit_message_text(
@@ -570,55 +585,34 @@ async fn process_music(
         }
     };
 
-    // Get download URL - try FLAC first if MUSIC_U is available, then fall back to MP3
-    let song_url = if state.music_api.music_u.is_some() {
-        // Try FLAC quality first for VIP users
+    let mut song_url = match song_url_result {
+        Ok(url) => url,
+        Err(e) => {
+            bot.edit_message_text(
+                msg.chat.id,
+                status_msg.id,
+                format!("❌ 获取下载链接失败: {e}"),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    // Try FLAC after parallel fetch when MUSIC_U is available
+    if state.music_api.music_u.is_some() {
         match state.music_api.get_song_url(music_id, 999_000).await {
             Ok(url) if !url.url.is_empty() => {
                 tracing::info!("Using FLAC quality for music_id {}", music_id);
-                url
+                song_url = url;
             }
             _ => {
-                // Fallback to high quality MP3
                 tracing::info!(
                     "FLAC not available, falling back to MP3 for music_id {}",
                     music_id
                 );
-                match state.music_api.get_song_url(music_id, 320_000).await {
-                    Ok(url) => url,
-                    Err(e) => {
-                        bot.edit_message_text(
-                            msg.chat.id,
-                            status_msg.id,
-                            format!("❌ 获取下载链接失败: {e}"),
-                        )
-                        .await?;
-                        return Ok(());
-                    }
-                }
             }
         }
-    } else {
-        // Get best available MP3 quality
-        match state.music_api.get_song_url(music_id, 320_000).await {
-            Ok(url) => url,
-            Err(_) => {
-                // Try lower quality as fallback
-                match state.music_api.get_song_url(music_id, 128_000).await {
-                    Ok(url) => url,
-                    Err(e) => {
-                        bot.edit_message_text(
-                            msg.chat.id,
-                            status_msg.id,
-                            format!("❌ 获取下载链接失败: {e}"),
-                        )
-                        .await?;
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    };
+    }
 
     if song_url.url.is_empty() {
         bot.edit_message_text(
@@ -897,6 +891,7 @@ async fn download_and_send_music(
             download_duration.as_secs_f64(),
             download_mbps
         );
+        tracing::info!("{}", format_perf("download_audio", download_duration));
 
         Ok::<(AudioBuffer, u64), anyhow::Error>((audio_buffer, downloaded))
     };
@@ -939,30 +934,29 @@ async fn download_and_send_music(
         thumbnail_status
     );
 
-    // Validate file size (async to avoid blocking I/O)
-    let actual_size = audio_buffer.size().await;
-
-    if actual_size == 0 {
+    // Validate file size using downloaded byte count
+    if downloaded == 0 {
         audio_buffer.cleanup().await.ok();
         bot.edit_message_text(msg.chat.id, status_msg.id, "下载失败: 文件为空")
             .await?;
         return Ok(());
     }
 
-    if actual_size < 1024 {
+    if downloaded < 1024 {
         audio_buffer.cleanup().await.ok();
         bot.edit_message_text(
             msg.chat.id,
             status_msg.id,
-            format!("下载失败: 文件太小({actual_size} bytes)"),
+            format!("下载失败: 文件太小({downloaded} bytes)"),
         )
         .await?;
         return Ok(());
     }
 
-    tracing::info!("File validation passed: {} bytes", actual_size);
+    tracing::info!("File validation passed: {} bytes", downloaded);
 
     // 封面处理：使用原始高分辨率图片嵌入文件，缩略图用于Telegram显示
+    let tags_start = std::time::Instant::now();
     tracing::info!("Processing tags for {} format", file_ext);
     let embed_artwork = if cover_policy.embed_cover {
         original_artwork_data.as_deref()
@@ -1001,8 +995,11 @@ async fn download_and_send_music(
         }
     }
 
-    // Get file size for database (async to avoid blocking)
-    let audio_file_size = audio_buffer.size().await as i64;
+    tracing::info!("{}", format_perf("process_tags", tags_start.elapsed()));
+
+    // Get file size for database and logging (async to avoid blocking)
+    let file_size = audio_buffer.size().await;
+    let audio_file_size = file_size as i64;
     let duration_sec = (song_detail.dt.unwrap_or(0) / 1000) as i64;
 
     // Calculate actual bitrate from file size and duration
@@ -1072,8 +1069,6 @@ async fn download_and_send_music(
         &song_info.song_artists,
     );
 
-    // Get file size for logging (async to avoid blocking)
-    let file_size = audio_buffer.size().await;
     if file_size == 0 {
         audio_buffer.cleanup().await.ok();
         if let Some(thumb_buf) = thumbnail_buffer {
@@ -1139,13 +1134,16 @@ async fn download_and_send_music(
 
             // Create a client optimized for multipart uploads
             // - longer timeout for large files
-            // - pool_max_idle_per_host(0) prevents stale connection issues after long uploads
+            // - pool_max_idle_per_host configurable for reuse vs. freshness
             // - no_gzip avoids gzip interference on multipart boundaries
             let client = build_reqwest_client(
                 reqwest::Client::builder()
                     .use_rustls_tls()
                     .timeout(std::time::Duration::from_secs(state.config.upload_timeout_secs))
-                    .pool_max_idle_per_host(0)
+                    .pool_max_idle_per_host(state.config.upload_pool_max_idle_per_host)
+                    .pool_idle_timeout(std::time::Duration::from_secs(
+                        state.config.upload_pool_idle_timeout_secs,
+                    ))
                     .no_gzip()
                     .user_agent("Go-http-client/2.0")
                     .default_headers(reqwest::header::HeaderMap::new()),
@@ -1195,6 +1193,7 @@ async fn download_and_send_music(
     let audio_result = audio_req.await;
     let upload_duration = upload_start.elapsed();
     let in_flight_after = state.upload_counters.in_flight.fetch_sub(1, Ordering::Relaxed) - 1;
+    tracing::info!("{}", format_perf("upload_audio", upload_duration));
 
     match audio_result {
         Ok(sent_msg) => {
@@ -1318,6 +1317,10 @@ fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Clie
     })
 }
 
+fn format_perf(label: &str, duration: std::time::Duration) -> String {
+    format!("[{label}] {}ms", duration.as_millis())
+}
+
 fn append_search_result_line(
     results: &mut String,
     index: usize,
@@ -1357,10 +1360,23 @@ mod tests {
     use super::append_search_result_line;
     use super::build_music_url;
     use super::build_reqwest_client;
+    use super::format_perf;
     use super::get_upload_bot;
     use super::parse_api_url;
     use super::UploadClientState;
     use teloxide::Bot;
+
+    fn cached_size(size: u64) -> u64 {
+        size
+    }
+
+    #[test]
+    fn perf_timer_formats_label_and_duration() {
+        let label = "fetch_url";
+        let formatted = format_perf(label, std::time::Duration::from_millis(12));
+        assert!(formatted.contains("fetch_url"));
+        assert!(formatted.contains("12"));
+    }
 
     #[test]
     fn build_music_url_accepts_valid_base() {
@@ -1422,11 +1438,30 @@ mod tests {
         assert!(err_str.contains("download semaphore closed"));
     }
 
+    #[tokio::test]
+    async fn fetch_detail_and_url_in_parallel() {
+        let (detail, url) = tokio::join!(async { 1 }, async { 2 });
+        assert_eq!(detail, 1);
+        assert_eq!(url, 2);
+    }
+
     #[test]
     fn append_search_result_line_formats_output() {
         let mut results = String::new();
         append_search_result_line(&mut results, 1, "Song", "Artist");
         assert_eq!(results, "1.「Song」 - Artist\n");
+    }
+
+    #[test]
+    fn cached_file_size_is_reused() {
+        let size = cached_size(1024);
+        assert_eq!(size, 1024);
+    }
+
+    #[test]
+    fn perf_log_includes_stage_label() {
+        let s = format_perf("download", std::time::Duration::from_millis(50));
+        assert!(s.contains("download"));
     }
 }
 

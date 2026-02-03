@@ -118,6 +118,10 @@ pub struct Config {
     pub cover_mode: CoverMode,
     /// Upload client reuse request limit
     pub upload_client_reuse_requests: u32,
+    /// Upload pool max idle connections per host
+    pub upload_pool_max_idle_per_host: usize,
+    /// Upload pool idle timeout (seconds)
+    pub upload_pool_idle_timeout_secs: u64,
     /// Upload timeout (seconds)
     pub upload_timeout_secs: u64,
     /// Memory release interval in handled requests
@@ -154,6 +158,8 @@ impl Default for Config {
             download_chunk_size_kb: 256,
             cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 50,
+            upload_pool_max_idle_per_host: 0,
+            upload_pool_idle_timeout_secs: 60,
             upload_timeout_secs: 300,
             memory_release_interval_requests: 10,
             db_analyze_interval_requests: 20,
@@ -316,6 +322,12 @@ impl Config {
         if let Some(reuse_requests) = config_map.get("upload.client_reuse_requests") {
             config.upload_client_reuse_requests = reuse_requests.parse().unwrap_or(50);
         }
+        if let Some(pool_size) = config_map.get("upload.pool_max_idle_per_host") {
+            config.upload_pool_max_idle_per_host = pool_size.parse().unwrap_or(0);
+        }
+        if let Some(timeout) = config_map.get("upload.pool_idle_timeout_secs") {
+            config.upload_pool_idle_timeout_secs = timeout.parse().unwrap_or(60);
+        }
         if let Some(timeout) = config_map.get("upload.timeout_secs") {
             config.upload_timeout_secs = timeout.parse().unwrap_or(300);
         }
@@ -413,5 +425,27 @@ maintenance.db_analyze_interval_requests=bad\n";
             loaded.db_analyze_interval_requests,
             default_config.db_analyze_interval_requests
         );
+    }
+
+    #[test]
+    fn upload_pool_config_parses() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_upload_pool_{temp_name}.ini"));
+        let content = "bot.token=token\n\
+upload.pool_max_idle_per_host=2\n\
+upload.pool_idle_timeout_secs=120\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.upload_pool_max_idle_per_host, 2);
+        assert_eq!(loaded.upload_pool_idle_timeout_secs, 120);
     }
 }
