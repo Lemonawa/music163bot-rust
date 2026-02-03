@@ -77,6 +77,49 @@ impl std::fmt::Display for StorageMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UploadLogLevel {
+    None,
+    Error,
+    Warning,
+    Info,
+    Debug,
+}
+
+impl Default for UploadLogLevel {
+    fn default() -> Self {
+        Self::Info
+    }
+}
+
+impl std::str::FromStr for UploadLogLevel {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "error" => Ok(Self::Error),
+            "warn" | "warning" => Ok(Self::Warning),
+            "info" => Ok(Self::Info),
+            "debug" => Ok(Self::Debug),
+            _ => Err(anyhow::anyhow!("Invalid upload log level: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for UploadLogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::None => "none",
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+            Self::Debug => "debug",
+        };
+        write!(f, "{value}")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Required fields
@@ -118,6 +161,8 @@ pub struct Config {
     pub cover_mode: CoverMode,
     /// Upload client reuse request limit
     pub upload_client_reuse_requests: u32,
+    /// Upload diagnostic log level
+    pub upload_log_level: UploadLogLevel,
     /// Upload pool max idle connections per host
     pub upload_pool_max_idle_per_host: usize,
     /// Upload pool idle timeout (seconds)
@@ -158,6 +203,7 @@ impl Default for Config {
             download_chunk_size_kb: 256,
             cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 0,
+            upload_log_level: UploadLogLevel::default(),
             upload_pool_max_idle_per_host: 0,
             upload_pool_idle_timeout_secs: 0,
             upload_timeout_secs: 300,
@@ -324,6 +370,16 @@ impl Config {
                 .parse()
                 .unwrap_or(config.upload_client_reuse_requests);
         }
+        if let Some(level) = config_map.get("upload.log_level") {
+            match level.parse::<UploadLogLevel>() {
+                Ok(parsed) => config.upload_log_level = parsed,
+                Err(e) => tracing::warn!(
+                    "Invalid upload.log_level '{}': {}, using default",
+                    level,
+                    e
+                ),
+            }
+        }
         if let Some(pool_size) = config_map.get("upload.pool_max_idle_per_host") {
             config.upload_pool_max_idle_per_host = pool_size.parse().unwrap_or(0);
         }
@@ -360,7 +416,7 @@ impl Config {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{Config, CoverMode};
+    use super::{Config, CoverMode, UploadLogLevel};
 
     #[test]
     fn download_pool_defaults_are_tunable() {
@@ -451,5 +507,30 @@ upload.pool_idle_timeout_secs=120\n";
 
         assert_eq!(loaded.upload_pool_max_idle_per_host, 2);
         assert_eq!(loaded.upload_pool_idle_timeout_secs, 120);
+    }
+
+    #[test]
+    fn upload_log_level_defaults_to_info() {
+        let config = Config::default();
+        assert_eq!(config.upload_log_level, UploadLogLevel::Info);
+    }
+
+    #[test]
+    fn upload_log_level_parses_values() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path = std::env::temp_dir().join(format!("music163bot_upload_log_{temp_name}.ini"));
+        let content = "bot.token=token\n\
+upload.log_level=warn\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.upload_log_level, UploadLogLevel::Warning);
     }
 }
