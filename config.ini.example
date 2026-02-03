@@ -1,3 +1,7 @@
+# 全局日志级别
+# 可选: trace/debug/info/warn/error
+loglevel = info
+
 [bot]
 # Telegram Bot Token (从 @BotFather 获取)
 token = YOUR_BOT_TOKEN_HERE
@@ -55,25 +59,21 @@ max_concurrent = 3
 
 [upload]
 # 上传客户端复用请求次数 (v1.1.14+)
-# 0 表示不复用 (v1.1.13 默认行为)
-client_reuse_requests = 0
+# 推荐值: 10
+client_reuse_requests = 10
 
 # 上传连接池每主机最大空闲连接数 (v1.1.14+)
-# 0 表示不保留空闲连接 (v1.1.13 默认行为)
-pool_max_idle_per_host = 0
+# 推荐值: 1
+pool_max_idle_per_host = 1
 
 # 上传连接池空闲超时秒数 (v1.1.14+)
-# 0 表示不设置 idle timeout (v1.1.13 默认行为)
-pool_idle_timeout_secs = 0
+# 推荐值: 60
+pool_idle_timeout_secs = 60
 
 # 上传诊断日志级别 (v1.1.15+)
 # 可选: NONE/ERROR/WARNING/INFO/DEBUG (不区分大小写, WARN=WARNING)
 # 注意: 仍受全局 loglevel 影响 (loglevel=info 时 DEBUG 不会显示)
 log_level = INFO
-
-# 性能排查 A/B 建议 (可选, 测试后恢复为 0):
-# client_reuse_requests = 10
-# pool_max_idle_per_host = 1
 
 # 上传超时时间 (秒)
 timeout_secs = 300
