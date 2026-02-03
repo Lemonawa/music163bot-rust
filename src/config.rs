@@ -120,6 +120,23 @@ impl std::fmt::Display for UploadLogLevel {
     }
 }
 
+impl UploadLogLevel {
+    #[must_use]
+    pub fn allows(self, level: UploadLogLevel) -> bool {
+        self.rank() >= level.rank()
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Error => 1,
+            Self::Warning => 2,
+            Self::Info => 3,
+            Self::Debug => 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Required fields

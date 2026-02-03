@@ -14,7 +14,7 @@ use teloxide::types::{
 };
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
-use crate::config::{Config, CoverMode};
+use crate::config::{Config, CoverMode, UploadLogLevel};
 use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, format_artists};
@@ -1095,6 +1095,20 @@ async fn download_and_send_music(
         if upload_state.bot.is_none()
             || upload_state.reuse_count >= state.config.upload_client_reuse_requests
         {
+            let reason = if upload_state.bot.is_none() {
+                "uninitialized"
+            } else {
+                "reuse_limit"
+            };
+            if upload_log_enabled(&state.config, UploadLogLevel::Info) {
+                tracing::info!(
+                    "Upload diag: creating client (reason: {}, reuse_count: {}, reuse_limit: {})",
+                    reason,
+                    upload_state.reuse_count,
+                    state.config.upload_client_reuse_requests
+                );
+            }
+            let build_start = std::time::Instant::now();
             // API URL must match teloxide's internal format: base URL without "/bot" suffix
             // teloxide automatically appends "bot<TOKEN>/" to the path
             let api_url_str = if !state.config.bot_api.is_empty()
@@ -1150,13 +1164,40 @@ async fn download_and_send_music(
                 ));
             }
 
+            if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+                tracing::debug!(
+                    "Upload diag: client settings pool_max_idle_per_host={}, pool_idle_timeout_secs={}, timeout_secs={}, api_url={}",
+                    state.config.upload_pool_max_idle_per_host,
+                    state.config.upload_pool_idle_timeout_secs,
+                    state.config.upload_timeout_secs,
+                    api_url
+                );
+            }
+
             let client = build_reqwest_client(client_builder)?;
 
             upload_state.bot = Some(Bot::with_client(&state.config.bot_token, client).set_api_url(api_url));
             upload_state.reuse_count = 0;
+
+            if upload_log_enabled(&state.config, UploadLogLevel::Info) {
+                tracing::info!(
+                    "Upload diag: client ready in {}ms",
+                    build_start.elapsed().as_millis()
+                );
+            }
+        } else if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+            tracing::debug!(
+                "Upload diag: reusing client (reuse_count: {}, reuse_limit: {})",
+                upload_state.reuse_count,
+                state.config.upload_client_reuse_requests
+            );
         }
 
-        upload_state.reuse_count = upload_state.reuse_count.saturating_add(1);
+        let next_reuse_count = upload_state.reuse_count.saturating_add(1);
+        if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+            tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
+        }
+        upload_state.reuse_count = next_reuse_count;
         get_upload_bot(&upload_state)?
     };
 
@@ -1324,6 +1365,10 @@ fn format_perf(label: &str, duration: std::time::Duration) -> String {
     format!("[{label}] {}ms", duration.as_millis())
 }
 
+fn upload_log_enabled(config: &Config, level: UploadLogLevel) -> bool {
+    config.upload_log_level.allows(level)
+}
+
 fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
 }
@@ -1371,6 +1416,7 @@ mod tests {
     use super::get_upload_bot;
     use super::parse_api_url;
     use super::UploadClientState;
+    use crate::config::UploadLogLevel;
     use teloxide::Bot;
 
     fn cached_size(size: u64) -> u64 {
@@ -1475,6 +1521,15 @@ mod tests {
     fn upload_pool_idle_timeout_disabled_when_zero() {
         assert!(!super::should_set_upload_pool_idle_timeout(0));
         assert!(super::should_set_upload_pool_idle_timeout(60));
+    }
+
+    #[test]
+    fn upload_log_level_allows_thresholds() {
+        assert!(UploadLogLevel::Info.allows(UploadLogLevel::Error));
+        assert!(UploadLogLevel::Info.allows(UploadLogLevel::Warning));
+        assert!(UploadLogLevel::Info.allows(UploadLogLevel::Info));
+        assert!(!UploadLogLevel::Info.allows(UploadLogLevel::Debug));
+        assert!(!UploadLogLevel::None.allows(UploadLogLevel::Error));
     }
 }
 
