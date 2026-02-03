@@ -219,10 +219,10 @@ impl Default for Config {
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,
             cover_mode: CoverMode::Thumbnail,
-            upload_client_reuse_requests: 0,
+            upload_client_reuse_requests: 10,
             upload_log_level: UploadLogLevel::default(),
-            upload_pool_max_idle_per_host: 0,
-            upload_pool_idle_timeout_secs: 0,
+            upload_pool_max_idle_per_host: 1,
+            upload_pool_idle_timeout_secs: 60,
             upload_timeout_secs: 300,
             memory_release_interval_requests: 10,
             db_analyze_interval_requests: 20,
@@ -455,10 +455,12 @@ mod tests {
     }
 
     #[test]
-    fn upload_client_reuse_defaults_to_zero() {
+    fn upload_defaults_use_reuse_settings() {
         let config = Config::default();
-        assert_eq!(config.upload_client_reuse_requests, 0);
-        assert!(config.upload_timeout_secs > 0);
+        assert_eq!(config.upload_client_reuse_requests, 10);
+        assert_eq!(config.upload_pool_max_idle_per_host, 1);
+        assert_eq!(config.upload_pool_idle_timeout_secs, 60);
+        assert_eq!(config.upload_timeout_secs, 300);
     }
 
     #[test]
