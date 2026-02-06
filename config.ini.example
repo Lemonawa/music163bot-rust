@@ -62,6 +62,10 @@ max_concurrent = 3
 # 推荐值: 10
 client_reuse_requests = 10
 
+# 最大并发上传数 (v1.1.16+)
+# 推荐值: 2-4
+max_concurrent = 2
+
 # 上传连接池每主机最大空闲连接数 (v1.1.14+)
 # 推荐值: 1
 pool_max_idle_per_host = 1

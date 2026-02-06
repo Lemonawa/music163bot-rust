@@ -189,6 +189,8 @@ pub struct Config {
     pub cover_mode: CoverMode,
     /// Upload client reuse request limit
     pub upload_client_reuse_requests: u32,
+    /// Max concurrent uploads
+    pub upload_max_concurrent: u32,
     /// Upload diagnostic log level
     pub upload_log_level: UploadLogLevel,
     /// Upload pool max idle connections per host
@@ -231,6 +233,7 @@ impl Default for Config {
             download_chunk_size_kb: 256,
             cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 10,
+            upload_max_concurrent: 2,
             upload_log_level: UploadLogLevel::default(),
             upload_pool_max_idle_per_host: 1,
             upload_pool_idle_timeout_secs: 60,
@@ -430,6 +433,17 @@ impl Config {
                 .parse()
                 .unwrap_or(config.upload_client_reuse_requests);
         }
+        if let Some(max_concurrent) = config_map.get("upload.max_concurrent") {
+            match max_concurrent.parse() {
+                Ok(parsed) => config.upload_max_concurrent = parsed,
+                Err(e) => tracing::warn!(
+                    "Invalid upload.max_concurrent '{}': {}, using default {}",
+                    max_concurrent,
+                    e,
+                    config.upload_max_concurrent
+                ),
+            }
+        }
         if let Some(level) = config_map.get("upload.log_level") {
             match level.parse::<UploadLogLevel>() {
                 Ok(parsed) => config.upload_log_level = parsed,
@@ -499,6 +513,7 @@ mod tests {
     fn upload_defaults_use_reuse_settings() {
         let config = Config::default();
         assert_eq!(config.upload_client_reuse_requests, 10);
+        assert_eq!(config.upload_max_concurrent, 2);
         assert_eq!(config.upload_pool_max_idle_per_host, 1);
         assert_eq!(config.upload_pool_idle_timeout_secs, 60);
         assert_eq!(config.upload_timeout_secs, 300);
@@ -593,6 +608,26 @@ upload.log_level=warn\n";
         let _ = std::fs::remove_file(&temp_path);
 
         assert_eq!(loaded.upload_log_level, UploadLogLevel::Warning);
+    }
+
+    #[test]
+    fn upload_max_concurrent_parses() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_upload_limit_{temp_name}.ini"));
+        let content = "bot.token=token\n\
+upload.max_concurrent=6\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.upload_max_concurrent, 6);
     }
 
     #[test]
