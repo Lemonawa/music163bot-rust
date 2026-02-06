@@ -27,6 +27,7 @@ pub struct BotState {
     pub database: Database,
     pub music_api: MusicApi,
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
+    pub upload_semaphore: Arc<tokio::sync::Semaphore>,
     pub message_task_semaphore: Arc<tokio::sync::Semaphore>,
     pub maintenance_tx: tokio::sync::mpsc::UnboundedSender<MaintenanceSignal>,
     pub bot_username: String,
@@ -57,6 +58,12 @@ pub struct MaintenanceCounters {
 pub enum MaintenanceSignal {
     AnalyzeDb,
     ReleaseMemory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadMode {
+    Audio,
+    Document,
 }
 
 impl MaintenanceCounters {
@@ -216,6 +223,9 @@ pub async fn run(config: Config) -> Result<()> {
         download_semaphore: Arc::new(tokio::sync::Semaphore::new(
             config.max_concurrent_downloads as usize,
         )),
+        upload_semaphore: Arc::new(tokio::sync::Semaphore::new(upload_task_limit(
+            config.upload_max_concurrent,
+        ))),
         message_task_semaphore: Arc::new(tokio::sync::Semaphore::new(message_task_limit(
             config.max_concurrent_downloads,
         ))),
@@ -1183,121 +1193,11 @@ async fn download_and_send_music(
         }
     );
 
-    // Build a dedicated upload bot with optimized HTTP client for large file uploads.
-    // Reuse the upload client for a bounded number of requests.
-    let upload_bot = {
-        let mut upload_state = state.upload_client_state.lock().await;
-        if upload_state.bot.is_none()
-            || upload_state.reuse_count >= state.config.upload_client_reuse_requests
-        {
-            let reason = if upload_state.bot.is_none() {
-                "uninitialized"
-            } else {
-                "reuse_limit"
-            };
-            if upload_log_enabled(&state.config, UploadLogLevel::Info) {
-                tracing::info!(
-                    "Upload diag: creating client (reason: {}, reuse_count: {}, reuse_limit: {})",
-                    reason,
-                    upload_state.reuse_count,
-                    state.config.upload_client_reuse_requests
-                );
-            }
-            let build_start = std::time::Instant::now();
-            // API URL must match teloxide's internal format: base URL without "/bot" suffix
-            // teloxide automatically appends "bot<TOKEN>/" to the path
-            let api_url_str = if !state.config.bot_api.is_empty()
-                && state.config.bot_api != "https://api.telegram.org"
-            {
-                // Custom API: strip "/bot" suffix if present to match teloxide's expected format
-                let base = state.config.bot_api.trim_end_matches("/bot");
-                format!("{base}/")
-            } else {
-                // Default API: use base URL without "/bot" (matches Bot::new() behavior)
-                "https://api.telegram.org/".to_string()
-            };
+    // Bound upload concurrency to keep tail latency and memory stable under burst traffic.
+    let _upload_permit = acquire_upload_permit(&state.upload_semaphore).await?;
 
-            let api_url = match parse_api_url(&api_url_str) {
-                Ok(url) => url,
-                Err(e) => {
-                    tracing::warn!(
-                        "Invalid upload API URL '{}': {}. Using default.",
-                        api_url_str,
-                        e
-                    );
-                    match parse_api_url("https://api.telegram.org/") {
-                        Ok(url) => url,
-                        Err(err) => {
-                            tracing::error!("Failed to parse fallback API URL: {}", err);
-                            return Err(BotError::Other(anyhow::anyhow!(
-                                "failed to parse fallback API URL"
-                            )));
-                        }
-                    }
-                }
-            };
-
-            if api_url_str != "https://api.telegram.org/" {
-                tracing::info!("Using custom API for upload: {}", api_url);
-            }
-
-            // Create a client optimized for multipart uploads
-            // - longer timeout for large files
-            // - pool_max_idle_per_host configurable for reuse vs. freshness
-            // - no_gzip avoids gzip interference on multipart boundaries
-            let mut client_builder = reqwest::Client::builder()
-                .use_rustls_tls()
-                .timeout(std::time::Duration::from_secs(
-                    state.config.upload_timeout_secs,
-                ))
-                .pool_max_idle_per_host(state.config.upload_pool_max_idle_per_host)
-                .no_gzip()
-                .user_agent("Go-http-client/2.0")
-                .default_headers(reqwest::header::HeaderMap::new());
-
-            if should_set_upload_pool_idle_timeout(state.config.upload_pool_idle_timeout_secs) {
-                client_builder = client_builder.pool_idle_timeout(std::time::Duration::from_secs(
-                    state.config.upload_pool_idle_timeout_secs,
-                ));
-            }
-
-            if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
-                tracing::debug!(
-                    "Upload diag: client settings pool_max_idle_per_host={}, pool_idle_timeout_secs={}, timeout_secs={}, api_url={}",
-                    state.config.upload_pool_max_idle_per_host,
-                    state.config.upload_pool_idle_timeout_secs,
-                    state.config.upload_timeout_secs,
-                    api_url
-                );
-            }
-
-            let client = build_reqwest_client(client_builder)?;
-
-            upload_state.bot =
-                Some(Bot::with_client(&state.config.bot_token, client).set_api_url(api_url));
-            upload_state.reuse_count = 0;
-
-            if upload_log_enabled(&state.config, UploadLogLevel::Info) {
-                tracing::info!(
-                    "Upload diag: client ready in {}ms",
-                    build_start.elapsed().as_millis()
-                );
-            }
-        } else if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
-            tracing::debug!(
-                "Upload diag: reusing client (reuse_count: {}, reuse_limit: {})",
-                upload_state.reuse_count,
-                state.config.upload_client_reuse_requests
-            );
-        }
-
-        let next_reuse_count = upload_state.reuse_count.saturating_add(1);
-        if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
-            tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
-        }
-        upload_state.reuse_count = next_reuse_count;
-        get_upload_bot(&upload_state)?
-    };
+    // Acquire upload bot with minimal lock contention.
+    let upload_bot = acquire_upload_bot(state).await?;
 
     // Send audio file with enhanced error handling and proper MIME type
     tracing::info!(
@@ -1311,8 +1211,7 @@ async fn download_and_send_music(
 
     tracing::info!("File format: {}", if is_flac { "FLAC" } else { "MP3" });
 
-    // Try sending as audio with basic metadata
-    // Use into_input_file to consume audio_buffer and avoid cloning memory
+    // Try sending as audio first, then fallback to document if audio upload fails.
     let in_flight = state
         .upload_counters
         .in_flight
@@ -1320,23 +1219,63 @@ async fn download_and_send_music(
         + 1;
     let peak_in_flight = update_peak(&state.upload_counters.peak_in_flight, in_flight);
     let upload_start = std::time::Instant::now();
-    let mut audio_req = upload_bot
-        .send_audio(msg.chat.id, audio_buffer.into_input_file())
-        .caption(&caption)
-        .title(&song_info.song_name)
-        .performer(&song_info.song_artists)
-        .duration(song_info.duration as u32)
-        .reply_markup(keyboard.clone())
-        .reply_parameters(ReplyParameters::new(msg.id));
+    let mut mode = UploadMode::Audio;
+    let mut sent_message = None;
+    let mut last_error = None;
 
-    // Attach thumbnail if available
-    if let Some(thumb_buf) = thumbnail_buffer {
-        let thumb_input = thumb_buf.into_input_file();
-        audio_req = audio_req.thumbnail(thumb_input);
+    loop {
+        let attempt_result = match mode {
+            UploadMode::Audio => {
+                let mut audio_req = upload_bot
+                    .send_audio(msg.chat.id, audio_buffer.to_input_file())
+                    .caption(&caption)
+                    .title(&song_info.song_name)
+                    .performer(&song_info.song_artists)
+                    .duration(song_info.duration as u32)
+                    .reply_markup(keyboard.clone())
+                    .reply_parameters(ReplyParameters::new(msg.id));
+
+                if let Some(thumb_buf) = thumbnail_buffer.as_ref() {
+                    match thumb_buf.to_input_file() {
+                        Ok(thumb_input) => {
+                            audio_req = audio_req.thumbnail(thumb_input);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to prepare thumbnail input: {}", e);
+                        }
+                    }
+                }
+
+                audio_req.await
+            }
+            UploadMode::Document => {
+                upload_bot
+                    .send_document(msg.chat.id, audio_buffer.to_input_file())
+                    .caption(&caption)
+                    .reply_markup(keyboard.clone())
+                    .reply_parameters(ReplyParameters::new(msg.id))
+                    .await
+            }
+        };
+
+        match attempt_result {
+            Ok(sent_msg) => {
+                sent_message = Some(sent_msg);
+                break;
+            }
+            Err(e) => {
+                tracing::warn!("Upload attempt in mode {:?} failed: {}", mode, e);
+                last_error = Some(e);
+                if let Some(next_mode) = next_upload_mode(mode, false) {
+                    tracing::warn!("Audio send failed, retrying as document");
+                    mode = next_mode;
+                    continue;
+                }
+                break;
+            }
+        }
     }
 
-    // Thumbnail will be embedded into tags for MP3 and FLAC (when possible)
-    let audio_result = audio_req.await;
     let upload_duration = upload_start.elapsed();
     let in_flight_after = state
         .upload_counters
@@ -1345,51 +1284,74 @@ async fn download_and_send_music(
         - 1;
     tracing::info!("{}", format_perf("upload_audio", upload_duration));
 
-    match audio_result {
-        Ok(sent_msg) => {
-            let upload_mbps = throughput_mbps(file_size, upload_duration);
-            tracing::info!(
-                "Upload completed in {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
-                upload_duration.as_secs_f64(),
-                upload_mbps,
-                in_flight_after,
-                peak_in_flight
-            );
+    if let Some(sent_msg) = sent_message {
+        let upload_mbps = throughput_mbps(file_size, upload_duration);
+        tracing::info!(
+            "Upload completed in {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
+            upload_duration.as_secs_f64(),
+            upload_mbps,
+            in_flight_after,
+            peak_in_flight
+        );
+        tracing::info!("Upload completed in mode: {:?}", mode);
+        if mode == UploadMode::Audio {
             tracing::info!(
                 "Successfully sent as audio: {}",
                 if is_flac { "FLAC" } else { "MP3" }
             );
+        } else {
+            tracing::info!("Fallback document upload succeeded");
+        }
 
-            // Extract file_id from sent message
-            if let MessageKind::Common(common) = &sent_msg.kind
-                && let teloxide::types::MediaKind::Audio(audio) = &common.media_kind
-            {
-                song_info.file_id = Some(audio.audio.file.id.to_string());
+        // Extract file_id from sent message (audio/document)
+        if let MessageKind::Common(common) = &sent_msg.kind {
+            match &common.media_kind {
+                teloxide::types::MediaKind::Audio(audio) => {
+                    song_info.file_id = Some(audio.audio.file.id.to_string());
+                }
+                teloxide::types::MediaKind::Document(document) => {
+                    song_info.file_id = Some(document.document.file.id.to_string());
+                }
+                _ => {}
             }
-
-            // No cleanup needed - both audio_buffer and thumbnail_buffer were consumed
         }
-        Err(e) => {
-            let upload_mbps = throughput_mbps(file_size, upload_duration);
-            tracing::warn!(
-                "Upload failed after {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
-                upload_duration.as_secs_f64(),
-                upload_mbps,
-                in_flight_after,
-                peak_in_flight
-            );
-            tracing::warn!("Audio send failed: {}, trying document fallback", e);
+    } else {
+        let Some(e) = last_error else {
+            tracing::error!("Upload failed without error details");
+            audio_buffer.cleanup().await.ok();
+            if let Some(thumb_buf) = thumbnail_buffer {
+                thumb_buf.cleanup().await.ok();
+            }
+            return Err(BotError::Other(anyhow::anyhow!(
+                "upload failed without error details"
+            )));
+        };
 
-            // Note: audio_buffer was consumed above, we need to check if we can retry
-            // Since the buffer was moved, we cannot retry - this is a limitation
-            // For fallback, we would need to re-download or keep a backup
-            // For now, just clean up and return error
+        let upload_mbps = throughput_mbps(file_size, upload_duration);
+        tracing::warn!(
+            "Upload failed after {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
+            upload_duration.as_secs_f64(),
+            upload_mbps,
+            in_flight_after,
+            peak_in_flight
+        );
+        tracing::warn!("Upload failed: {}", e);
 
-            bot.edit_message_text(msg.chat.id, status_msg.id, format!("发送失败: {e}"))
-                .await
-                .ok();
-            return Err(e.into());
+        bot.edit_message_text(msg.chat.id, status_msg.id, format!("发送失败: {e}"))
+            .await
+            .ok();
+
+        audio_buffer.cleanup().await.ok();
+        if let Some(thumb_buf) = thumbnail_buffer {
+            thumb_buf.cleanup().await.ok();
         }
+
+        return Err(e.into());
+    }
+
+    audio_buffer.cleanup().await.ok();
+    if let Some(thumb_buf) = thumbnail_buffer {
+        thumb_buf.cleanup().await.ok();
     }
 
     // Save to database and update query statistics
@@ -1453,6 +1415,26 @@ fn message_task_limit(max_concurrent_downloads: u32) -> usize {
     (max_concurrent_downloads as usize)
         .saturating_mul(4)
         .clamp(8, 256)
+}
+
+fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
+    (max_concurrent_uploads as usize).clamp(1, 64)
+}
+
+fn should_refresh_upload_client(upload_state: &UploadClientState, reuse_limit: u32) -> bool {
+    let reuse_limit = reuse_limit.max(1);
+    upload_state.bot.is_none() || upload_state.reuse_count >= reuse_limit
+}
+
+fn next_upload_mode(mode: UploadMode, succeeded: bool) -> Option<UploadMode> {
+    if succeeded {
+        return None;
+    }
+
+    match mode {
+        UploadMode::Audio => Some(UploadMode::Document),
+        UploadMode::Document => None,
+    }
 }
 
 fn collect_maintenance_signals(
@@ -1535,12 +1517,147 @@ fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
     }
 }
 
+fn build_upload_bot(config: &Config) -> Result<Bot> {
+    // API URL must match teloxide's internal format: base URL without "/bot" suffix
+    // teloxide automatically appends "bot<TOKEN>/" to the path
+    let api_url_str = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org"
+    {
+        let base = config.bot_api.trim_end_matches("/bot");
+        format!("{base}/")
+    } else {
+        "https://api.telegram.org/".to_string()
+    };
+
+    let api_url = match parse_api_url(&api_url_str) {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::warn!(
+                "Invalid upload API URL '{}': {}. Using default.",
+                api_url_str,
+                e
+            );
+            match parse_api_url("https://api.telegram.org/") {
+                Ok(url) => url,
+                Err(err) => {
+                    tracing::error!("Failed to parse fallback API URL: {}", err);
+                    return Err(BotError::Other(anyhow::anyhow!(
+                        "failed to parse fallback API URL"
+                    )));
+                }
+            }
+        }
+    };
+
+    if api_url_str != "https://api.telegram.org/" {
+        tracing::info!("Using custom API for upload: {}", api_url);
+    }
+
+    let mut client_builder = reqwest::Client::builder()
+        .use_rustls_tls()
+        .timeout(std::time::Duration::from_secs(config.upload_timeout_secs))
+        .pool_max_idle_per_host(config.upload_pool_max_idle_per_host)
+        .no_gzip()
+        .user_agent("Go-http-client/2.0")
+        .default_headers(reqwest::header::HeaderMap::new());
+
+    if should_set_upload_pool_idle_timeout(config.upload_pool_idle_timeout_secs) {
+        client_builder = client_builder.pool_idle_timeout(std::time::Duration::from_secs(
+            config.upload_pool_idle_timeout_secs,
+        ));
+    }
+
+    if upload_log_enabled(config, UploadLogLevel::Debug) {
+        tracing::debug!(
+            "Upload diag: client settings pool_max_idle_per_host={}, pool_idle_timeout_secs={}, timeout_secs={}, api_url={}",
+            config.upload_pool_max_idle_per_host,
+            config.upload_pool_idle_timeout_secs,
+            config.upload_timeout_secs,
+            api_url
+        );
+    }
+
+    let client = build_reqwest_client(client_builder)?;
+    Ok(Bot::with_client(&config.bot_token, client).set_api_url(api_url))
+}
+
+async fn acquire_upload_bot(state: &Arc<BotState>) -> Result<Bot> {
+    let reuse_limit = state.config.upload_client_reuse_requests.max(1);
+
+    let (reason, reuse_count_before) = {
+        let mut upload_state = state.upload_client_state.lock().await;
+
+        if !should_refresh_upload_client(&upload_state, reuse_limit) {
+            let next_reuse_count = upload_state.reuse_count.saturating_add(1);
+            if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+                tracing::debug!(
+                    "Upload diag: reusing client (reuse_count: {}, reuse_limit: {})",
+                    upload_state.reuse_count,
+                    reuse_limit
+                );
+                tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
+            }
+            upload_state.reuse_count = next_reuse_count;
+            return get_upload_bot(&upload_state);
+        }
+
+        let reason = if upload_state.bot.is_none() {
+            "uninitialized"
+        } else {
+            "reuse_limit"
+        };
+        (reason, upload_state.reuse_count)
+    };
+
+    if upload_log_enabled(&state.config, UploadLogLevel::Info) {
+        tracing::info!(
+            "Upload diag: creating client (reason: {}, reuse_count: {}, reuse_limit: {})",
+            reason,
+            reuse_count_before,
+            reuse_limit
+        );
+    }
+
+    let build_start = std::time::Instant::now();
+    let built_bot = build_upload_bot(&state.config)?;
+
+    let mut upload_state = state.upload_client_state.lock().await;
+    if should_refresh_upload_client(&upload_state, reuse_limit) {
+        upload_state.bot = Some(built_bot);
+        upload_state.reuse_count = 0;
+        if upload_log_enabled(&state.config, UploadLogLevel::Info) {
+            tracing::info!(
+                "Upload diag: client ready in {}ms",
+                build_start.elapsed().as_millis()
+            );
+        }
+    } else if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+        tracing::debug!("Upload diag: client refreshed by another task");
+    }
+
+    let next_reuse_count = upload_state.reuse_count.saturating_add(1);
+    if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+        tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
+    }
+    upload_state.reuse_count = next_reuse_count;
+
+    get_upload_bot(&upload_state)
+}
+
 async fn acquire_download_permit(
     semaphore: &tokio::sync::Semaphore,
 ) -> Result<tokio::sync::SemaphorePermit<'_>> {
     semaphore.acquire().await.map_err(|e| {
         tracing::error!("Download semaphore closed: {}", e);
         BotError::Other(anyhow::anyhow!("download semaphore closed"))
+    })
+}
+
+async fn acquire_upload_permit(
+    semaphore: &tokio::sync::Semaphore,
+) -> Result<tokio::sync::SemaphorePermit<'_>> {
+    semaphore.acquire().await.map_err(|e| {
+        tracing::error!("Upload semaphore closed: {}", e);
+        BotError::Other(anyhow::anyhow!("upload semaphore closed"))
     })
 }
 
@@ -1703,6 +1820,50 @@ mod tests {
         assert!(UploadLogLevel::Info.allows(UploadLogLevel::Info));
         assert!(!UploadLogLevel::Info.allows(UploadLogLevel::Debug));
         assert!(!UploadLogLevel::None.allows(UploadLogLevel::Error));
+    }
+
+    #[test]
+    fn upload_limit_clamps_bounds() {
+        assert_eq!(super::upload_task_limit(0), 1);
+        assert_eq!(super::upload_task_limit(1), 1);
+        assert_eq!(super::upload_task_limit(4), 4);
+        assert_eq!(super::upload_task_limit(1000), 64);
+    }
+
+    #[test]
+    fn upload_client_refresh_decision_works() {
+        let has_bot = UploadClientState {
+            bot: Some(Bot::new("token")),
+            reuse_count: 0,
+        };
+        let no_bot = UploadClientState {
+            bot: None,
+            reuse_count: 0,
+        };
+        let exhausted = UploadClientState {
+            bot: Some(Bot::new("token")),
+            reuse_count: 10,
+        };
+
+        assert!(super::should_refresh_upload_client(&no_bot, 10));
+        assert!(!super::should_refresh_upload_client(&has_bot, 10));
+        assert!(super::should_refresh_upload_client(&exhausted, 10));
+    }
+
+    #[test]
+    fn upload_mode_switches_to_document_after_audio_failure() {
+        assert_eq!(
+            super::next_upload_mode(super::UploadMode::Audio, false),
+            Some(super::UploadMode::Document)
+        );
+        assert_eq!(
+            super::next_upload_mode(super::UploadMode::Audio, true),
+            None
+        );
+        assert_eq!(
+            super::next_upload_mode(super::UploadMode::Document, false),
+            None
+        );
     }
 }
 
