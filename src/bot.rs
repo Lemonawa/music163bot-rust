@@ -1,8 +1,7 @@
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use futures_util::StreamExt;
-use tokio::sync::Mutex;
 use teloxide::RequestError;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
@@ -12,19 +11,24 @@ use teloxide::types::{
     InputMessageContentText, MaybeInaccessibleMessage, Message, MessageKind, ParseMode,
     ReplyMarkup, ReplyParameters,
 };
+use tokio::sync::Mutex;
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode, UploadLogLevel};
 use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, format_artists};
-use crate::utils::{clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps, update_peak};
+use crate::utils::{
+    clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps, update_peak,
+};
 
 pub struct BotState {
     pub config: Config,
     pub database: Database,
     pub music_api: MusicApi,
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
+    pub message_task_semaphore: Arc<tokio::sync::Semaphore>,
+    pub maintenance_tx: tokio::sync::mpsc::UnboundedSender<MaintenanceSignal>,
     pub bot_username: String,
     pub upload_client_state: Arc<Mutex<UploadClientState>>,
     pub maintenance_counters: MaintenanceCounters,
@@ -47,6 +51,12 @@ pub struct UploadCounters {
 pub struct MaintenanceCounters {
     pub memory_release_requests: AtomicU32,
     pub db_analyze_requests: AtomicU32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaintenanceSignal {
+    AnalyzeDb,
+    ReleaseMemory,
 }
 
 impl MaintenanceCounters {
@@ -95,6 +105,12 @@ pub async fn run(config: Config) -> Result<()> {
     // Initialize database
     let database = Database::new(&config.database).await?;
     tracing::info!("Database initialized");
+
+    let (maintenance_tx, maintenance_rx) = tokio::sync::mpsc::unbounded_channel();
+    let maintenance_database = database.clone();
+    tokio::spawn(async move {
+        maintenance_worker(maintenance_rx, maintenance_database).await;
+    });
 
     // Initialize music API
     let music_api = MusicApi::new_with_config(&config);
@@ -197,7 +213,13 @@ pub async fn run(config: Config) -> Result<()> {
         config: config.clone(),
         database,
         music_api,
-        download_semaphore: Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_downloads as usize)),
+        download_semaphore: Arc::new(tokio::sync::Semaphore::new(
+            config.max_concurrent_downloads as usize,
+        )),
+        message_task_semaphore: Arc::new(tokio::sync::Semaphore::new(message_task_limit(
+            config.max_concurrent_downloads,
+        ))),
+        maintenance_tx,
         bot_username,
         upload_client_state: Arc::new(Mutex::new(UploadClientState {
             bot: None,
@@ -230,6 +252,18 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
         && let teloxide::types::MediaKind::Text(text_content) = &common.media_kind
     {
         let text = text_content.text.clone();
+        if !should_spawn_message_task(&text) {
+            return Ok(());
+        }
+
+        let permit = match state.message_task_semaphore.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(e) => {
+                tracing::error!("Message task semaphore closed: {}", e);
+                return Ok(());
+            }
+        };
+
         let bot = bot.clone();
         let msg = msg.clone();
         let state = state.clone();
@@ -237,6 +271,8 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
         // Spawn a new task to handle the message concurrently
         // This allows multiple messages to be processed in parallel
         tokio::spawn(async move {
+            let _permit = permit;
+
             // Handle commands
             if text.starts_with('/') {
                 if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
@@ -569,7 +605,10 @@ async fn process_music(
 
     let (song_detail_result, song_url_result) = tokio::join!(song_detail_future, song_url_future);
 
-    tracing::info!("{}", format_perf("fetch_detail", fetch_detail_start.elapsed()));
+    tracing::info!(
+        "{}",
+        format_perf("fetch_detail", fetch_detail_start.elapsed())
+    );
     tracing::info!("{}", format_perf("fetch_url", fetch_url_start.elapsed()));
 
     let song_detail = match song_detail_result {
@@ -698,63 +737,119 @@ async fn download_and_send_music(
                     );
 
                     if download_original && download_thumbnail {
-                        // Download both versions in parallel: original (for embedding) and resized (for Telegram thumbnail)
-                        let original_future =
-                            state.music_api.download_album_art_original(pic_url);
-                        let thumbnail_future = state.music_api.download_album_art_data(pic_url);
+                        // Download original once, then derive thumbnail locally.
+                        let original_data =
+                            match state.music_api.download_album_art_original(pic_url).await {
+                                Ok(data) => {
+                                    tracing::info!(
+                                        "Downloaded original album art for music_id {} ({} bytes)",
+                                        song_detail.id,
+                                        data.len()
+                                    );
+                                    Some(data)
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to download original album art for music_id {}: {}",
+                                        song_detail.id,
+                                        e
+                                    );
+                                    None
+                                }
+                            };
 
-                        let (original_result, thumbnail_result) =
-                            tokio::join!(original_future, thumbnail_future);
-
-                        // Process original high-res image for embedding
-                        let original_data = match original_result {
-                            Ok(data) => {
-                                tracing::info!(
-                                    "Downloaded original album art for music_id {} ({} bytes)",
-                                    song_detail.id,
-                                    data.len()
-                                );
-                                Some(data)
+                        let thumbnail_buffer = if let Some(original_bytes) =
+                            original_data.as_deref()
+                        {
+                            match crate::music_api::resize_album_art_to_thumbnail(original_bytes) {
+                                Ok(data) => {
+                                    tracing::info!(
+                                        "Derived thumbnail from original for music_id {} ({} bytes)",
+                                        song_detail.id,
+                                        data.len()
+                                    );
+                                    let thumb_filename = format!(
+                                        "thumb_{}_{}.jpg",
+                                        song_detail.id,
+                                        chrono::Utc::now().timestamp()
+                                    );
+                                    ThumbnailBuffer::new(
+                                        &state.config,
+                                        data,
+                                        &state.config.cache_dir,
+                                        &thumb_filename,
+                                    )
+                                    .await
+                                    .ok()
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to derive thumbnail from original for music_id {}: {}",
+                                        song_detail.id,
+                                        e
+                                    );
+                                    match state.music_api.download_album_art_data(pic_url).await {
+                                        Ok(data) => {
+                                            tracing::info!(
+                                                "Fallback thumbnail download for music_id {} ({} bytes)",
+                                                song_detail.id,
+                                                data.len()
+                                            );
+                                            let thumb_filename = format!(
+                                                "thumb_{}_{}.jpg",
+                                                song_detail.id,
+                                                chrono::Utc::now().timestamp()
+                                            );
+                                            ThumbnailBuffer::new(
+                                                &state.config,
+                                                data,
+                                                &state.config.cache_dir,
+                                                &thumb_filename,
+                                            )
+                                            .await
+                                            .ok()
+                                        }
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                "Failed to download thumbnail for music_id {}: {}",
+                                                song_detail.id,
+                                                err
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to download original album art for music_id {}: {}",
-                                    song_detail.id,
-                                    e
-                                );
-                                None
-                            }
-                        };
-
-                        // Process 320x320 thumbnail for Telegram display
-                        let thumbnail_buffer = match thumbnail_result {
-                            Ok(data) => {
-                                tracing::info!(
-                                    "Downloaded thumbnail for music_id {} ({} bytes)",
-                                    song_detail.id,
-                                    data.len()
-                                );
-                                let thumb_filename = format!(
-                                    "thumb_{}_{}.jpg",
-                                    song_detail.id,
-                                    chrono::Utc::now().timestamp()
-                                );
-                                ThumbnailBuffer::new(
-                                    &state.config,
-                                    data,
-                                    &state.config.cache_dir,
-                                    &thumb_filename,
-                                )
-                                .await
-                                .ok()
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to download thumbnail for music_id {}: {}",
-                                    song_detail.id,
-                                    e
-                                );
-                                None
+                        } else {
+                            match state.music_api.download_album_art_data(pic_url).await {
+                                Ok(data) => {
+                                    tracing::info!(
+                                        "Fallback thumbnail download for music_id {} ({} bytes)",
+                                        song_detail.id,
+                                        data.len()
+                                    );
+                                    let thumb_filename = format!(
+                                        "thumb_{}_{}.jpg",
+                                        song_detail.id,
+                                        chrono::Utc::now().timestamp()
+                                    );
+                                    ThumbnailBuffer::new(
+                                        &state.config,
+                                        data,
+                                        &state.config.cache_dir,
+                                        &thumb_filename,
+                                    )
+                                    .await
+                                    .ok()
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to download thumbnail for music_id {}: {}",
+                                        song_detail.id,
+                                        e
+                                    );
+                                    None
+                                }
                             }
                         };
 
@@ -1152,7 +1247,9 @@ async fn download_and_send_music(
             // - no_gzip avoids gzip interference on multipart boundaries
             let mut client_builder = reqwest::Client::builder()
                 .use_rustls_tls()
-                .timeout(std::time::Duration::from_secs(state.config.upload_timeout_secs))
+                .timeout(std::time::Duration::from_secs(
+                    state.config.upload_timeout_secs,
+                ))
                 .pool_max_idle_per_host(state.config.upload_pool_max_idle_per_host)
                 .no_gzip()
                 .user_agent("Go-http-client/2.0")
@@ -1176,7 +1273,8 @@ async fn download_and_send_music(
 
             let client = build_reqwest_client(client_builder)?;
 
-            upload_state.bot = Some(Bot::with_client(&state.config.bot_token, client).set_api_url(api_url));
+            upload_state.bot =
+                Some(Bot::with_client(&state.config.bot_token, client).set_api_url(api_url));
             upload_state.reuse_count = 0;
 
             if upload_log_enabled(&state.config, UploadLogLevel::Info) {
@@ -1215,7 +1313,11 @@ async fn download_and_send_music(
 
     // Try sending as audio with basic metadata
     // Use into_input_file to consume audio_buffer and avoid cloning memory
-    let in_flight = state.upload_counters.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+    let in_flight = state
+        .upload_counters
+        .in_flight
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
     let peak_in_flight = update_peak(&state.upload_counters.peak_in_flight, in_flight);
     let upload_start = std::time::Instant::now();
     let mut audio_req = upload_bot
@@ -1236,7 +1338,11 @@ async fn download_and_send_music(
     // Thumbnail will be embedded into tags for MP3 and FLAC (when possible)
     let audio_result = audio_req.await;
     let upload_duration = upload_start.elapsed();
-    let in_flight_after = state.upload_counters.in_flight.fetch_sub(1, Ordering::Relaxed) - 1;
+    let in_flight_after = state
+        .upload_counters
+        .in_flight
+        .fetch_sub(1, Ordering::Relaxed)
+        - 1;
     tracing::info!("{}", format_perf("upload_audio", upload_duration));
 
     match audio_result {
@@ -1288,28 +1394,14 @@ async fn download_and_send_music(
 
     // Save to database and update query statistics
     state.database.save_song_info(&song_info).await?;
-    let analyze_interval = state.config.db_analyze_interval_requests;
-    if MaintenanceCounters::should_run(
-        &state.maintenance_counters.db_analyze_requests,
-        analyze_interval,
-    ) {
-        state.database.analyze().await.ok(); // Non-critical, ignore errors
+    for signal in collect_maintenance_signals(&state.maintenance_counters, &state.config) {
+        if state.maintenance_tx.send(signal).is_err() {
+            tracing::warn!("Maintenance worker unavailable; skipping signal");
+        }
     }
 
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
-
-    // Force memory release after download completes
-    let release_interval = state.config.memory_release_interval_requests;
-    if MaintenanceCounters::should_run(
-        &state.maintenance_counters.memory_release_requests,
-        release_interval,
-    ) {
-        // Give tokio time to clean up spawned tasks before forcing memory release
-        tokio::task::yield_now().await;
-        crate::memory::force_memory_release();
-        crate::memory::log_memory_stats();
-    }
 
     Ok(())
 }
@@ -1324,11 +1416,7 @@ fn create_music_keyboard(music_id: u64, song_name: &str, artists: &str) -> Inlin
             )]);
         }
         Err(e) => {
-            tracing::warn!(
-                "Failed to build music URL for music_id {}: {}",
-                music_id,
-                e
-            );
+            tracing::warn!("Failed to build music URL for music_id {}: {}", music_id, e);
         }
     }
 
@@ -1354,6 +1442,61 @@ fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseE
     reqwest::Url::parse(api_url)
 }
 
+fn should_spawn_message_task(text: &str) -> bool {
+    text.starts_with('/')
+        || text.contains("music.163.com")
+        || text.contains("163cn.tv")
+        || text.contains("163cn.link")
+}
+
+fn message_task_limit(max_concurrent_downloads: u32) -> usize {
+    (max_concurrent_downloads as usize)
+        .saturating_mul(4)
+        .clamp(8, 256)
+}
+
+fn collect_maintenance_signals(
+    counters: &MaintenanceCounters,
+    config: &Config,
+) -> Vec<MaintenanceSignal> {
+    let mut signals = Vec::with_capacity(2);
+
+    if MaintenanceCounters::should_run(
+        &counters.db_analyze_requests,
+        config.db_analyze_interval_requests,
+    ) {
+        signals.push(MaintenanceSignal::AnalyzeDb);
+    }
+
+    if MaintenanceCounters::should_run(
+        &counters.memory_release_requests,
+        config.memory_release_interval_requests,
+    ) {
+        signals.push(MaintenanceSignal::ReleaseMemory);
+    }
+
+    signals
+}
+
+async fn maintenance_worker(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<MaintenanceSignal>,
+    database: Database,
+) {
+    while let Some(signal) = rx.recv().await {
+        match signal {
+            MaintenanceSignal::AnalyzeDb => {
+                if let Err(e) = database.optimize_planner().await {
+                    tracing::warn!("Database planner optimize failed: {}", e);
+                }
+            }
+            MaintenanceSignal::ReleaseMemory => {
+                crate::memory::force_memory_release();
+                crate::memory::log_memory_stats();
+            }
+        }
+    }
+}
+
 fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
     builder.build().map_err(|e| {
         tracing::error!("Failed to build HTTP client: {}", e);
@@ -1373,12 +1516,7 @@ fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
 }
 
-fn append_search_result_line(
-    results: &mut String,
-    index: usize,
-    song_name: &str,
-    artists: &str,
-) {
+fn append_search_result_line(results: &mut String, index: usize, song_name: &str, artists: &str) {
     use std::fmt::Write;
 
     if let Err(e) = writeln!(results, "{index}.「{song_name}」 - {artists}") {
@@ -1408,6 +1546,7 @@ async fn acquire_download_permit(
 
 #[cfg(test)]
 mod tests {
+    use super::UploadClientState;
     use super::acquire_download_permit;
     use super::append_search_result_line;
     use super::build_music_url;
@@ -1415,7 +1554,6 @@ mod tests {
     use super::format_perf;
     use super::get_upload_bot;
     use super::parse_api_url;
-    use super::UploadClientState;
     use crate::config::UploadLogLevel;
     use teloxide::Bot;
 
@@ -1455,8 +1593,8 @@ mod tests {
 
     #[test]
     fn build_reqwest_client_returns_client() {
-        let client = build_reqwest_client(reqwest::Client::builder())
-            .expect("client should be built");
+        let client =
+            build_reqwest_client(reqwest::Client::builder()).expect("client should be built");
         let _ = client;
     }
 
@@ -1518,6 +1656,41 @@ mod tests {
     }
 
     #[test]
+    fn spawn_gate_identifies_supported_messages() {
+        assert!(super::should_spawn_message_task("/start"));
+        assert!(super::should_spawn_message_task(
+            "https://music.163.com/song?id=1"
+        ));
+        assert!(super::should_spawn_message_task("https://163cn.tv/abcd"));
+        assert!(super::should_spawn_message_task("https://163cn.link/abcd"));
+        assert!(!super::should_spawn_message_task("hello world"));
+    }
+
+    #[test]
+    fn spawn_gate_calculates_reasonable_limit() {
+        assert_eq!(super::message_task_limit(0), 8);
+        assert_eq!(super::message_task_limit(1), 8);
+        assert_eq!(super::message_task_limit(3), 12);
+        assert_eq!(super::message_task_limit(200), 256);
+    }
+
+    #[test]
+    fn maintenance_scheduler_emits_expected_signals() {
+        let counters = super::MaintenanceCounters::new();
+        let mut config = crate::config::Config::default();
+        config.db_analyze_interval_requests = 2;
+        config.memory_release_interval_requests = 3;
+
+        assert!(super::collect_maintenance_signals(&counters, &config).is_empty());
+
+        let second = super::collect_maintenance_signals(&counters, &config);
+        assert_eq!(second, vec![super::MaintenanceSignal::AnalyzeDb]);
+
+        let third = super::collect_maintenance_signals(&counters, &config);
+        assert_eq!(third, vec![super::MaintenanceSignal::ReleaseMemory]);
+    }
+
+    #[test]
     fn upload_pool_idle_timeout_disabled_when_zero() {
         assert!(!super::should_set_upload_pool_idle_timeout(0));
         assert!(super::should_set_upload_pool_idle_timeout(60));
@@ -1550,8 +1723,8 @@ async fn handle_music_url(
         return Ok(());
     };
 
-    let response = match state.music_api.download_file(&url).await {
-        Ok(response) => response,
+    let final_url = match state.music_api.resolve_share_link(&url).await {
+        Ok(final_url) => final_url.to_string(),
         Err(e) => {
             tracing::warn!("Failed to resolve share link: {}", e);
             bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
@@ -1561,7 +1734,6 @@ async fn handle_music_url(
         }
     };
 
-    let final_url = response.url().to_string();
     if let Some(music_id) = parse_music_id(&final_url) {
         process_music(bot, msg, state, music_id).await
     } else {
@@ -1763,17 +1935,11 @@ async fn handle_status_command(
     let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
     let chat_id = msg.chat.id.0;
 
-    let total_count = state.database.count_total_songs().await.unwrap_or(0);
-    let user_count = state
+    let (total_count, user_count, chat_count) = state
         .database
-        .count_songs_from_user(user_id)
+        .count_status_stats(user_id, chat_id)
         .await
-        .unwrap_or(0);
-    let chat_count = state
-        .database
-        .count_songs_from_chat(chat_id)
-        .await
-        .unwrap_or(0);
+        .unwrap_or((0, 0, 0));
 
     let status_text = format!(
         r"📊 *统计信息*

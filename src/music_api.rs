@@ -115,7 +115,7 @@ pub struct SearchSong {
 impl MusicApi {
     #[must_use]
     pub fn new(music_u: Option<String>, base_url: String) -> Self {
-        Self::new_with_options(music_u, base_url, 0, 10)
+        Self::new_with_options(music_u, base_url, 0, 10, 60)
     }
 
     #[must_use]
@@ -125,6 +125,7 @@ impl MusicApi {
             config.music_api.clone(),
             config.download_pool_max_idle_per_host,
             config.download_connect_timeout_secs,
+            config.download_timeout,
         )
     }
 
@@ -133,6 +134,7 @@ impl MusicApi {
         base_url: String,
         pool_max_idle_per_host: usize,
         connect_timeout_secs: u64,
+        request_timeout_secs: u64,
     ) -> Self {
         let mut client_builder = Client::builder();
 
@@ -144,7 +146,8 @@ impl MusicApi {
         client_builder = client_builder
             .tcp_nodelay(true)
             .pool_max_idle_per_host(pool_max_idle_per_host)
-            .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs));
+            .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs))
+            .timeout(std::time::Duration::from_secs(request_timeout_secs.max(1)));
 
         // Add user agent
         client_builder = client_builder
@@ -247,7 +250,7 @@ impl MusicApi {
             request = request.header("Cookie", format!("MUSIC_U={music_u}"));
         }
 
-        let response = request.send().await?;
+        let response = request.send().await?.error_for_status()?;
         let data: SongDetailResponse = response.json().await?;
 
         if data.code != 200 {
@@ -276,7 +279,7 @@ impl MusicApi {
             request = request.header("Cookie", format!("MUSIC_U={music_u}"));
         }
 
-        let response = request.send().await?;
+        let response = request.send().await?.error_for_status()?;
         let data: SongUrlResponse = response.json().await?;
 
         if data.code != 200 {
@@ -302,7 +305,7 @@ impl MusicApi {
             request = request.header("Cookie", format!("MUSIC_U={music_u}"));
         }
 
-        let response = request.send().await?;
+        let response = request.send().await?.error_for_status()?;
         let data: LyricResponse = response.json().await?;
 
         if data.code != 200 {
@@ -338,7 +341,7 @@ impl MusicApi {
             .header("Cookie", self.build_eapi_cookie())
             .body(body);
 
-        let response = request.send().await?;
+        let response = request.send().await?.error_for_status()?;
         let raw_body = response.text().await?;
         let trimmed = raw_body.trim_start();
         let data: EapiSearchResponse = if trimmed.starts_with('{') {
@@ -362,11 +365,7 @@ impl MusicApi {
     pub async fn download_file(&self, url: &str) -> Result<reqwest::Response> {
         // Apply host replacement similar to the original Go project
         // This helps avoid 403 errors from NetEase servers
-        let processed_url = url
-            .replace("m8.", "m7.")
-            .replace("m801.", "m701.")
-            .replace("m804.", "m701.")
-            .replace("m704.", "m701.");
+        let processed_url = rewrite_media_url(url);
 
         let mut request = self.client.get(&processed_url);
 
@@ -389,6 +388,24 @@ impl MusicApi {
 
         let response = request.send().await?;
         Ok(response)
+    }
+
+    /// Resolve final URL for share links with minimal body transfer
+    pub async fn resolve_share_link(&self, url: &str) -> Result<reqwest::Url> {
+        let response = self
+            .client
+            .get(url)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
+            .header("Accept", "*/*")
+            .header(reqwest::header::RANGE, "bytes=0-0")
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(response.url().clone())
     }
 
     /// Download and resize album art image
@@ -432,24 +449,10 @@ impl MusicApi {
         let bytes_vec = bytes.to_vec();
 
         // Process image in spawn_blocking to avoid blocking async runtime
-        // Use a dedicated blocking task that completes and releases resources
-        let processed = tokio::task::spawn_blocking(move || {
-            let img = image::load_from_memory(&bytes_vec)
-                .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
-
-            // Resize to 320x320 with black padding (like original Go project)
-            let resized = resize_image_with_padding(img, 320, 320);
-
-            // Save as JPEG into memory
-            let mut cursor = Cursor::new(Vec::new());
-            resized
-                .write_to(&mut cursor, ImageFormat::Jpeg)
-                .map_err(|e| BotError::MusicApi(format!("Failed to encode image: {e}")))?;
-
-            Ok::<Vec<u8>, BotError>(cursor.into_inner())
-        })
-        .await
-        .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
+        let processed =
+            tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes_vec))
+                .await
+                .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
 
         Ok(processed)
     }
@@ -496,6 +499,27 @@ fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client>
     })
 }
 
+fn rewrite_media_url(url: &str) -> String {
+    url.replace("m8.", "m7.")
+        .replace("m801.", "m701.")
+        .replace("m804.", "m701.")
+        .replace("m704.", "m701.")
+}
+
+pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
+    let img = image::load_from_memory(image_bytes)
+        .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
+
+    let resized = resize_image_with_padding(img, 320, 320);
+
+    let mut cursor = Cursor::new(Vec::new());
+    resized
+        .write_to(&mut cursor, ImageFormat::Jpeg)
+        .map_err(|e| BotError::MusicApi(format!("Failed to encode image: {e}")))?;
+
+    Ok(cursor.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::MusicApi;
@@ -515,8 +539,7 @@ mod tests {
 
     #[test]
     fn build_http_client_returns_client() {
-        let client = build_http_client(reqwest::Client::builder())
-            .expect("client should be built");
+        let client = build_http_client(reqwest::Client::builder()).expect("client should be built");
         let _ = client;
     }
 
@@ -533,6 +556,54 @@ mod tests {
         let encrypted = MusicApi::eapi_encrypt_with_key(plaintext, key).expect("encrypted");
         let decrypted = MusicApi::eapi_decrypt_with_key(&encrypted, key).expect("decrypted");
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn request_policy_rewrites_expected_hosts() {
+        assert_eq!(
+            super::rewrite_media_url("https://m8.music.126.net/song.mp3"),
+            "https://m7.music.126.net/song.mp3"
+        );
+        assert_eq!(
+            super::rewrite_media_url("https://m801.music.126.net/song.mp3"),
+            "https://m701.music.126.net/song.mp3"
+        );
+        assert_eq!(
+            super::rewrite_media_url("https://m804.music.126.net/song.mp3"),
+            "https://m701.music.126.net/song.mp3"
+        );
+        assert_eq!(
+            super::rewrite_media_url("https://m704.music.126.net/song.mp3"),
+            "https://m701.music.126.net/song.mp3"
+        );
+    }
+
+    #[test]
+    fn request_policy_keeps_other_hosts_unchanged() {
+        let url = "https://example.com/song.mp3";
+        assert_eq!(super::rewrite_media_url(url), url);
+    }
+
+    #[test]
+    fn thumbnail_transform_generates_jpeg_output() {
+        let mut image = image::RgbImage::new(2, 2);
+        for pixel in image.pixels_mut() {
+            *pixel = image::Rgb([200, 10, 10]);
+        }
+
+        let dynamic = image::DynamicImage::ImageRgb8(image);
+        let mut png_bytes = Vec::new();
+        dynamic
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encode png");
+
+        let thumbnail = super::resize_album_art_to_thumbnail(&png_bytes).expect("thumbnail bytes");
+        assert!(!thumbnail.is_empty());
+        assert_eq!(thumbnail[0], 0xFF);
+        assert_eq!(thumbnail[1], 0xD8);
     }
 }
 

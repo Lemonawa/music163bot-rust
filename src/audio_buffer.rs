@@ -249,9 +249,10 @@ impl AudioBuffer {
     /// Get the current size of the buffer (async to avoid blocking)
     pub async fn size(&self) -> u64 {
         match self {
-            Self::Disk { path, .. } => {
-                tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0)
-            }
+            Self::Disk { path, .. } => tokio::fs::metadata(path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0),
             Self::Memory { data, .. } => data.len() as u64,
         }
     }
@@ -361,7 +362,6 @@ impl AudioBuffer {
                 }
 
                 // Release unused capacity to reduce memory footprint
-                data.shrink_to_fit();
             }
         }
 
@@ -524,7 +524,6 @@ impl AudioBuffer {
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
         new_data.extend_from_slice(audio_data);
         *data = new_data;
-        data.shrink_to_fit();
 
         Ok(())
     }
@@ -595,11 +594,7 @@ impl AudioBuffer {
                 // Close file handle first
                 drop(file);
                 // Then remove the file
-                if path.exists() {
-                    tokio::fs::remove_file(&path)
-                        .await
-                        .with_context(|| format!("Failed to remove file: {}", path.display()))?;
-                }
+                remove_file_if_exists(&path).await?;
             }
             Self::Memory { .. } => {
                 // Memory is automatically freed when dropped
@@ -695,17 +690,21 @@ impl ThumbnailBuffer {
     pub async fn cleanup(self) -> Result<()> {
         match self {
             Self::Disk { path } => {
-                if path.exists() {
-                    tokio::fs::remove_file(&path).await.with_context(|| {
-                        format!("Failed to remove thumbnail: {}", path.display())
-                    })?;
-                }
+                remove_file_if_exists(&path).await?;
             }
             Self::Memory { .. } => {
                 // Memory is automatically freed
             }
         }
         Ok(())
+    }
+}
+
+async fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("Failed to remove file: {}", path.display())),
     }
 }
 
@@ -739,5 +738,17 @@ mod tests {
 
         let result = AudioBuffer::find_mp3_audio_start(&mp3_data);
         assert_eq!(result, 10); // 10 byte header
+    }
+
+    #[tokio::test]
+    async fn cleanup_helper_ignores_missing_file() {
+        let temp_name = format!(
+            "music163bot_missing_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let path = std::env::temp_dir().join(temp_name);
+        super::remove_file_if_exists(&path)
+            .await
+            .expect("missing file cleanup should succeed");
     }
 }

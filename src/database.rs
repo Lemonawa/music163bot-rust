@@ -28,6 +28,7 @@ pub struct SongInfo {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
 }
@@ -47,9 +48,9 @@ impl Database {
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(database_url)
             .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)      // 启用 WAL 模式
-            .busy_timeout(Duration::from_secs(30))                   // 忙等待超时
-            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)    // 平衡性能和耐久性
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal) // 启用 WAL 模式
+            .busy_timeout(Duration::from_secs(30)) // 忙等待超时
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal) // 平衡性能和耐久性
             .foreign_keys(true);
 
         let pool = SqlitePool::connect_with(options).await?;
@@ -79,6 +80,18 @@ impl Database {
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             ",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_song_infos_from_user_id ON song_infos(from_user_id)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_song_infos_from_chat_id ON song_infos(from_chat_id)",
         )
         .execute(&pool)
         .await?;
@@ -224,6 +237,28 @@ impl Database {
         Ok(row.get("count"))
     }
 
+    /// Count status metrics in one query: total songs, songs from user, songs from chat
+    pub async fn count_status_stats(&self, user_id: i64, chat_id: i64) -> Result<(i64, i64, i64)> {
+        let row = sqlx::query(
+            r"
+            SELECT
+                (SELECT COUNT(*) FROM song_infos) AS total_count,
+                (SELECT COUNT(*) FROM song_infos WHERE from_user_id = ?) AS user_count,
+                (SELECT COUNT(*) FROM song_infos WHERE from_chat_id = ?) AS chat_count
+            ",
+        )
+        .bind(user_id)
+        .bind(chat_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok((
+            row.get("total_count"),
+            row.get("user_count"),
+            row.get("chat_count"),
+        ))
+    }
+
     /// Delete song by music ID
     pub async fn delete_song_by_music_id(&self, music_id: i64) -> Result<bool> {
         let result = sqlx::query("DELETE FROM song_infos WHERE music_id = ?")
@@ -256,5 +291,69 @@ impl Database {
         sqlx::query("ANALYZE").execute(&self.pool).await?;
         tracing::debug!("Database ANALYZE completed");
         Ok(())
+    }
+
+    /// Run lightweight SQLite planner maintenance
+    pub async fn optimize_planner(&self) -> Result<()> {
+        sqlx::query("PRAGMA optimize").execute(&self.pool).await?;
+        tracing::debug!("Database PRAGMA optimize completed");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{Database, SongInfo};
+
+    #[tokio::test]
+    async fn status_counts_returns_total_user_and_chat_counts() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_status_counts_{temp_name}.db"));
+        let temp_path_str = temp_path.to_string_lossy().to_string();
+
+        let db = Database::new(&temp_path_str).await.expect("create db");
+
+        let first = SongInfo {
+            music_id: 1,
+            song_name: "Song A".to_string(),
+            song_artists: "Artist A".to_string(),
+            song_album: "Album A".to_string(),
+            file_ext: "mp3".to_string(),
+            music_size: 2048,
+            pic_size: 0,
+            emb_pic_size: 0,
+            bit_rate: 128_000,
+            duration: 180,
+            from_user_id: 100,
+            from_user_name: "user-a".to_string(),
+            from_chat_id: 200,
+            from_chat_name: "chat-a".to_string(),
+            ..Default::default()
+        };
+
+        let second = SongInfo {
+            music_id: 2,
+            from_user_id: 101,
+            from_user_name: "user-b".to_string(),
+            ..first.clone()
+        };
+
+        db.save_song_info(&first).await.expect("insert first");
+        db.save_song_info(&second).await.expect("insert second");
+
+        let (total, from_user, from_chat) = db
+            .count_status_stats(100, 200)
+            .await
+            .expect("status counts");
+
+        assert_eq!(total, 2);
+        assert_eq!(from_user, 1);
+        assert_eq!(from_chat, 2);
     }
 }

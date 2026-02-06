@@ -37,8 +37,8 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
     // Try to parse as direct number (only if the entire text is a number)
     // 去除空白后再检查是否为纯数字
     let trimmed = text.trim();
-    if trimmed.parse::<u64>().is_ok() {
-        return trimmed.parse().ok();
+    if let Ok(id) = trimmed.parse::<u64>() {
+        return Some(id);
     }
     None
 }
@@ -53,9 +53,7 @@ pub fn extract_first_url(text: &str) -> Option<String> {
 /// Check if directory exists, create if not
 pub fn ensure_dir(path: &str) -> std::io::Result<()> {
     let path = Path::new(path);
-    if !path.exists() {
-        std::fs::create_dir_all(path)?;
-    }
+    std::fs::create_dir_all(path)?;
     Ok(())
 }
 
@@ -151,7 +149,7 @@ pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use super::{throughput_mbps, update_peak};
+    use super::{ensure_dir, parse_music_id, throughput_mbps, update_peak};
 
     #[test]
     fn throughput_mbps_calculates_expected_value() {
@@ -168,5 +166,26 @@ mod tests {
         assert_eq!(update_peak(&counter, 2), 2);
         assert_eq!(update_peak(&counter, 2), 2);
         assert_eq!(update_peak(&counter, 1), 2);
+    }
+
+    #[test]
+    fn parse_music_id_handles_direct_numeric_input() {
+        assert_eq!(parse_music_id("123456"), Some(123_456));
+        assert_eq!(parse_music_id("  123456  "), Some(123_456));
+    }
+
+    #[test]
+    fn ensure_dir_is_idempotent() {
+        let temp_name = format!(
+            "music163bot_utils_dir_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let temp_path = std::env::temp_dir().join(temp_name);
+        let temp_path_str = temp_path.to_string_lossy().to_string();
+
+        ensure_dir(&temp_path_str).expect("create dir first time");
+        ensure_dir(&temp_path_str).expect("create dir second time");
+
+        std::fs::remove_dir_all(&temp_path).expect("cleanup dir");
     }
 }
