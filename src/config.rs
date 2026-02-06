@@ -137,6 +137,17 @@ impl UploadLogLevel {
     }
 }
 
+fn parse_bool_like(value: &str) -> Option<bool> {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if trimmed.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Required fields
@@ -314,8 +325,16 @@ impl Config {
             tracing::info!("Loaded bot admins (from bot.admin): {:?}", config.bot_admin);
         }
 
-        if let Some(debug) = config_map.get("botdebug") {
-            config.bot_debug = debug.to_lowercase() == "true";
+        if let Some(bot_debug_value) = config_map.get("botdebug") {
+            if let Some(parsed) = parse_bool_like(bot_debug_value) {
+                config.bot_debug = parsed;
+            } else {
+                tracing::warn!(
+                    "Invalid botdebug '{}', using default {}",
+                    bot_debug_value,
+                    config.bot_debug
+                );
+            }
         }
 
         if let Some(db) = config_map.get("database") {
@@ -327,11 +346,27 @@ impl Config {
         }
 
         if let Some(auto_update) = config_map.get("autoupdate") {
-            config.auto_update = auto_update.to_lowercase() == "true";
+            if let Some(parsed) = parse_bool_like(auto_update) {
+                config.auto_update = parsed;
+            } else {
+                tracing::warn!(
+                    "Invalid autoupdate '{}', using default {}",
+                    auto_update,
+                    config.auto_update
+                );
+            }
         }
 
         if let Some(auto_retry) = config_map.get("autoretry") {
-            config.auto_retry = auto_retry.to_lowercase() == "true";
+            if let Some(parsed) = parse_bool_like(auto_retry) {
+                config.auto_retry = parsed;
+            } else {
+                tracing::warn!(
+                    "Invalid autoretry '{}', using default {}",
+                    auto_retry,
+                    config.auto_retry
+                );
+            }
         }
 
         if let Some(max_retry) = config_map.get("maxretrytimes") {
@@ -343,7 +378,15 @@ impl Config {
         }
 
         if let Some(check_md5) = config_map.get("checkmd5") {
-            config.check_md5 = check_md5.to_lowercase() == "true";
+            if let Some(parsed) = parse_bool_like(check_md5) {
+                config.check_md5 = parsed;
+            } else {
+                tracing::warn!(
+                    "Invalid checkmd5 '{}', using default {}",
+                    check_md5,
+                    config.check_md5
+                );
+            }
         }
 
         // Smart storage settings (v1.1.0+)
@@ -390,11 +433,9 @@ impl Config {
         if let Some(level) = config_map.get("upload.log_level") {
             match level.parse::<UploadLogLevel>() {
                 Ok(parsed) => config.upload_log_level = parsed,
-                Err(e) => tracing::warn!(
-                    "Invalid upload.log_level '{}': {}, using default",
-                    level,
-                    e
-                ),
+                Err(e) => {
+                    tracing::warn!("Invalid upload.log_level '{}': {}, using default", level, e);
+                }
             }
         }
         if let Some(pool_size) = config_map.get("upload.pool_max_idle_per_host") {
@@ -540,7 +581,8 @@ upload.pool_idle_timeout_secs=120\n";
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let temp_path = std::env::temp_dir().join(format!("music163bot_upload_log_{temp_name}.ini"));
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_upload_log_{temp_name}.ini"));
         let content = "bot.token=token\n\
 upload.log_level=warn\n";
 
@@ -551,5 +593,13 @@ upload.log_level=warn\n";
         let _ = std::fs::remove_file(&temp_path);
 
         assert_eq!(loaded.upload_log_level, UploadLogLevel::Warning);
+    }
+
+    #[test]
+    fn config_bool_parsing_handles_common_values() {
+        assert_eq!(super::parse_bool_like("true"), Some(true));
+        assert_eq!(super::parse_bool_like("TRUE"), Some(true));
+        assert_eq!(super::parse_bool_like(" false "), Some(false));
+        assert_eq!(super::parse_bool_like("invalid"), None);
     }
 }

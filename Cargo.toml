@@ -1,12 +1,12 @@
 [package]
 name = "music163bot-rust"
-version = "1.1.15"
+version = "1.1.16"
 edition = "2024"
 license = "WTFPL"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 
 # Telegram bot framework
 teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
@@ -43,7 +43,6 @@ ecb = "0.1"
 hex = "0.4"
 
 # Config
-config = { version = "0.15", default-features = false, features = ["ini"] }
 clap = { version = "4.0", features = ["derive"] }
 
 # File operations
