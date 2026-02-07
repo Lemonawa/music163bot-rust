@@ -53,28 +53,50 @@ cargo build --release
     - 在 `[bot]` 部分设置你的 `bot_token`。
     - 可选：在 `[music]` 部分设置 `music_u` cookie 来访问付费歌曲。
     - 调整 `cache_dir` 和 `database` 路径。
-    - （v1.1.0+）在 `[download]` 部分配置存储模式。
+    - （v1.1.0+）在 `[download]` 部分配置存储模式（推荐 `disk`）。
+    - （v1.1.14+）可在 `[upload]` 调整 `client_reuse_requests`（`0` 表示不按请求次数刷新）。
 
 ### 存储模式配置 (v1.1.0+)
 
 在 `[download]` 部分设置存储模式：
 
 - `disk`: 传统磁盘文件（稳定，低内存）
-- `memory`: 内存处理（更快，减少磁盘I/O）
-- `hybrid`: 智能选择（推荐，小文件用内存）
+- `memory`: 内存处理（更快，但更依赖内存和链路稳定性）
+- `hybrid`: 智能选择（小文件用内存，大文件用磁盘）
 
 可选参数：
 
 - `memory_threshold`: 混合模式阈值（默认 100MB）
 - `memory_buffer`: 内存安全缓冲区（默认 100MB）
+- `memory_max_file_mb`: 内存模式文件大小上限（建议稳定优先时设为 16~32）
 
 示例配置：
 
 ```ini
 [download]
-storage_mode = hybrid
-memory_threshold = 100
-memory_buffer = 100
+storage_mode = disk
+
+# 如果你要用 hybrid，可按需限制大文件内存路径
+# memory_threshold = 100
+# memory_buffer = 100
+# memory_max_file_mb = 32
+```
+
+### 上传复用配置 (v1.1.14+)
+
+`[upload]` 里的 `client_reuse_requests` 控制上传客户端刷新频率：
+
+- `0`：不按请求次数刷新（默认，持续复用，除非进程重启）
+- `10`：每 10 次请求后刷新（需要定期重建客户端时可用）
+
+示例：
+
+```ini
+[upload]
+client_reuse_requests = 0
+max_concurrent = 1
+pool_max_idle_per_host = 1
+pool_idle_timeout_secs = 300
 ```
 
 ### 运行

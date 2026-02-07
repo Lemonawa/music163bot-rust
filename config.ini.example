@@ -35,10 +35,10 @@ url = ./data/music_bot.db
 dir = ./downloads
 
 # 临时文件存储模式 (v1.1.0+)
-# - disk: 传统磁盘文件方式 (稳定，低内存占用，兼容所有场景)
-# - memory: 内存处理 (更快，减少磁盘I/O，需要足够RAM)
-# - hybrid: 智能选择 (推荐，小文件用内存，大文件用磁盘)
-storage_mode = hybrid
+# - disk: 传统磁盘文件方式 (推荐默认，稳定，低内存占用)
+# - memory: 全程内存处理 (仅建议小文件场景，需足够RAM)
+# - hybrid: 智能选择 (小文件用内存，大文件用磁盘)
+storage_mode = disk
 
 # 混合模式阈值 (MB)，文件大于此值使用磁盘模式
 memory_threshold = 100
@@ -49,7 +49,7 @@ memory_buffer = 100
 
 # 内存模式文件大小上限 (MB)
 # 无论 memory 或 hybrid，文件大于此值都强制使用磁盘模式
-# 建议与 memory_threshold 保持一致或略大
+# 若需要稳定优先，可设置为更小值（如 16~32）避免大文件走内存上传链路
 memory_max_file_mb = 100
 
 # 最大并发下载数 (v1.1.9+)
@@ -59,20 +59,21 @@ max_concurrent = 3
 
 [upload]
 # 上传客户端复用请求次数 (v1.1.14+)
-# 推荐值: 10
-client_reuse_requests = 10
+# 推荐值: 0
+# 设置为 0 表示不按请求次数刷新（仅初始化后持续复用）
+client_reuse_requests = 0
 
 # 最大并发上传数 (v1.1.16+)
-# 推荐值: 2-4
-max_concurrent = 2
+# 推荐值: 1
+max_concurrent = 1
 
 # 上传连接池每主机最大空闲连接数 (v1.1.14+)
 # 推荐值: 1
 pool_max_idle_per_host = 1
 
 # 上传连接池空闲超时秒数 (v1.1.14+)
-# 推荐值: 60
-pool_idle_timeout_secs = 60
+# 推荐值: 300
+pool_idle_timeout_secs = 300
 
 # 上传诊断日志级别 (v1.1.15+)
 # 可选: NONE/ERROR/WARNING/INFO/DEBUG (不区分大小写, WARN=WARNING)
@@ -81,27 +82,3 @@ log_level = INFO
 
 # 上传超时时间 (秒)
 timeout_secs = 300
-
-# 配置说明和使用指南
-# 
-# 1. 基本配置:
-#    - 复制此文件为 config.ini
-#    - 设置你的bot token
-#    - 设置管理员用户ID
-#
-# 2. 高级功能:
-#    - 添加MUSIC_U cookie可获取VIP音质和FLAC格式
-#    - 自定义API可使用你自己的服务器
-#
-# 3. 管理员功能:
-#    - /rmcache <歌曲ID> - 删除歌曲缓存
-#    - /status - 查看统计信息
-#
-# 4. 获取用户ID方法:
-#    发送任意消息给 @userinfobot
-#
-# 5. 支持的功能:
-#    - FLAC无损音质下载 (需要MUSIC_U)
-#    - 专辑封面下载和嵌入
-#    - 自动音质选择 (FLAC -> 320k MP3 -> 128k MP3)
-#    - 403错误自动规避
