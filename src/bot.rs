@@ -713,14 +713,20 @@ async fn process_music(
 
     let pre_upload_path_start = std::time::Instant::now();
 
-    // Update status
+    // Update status (fire-and-forget to overlap with download start)
     let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
-    bot.edit_message_text(
-        msg.chat.id,
-        status_msg.id,
-        format!("📥 正在下载: {} - {}", song_detail.name, artists),
-    )
-    .await?;
+    {
+        let bot_clone = bot.clone();
+        let chat_id = msg.chat.id;
+        let status_id = status_msg.id;
+        let text = format!("📥 正在下载: {} - {}", song_detail.name, artists);
+        tokio::spawn(async move {
+            bot_clone
+                .edit_message_text(chat_id, status_id, text)
+                .await
+                .ok();
+        });
+    }
 
     // Download and process the song
     match download_and_send_music(
