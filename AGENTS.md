@@ -15,6 +15,8 @@ cargo check
 # Debug / release build
 cargo build
 cargo build --release
+# Local cross-build (preferred for Linux amd64 artifact on macOS)
+cargo zigbuild --release --target x86_64-unknown-linux-gnu
 # Run bot with explicit config
 cargo run --release -- --config config.ini
 # CI cross-target builds
@@ -60,6 +62,8 @@ cargo fmt -- --check
 cargo check
 cargo clippy -- -D warnings
 cargo test
+# After local checks pass, produce Linux amd64 binary
+cargo zigbuild --release --target x86_64-unknown-linux-gnu
 ```
 
 ## Git Workflow
