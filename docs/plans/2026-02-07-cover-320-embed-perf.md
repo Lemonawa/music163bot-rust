@@ -114,7 +114,88 @@ Expected: PASS
 `git commit -m "docs: clarify 320px embedded cover behavior"`
 
 ---
-### Task 4: 验证
+### Task 4: Disk 模式下载路径使用流式 copy
+
+**Files:**
+- Modify: `src/bot.rs`
+- Modify: `src/audio_buffer.rs`
+
+**Step 1: 写测试（非网络，逻辑测试）**
+
+为 `AudioBuffer` 增加一个小 helper（例如 `is_disk()`），并测试在 Disk/Memory 两种模式下分支正确。目标是确保后续的“Disk 走流式 copy”逻辑可覆盖。
+
+**Step 2: 跑测试确认失败**
+
+Run: `cargo test audio_buffer::tests::audio_buffer_is_disk -- --exact`
+Expected: FAIL
+
+**Step 3: 最小实现**
+
+- 为 `AudioBuffer` 增加 `is_disk()` 方法
+- 在下载路径中，当 `AudioBuffer::Disk` 时：
+  - 使用 `tokio_util::io::StreamReader` + `tokio::io::copy` 直接写入 file
+  - 用 copy 返回值作为 `downloaded` 字节数
+- Memory 模式保持现有 buffer 写入逻辑
+
+**Step 4: 复测**
+
+Run: `cargo test audio_buffer::tests::audio_buffer_is_disk -- --exact`
+Expected: PASS
+
+**Step 5: Commit**
+
+`git add src/bot.rs src/audio_buffer.rs`
+
+`git commit -m "perf: stream disk downloads with tokio io copy"`
+
+---
+### Task 5: 封面 bytes 复用，减少 clone
+
+**Files:**
+- Modify: `src/audio_buffer.rs`
+- Modify: `src/bot.rs`
+
+**Step 1: 写测试**
+
+为 `ThumbnailBuffer::Memory` 增加一个测试，验证 `Bytes` 复用路径可用：
+
+```rust
+#[test]
+fn thumbnail_buffer_memory_bytes_roundtrip() {
+    let data = bytes::Bytes::from_static(b"abc");
+    let buf = ThumbnailBuffer::from_bytes(data.clone());
+    assert_eq!(buf.get_data().unwrap_or_default(), b"abc");
+}
+```
+
+**Step 2: 跑测试确认失败**
+
+Run: `cargo test audio_buffer::tests::thumbnail_buffer_memory_bytes_roundtrip -- --exact`
+Expected: FAIL
+
+**Step 3: 最小实现**
+
+- `ThumbnailBuffer::Memory` 改为存 `Bytes`
+- 新增 `from_bytes` 构造
+- `get_data()` 对 `Bytes` 做 `to_vec()` 保持现有接口
+- `raw_send_file` 里对 thumbnail 使用 `bytes.clone()`（O(1)）
+- `download_and_send_music` 里把 320 封面 bytes 用 `Bytes` 复用给：
+  - `apply_tags_in_blocking`（改为 `Option<Bytes>` 参数）
+  - `ThumbnailBuffer::new`（改为接收 `Bytes` 或新构造）
+
+**Step 4: 复测**
+
+Run: `cargo test audio_buffer::tests::thumbnail_buffer_memory_bytes_roundtrip -- --exact`
+Expected: PASS
+
+**Step 5: Commit**
+
+`git add src/audio_buffer.rs src/bot.rs`
+
+`git commit -m "perf: reuse cover bytes across embed and thumbnail"`
+
+---
+### Task 6: 验证
 
 Run:
 - `cargo fmt`
