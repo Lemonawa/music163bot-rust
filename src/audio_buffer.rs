@@ -680,11 +680,11 @@ impl ThumbnailBuffer {
     }
 
     /// Get the thumbnail data
-    pub fn get_data(&self) -> Result<Vec<u8>> {
+    pub async fn get_data(&self) -> Result<Vec<u8>> {
         match self {
-            Self::Disk { path } => {
-                std::fs::read(path).with_context(|| format!("Failed to read thumbnail: {}", path.display()))
-            }
+            Self::Disk { path } => tokio::fs::read(path)
+                .await
+                .with_context(|| format!("Failed to read thumbnail: {}", path.display())),
             Self::Memory { data } => Ok(data.to_vec()),
         }
     }
@@ -821,10 +821,10 @@ mod tests {
         assert!(memory_buffer.is_memory());
     }
 
-    #[test]
-    fn thumbnail_buffer_memory_bytes_roundtrip() {
+    #[tokio::test]
+    async fn thumbnail_buffer_memory_bytes_roundtrip() {
         let data = bytes::Bytes::from_static(b"abc");
         let buf = ThumbnailBuffer::from_bytes(data.clone());
-        assert_eq!(buf.get_data().unwrap_or_default(), b"abc");
+        assert_eq!(buf.get_data().await.unwrap_or_default(), b"abc");
     }
 }
