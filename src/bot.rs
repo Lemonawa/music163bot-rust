@@ -668,25 +668,21 @@ async fn process_music(
         return Ok(());
     }
 
-    // Send initial message
+    // Send status message and fetch song detail+URL in parallel
     let status_init_start = std::time::Instant::now();
-    let status_msg = bot
+    let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
+
+    let status_fut = bot
         .send_message(msg.chat.id, "🔄 正在获取歌曲信息...")
         .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
-    tracing::info!(
-        "{}",
-        format_perf(PERF_STAGE_STATUS_INIT, status_init_start.elapsed())
-    );
-
-    // Fetch song details and a usable URL through batch-first path with fallback
-    let select_url_start = std::time::Instant::now();
-    let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
-    let detail_and_url_result = state
+        .send();
+    let fetch_fut = state
         .music_api
-        .get_song_detail_and_best_url(music_id, &bitrate_candidates)
-        .await;
-    let select_url_duration = select_url_start.elapsed();
+        .get_song_detail_and_best_url(music_id, &bitrate_candidates);
+
+    let (status_result, detail_and_url_result) = tokio::join!(status_fut, fetch_fut);
+    let status_msg = status_result?;
+    let select_url_duration = status_init_start.elapsed();
     tracing::info!(
         "{}",
         format_perf(PERF_STAGE_SELECT_URL, select_url_duration)
@@ -1588,17 +1584,12 @@ fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Clie
     })
 }
 
-const PERF_STAGE_STATUS_INIT: &str = "status_init";
 const PERF_STAGE_SELECT_URL: &str = "select_url";
 const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
 
 #[cfg(test)]
-fn critical_path_stage_labels() -> [&'static str; 3] {
-    [
-        PERF_STAGE_STATUS_INIT,
-        PERF_STAGE_SELECT_URL,
-        PERF_STAGE_PRE_UPLOAD_PATH,
-    ]
+fn critical_path_stage_labels() -> [&'static str; 2] {
+    [PERF_STAGE_SELECT_URL, PERF_STAGE_PRE_UPLOAD_PATH]
 }
 
 fn format_perf(label: &str, duration: std::time::Duration) -> String {
@@ -1914,7 +1905,7 @@ mod tests {
     fn critical_path_stage_labels_are_stable() {
         assert_eq!(
             super::critical_path_stage_labels(),
-            ["status_init", "select_url", "pre_upload_path"]
+            ["select_url", "pre_upload_path"]
         );
     }
 
