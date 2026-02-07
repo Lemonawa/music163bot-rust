@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use anyhow::Context;
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use teloxide::RequestError;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
@@ -14,7 +15,7 @@ use teloxide::types::{
     ReplyParameters,
 };
 use tokio::sync::{Mutex, Notify};
-use tokio_util::io::ReaderStream;
+use tokio_util::io::{ReaderStream, StreamReader};
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode, UploadLogLevel};
@@ -895,31 +896,43 @@ async fn download_and_send_music(
         .await?;
 
         let mut stream = response.bytes_stream();
-        let mut downloaded = 0u64;
-        let chunk_size = state.config.download_chunk_size_kb * 1024;
-        let mut buffer = Vec::with_capacity(chunk_size);
+        let downloaded = if audio_buffer.is_disk() {
+            let stream = stream.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
+            let mut reader = StreamReader::new(stream);
+            let file = audio_buffer
+                .disk_file_mut()
+                .ok_or_else(|| anyhow::anyhow!("Disk buffer missing file handle"))?;
+            tokio::io::copy(&mut reader, file)
+                .await
+                .context("Failed to stream download to disk")?
+        } else {
+            let mut downloaded = 0u64;
+            let chunk_size = state.config.download_chunk_size_kb * 1024;
+            let mut buffer = Vec::with_capacity(chunk_size);
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            downloaded += chunk.len() as u64;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                downloaded += chunk.len() as u64;
 
-            if buffer.len() + chunk.len() > chunk_size {
-                if !buffer.is_empty() {
-                    audio_buffer.write_chunk(&buffer).await?;
-                    buffer.clear();
-                }
-                if chunk.len() >= chunk_size {
-                    audio_buffer.write_chunk(&chunk).await?;
+                if buffer.len() + chunk.len() > chunk_size {
+                    if !buffer.is_empty() {
+                        audio_buffer.write_chunk(&buffer).await?;
+                        buffer.clear();
+                    }
+                    if chunk.len() >= chunk_size {
+                        audio_buffer.write_chunk(&chunk).await?;
+                    } else {
+                        buffer.extend_from_slice(&chunk);
+                    }
                 } else {
                     buffer.extend_from_slice(&chunk);
                 }
-            } else {
-                buffer.extend_from_slice(&chunk);
             }
-        }
-        if !buffer.is_empty() {
-            audio_buffer.write_chunk(&buffer).await?;
-        }
+            if !buffer.is_empty() {
+                audio_buffer.write_chunk(&buffer).await?;
+            }
+            downloaded
+        };
         audio_buffer.finish().await?;
         let download_duration = download_start.elapsed();
         let download_mbps = throughput_mbps(downloaded, download_duration);

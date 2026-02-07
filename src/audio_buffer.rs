@@ -273,6 +273,20 @@ impl AudioBuffer {
         matches!(self, Self::Memory { .. })
     }
 
+    /// Check if this is a disk-based buffer
+    pub fn is_disk(&self) -> bool {
+        matches!(self, Self::Disk { .. })
+    }
+
+    /// Get a mutable handle to the disk file (disk mode only)
+    #[must_use]
+    pub fn disk_file_mut(&mut self) -> Option<&mut File> {
+        match self {
+            Self::Disk { file, .. } => file.as_mut(),
+            Self::Memory { .. } => None,
+        }
+    }
+
     /// Get the filename
     pub fn filename(&self) -> &str {
         match self {
@@ -761,5 +775,39 @@ mod tests {
         super::remove_file_if_exists(&path)
             .await
             .expect("missing file cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn audio_buffer_is_disk() {
+        let temp_name = format!(
+            "music163bot_audio_buffer_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let cache_dir = std::env::temp_dir();
+
+        let disk_buffer = AudioBuffer::new_disk(temp_name.clone(), cache_dir.to_str().unwrap())
+            .await
+            .expect("create disk buffer");
+        assert!(disk_buffer.is_disk());
+        assert!(!disk_buffer.is_memory());
+        disk_buffer.cleanup().await.expect("cleanup disk buffer");
+
+        let mut config = Config::default();
+        config.storage_mode = StorageMode::Memory;
+        config.memory_buffer_mb = 0;
+        config.memory_max_file_mb = u64::MAX;
+
+        let memory_buffer = AudioBuffer::new(
+            &config,
+            1024,
+            "test.mp3".to_string(),
+            "mp3",
+            cache_dir.to_str().unwrap(),
+        )
+        .await
+        .expect("create memory buffer");
+
+        assert!(!memory_buffer.is_disk());
+        assert!(memory_buffer.is_memory());
     }
 }
