@@ -1,202 +1,154 @@
 # AGENTS.md - Agent Instructions for music163bot-rust
 
-A Rust-based Telegram bot for NetEase Cloud Music (网易云音乐). Downloads, shares, and searches songs with smart caching.
+Rust Telegram bot for NetEase Cloud Music link parsing, search, download, upload, and cache management.
+
+## Rule Files (Cursor/Copilot)
+- `.cursor/rules/`: not present
+- `.cursorrules`: not present
+- `.github/copilot-instructions.md`: not present
+- This `AGENTS.md` is the primary instruction source for agents in this repo.
 
 ## Build Commands
-
 ```bash
-# Development build
-cargo build
-
-# Release build (optimized for production - 5.6MB binary)
-cargo build --release
-
-# Run with custom config
-cargo run --release -- --config config.ini
-
-# Quick check (faster than build, checks types only)
+# Fast compile check
 cargo check
-
-# Build specific target
+# Debug / release build
+cargo build
+cargo build --release
+# Run bot with explicit config
+cargo run --release -- --config config.ini
+# CI cross-target builds
 cargo build --release --target x86_64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu
+cargo build --release --target x86_64-apple-darwin
+cargo build --release --target aarch64-apple-darwin
+cargo build --release --target x86_64-pc-windows-msvc
 ```
 
-## Lint Commands
-
+## Lint and Format Commands
 ```bash
-# Run clippy (linter - configured in main.rs with strict settings)
-cargo clippy
-
-# Run clippy with warnings as errors (CI style)
-cargo clippy -- -D warnings
-
-# Format code
+# Auto-format
 cargo fmt
-
-# Check formatting without modifying
+# Verify formatting
 cargo fmt -- --check
+# Lint
+cargo clippy
+# CI lint gate
+cargo clippy -- -D warnings
 ```
 
 ## Test Commands
-
-**Note: This project has unit tests.** Use `cargo test` for verification; use compilation only when no tests apply.
-
 ```bash
-# Run tests (none exist currently)
+# Run all tests
 cargo test
+# List all tests
+cargo test -- --list
+# Run one exact test (recommended single-test form)
+cargo test config::tests::upload_max_concurrent_parses -- --exact --nocapture
+# Run a module test group
+cargo test config::tests::
+cargo test bot::tests::
+# Run by substring
+cargo test upload_max_concurrent
+```
 
-# Run a specific test (when tests are added)
-cargo test test_name
+Project uses unit tests in `src/*.rs` (`#[cfg(test)]` modules), not a separate `tests/` directory.
 
-# Run tests in a specific module
-cargo test module_name::
+## Recommended Validation Sequence
+```bash
+cargo fmt -- --check
+cargo check
+cargo clippy -- -D warnings
+cargo test
 ```
 
 ## Git Workflow
-
-This project follows a frequent-commit workflow to enable easy rollback and tracking:
-
-### Commit Strategy
-- **Every change gets its own commit** - After any file modification, run `cargo check` and `cargo clippy`, then commit immediately
-- This creates a detailed history where each commit represents a single logical change
-- Makes it easy to revert specific changes without affecting others
-
-### Commit Message Format
-Use conventional commits format: `<type>: <description>`
-
-Types:
-- `fix:` Bug fixes
-- `feat:` New features
-- `docs:` Documentation changes
-- `chore:` Maintenance tasks, tool updates
-- `perf:` Performance improvements
-
-Examples:
-- `feat: add lyrics command to fetch song lyrics`
-- `docs: add max_concurrent config option`
-- `chore: bump version to 1.1.11`
-
-### Push Policy
-- **Avoid pushing to remote** unless explicitly requested
-- Keep all work local until user decides to publish
-- This prevents accidental remote updates and gives user full control over when to push
+- Prefer small, logical commits.
+- Use conventional commit prefixes: `feat:`, `fix:`, `perf:`, `docs:`, `chore:`.
+- Keep work local by default; do not push unless explicitly requested.
+- Do not rewrite published history unless explicitly requested.
 
 ## Code Style Guidelines
 
-### Imports Ordering
-1. Standard library (`std::`)
-2. External crates (e.g., `tokio::`, `serde::`)
-3. Internal modules (`crate::`)
+### Rust Edition and Lints
+- Crate uses Rust `edition = "2024"`.
+- Global lint policy in `src/main.rs`: `#![warn(clippy::all, clippy::pedantic)]`.
+- A small allow-list exists in `src/main.rs`; follow it.
+- Avoid adding new `#[allow(...)]` unless it matches existing project patterns.
 
-Example:
-```rust
-use std::collections::HashMap;
-use std::io::Cursor;
+### Import Ordering
+- Group imports with blank lines between groups:
+  1) standard library (`std::...`)
+  2) external crates (`tokio`, `serde`, `reqwest`, etc.)
+  3) internal modules (`crate::...`)
+- Keep import blocks stable and sorted within each group.
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use tracing::info;
-
-use crate::error::{BotError, Result};
-use crate::config::Config;
-```
+### Formatting and Structure
+- Use default `rustfmt` style (4-space indentation, trailing commas in multiline literals).
+- Keep functions focused; extract helpers for repeated logic.
+- Use `#[must_use]` for pure helpers returning important values.
 
 ### Naming Conventions
-- **Functions/variables**: `snake_case` (e.g., `download_file`, `music_id`)
-- **Types/structs/enums**: `PascalCase` (e.g., `SongDetail`, `StorageMode`)
-- **Constants/statics**: `UPPER_SNAKE_CASE` (e.g., `SONG_REGEX`)
-- **Modules**: `snake_case` (e.g., `music_api`, `audio_buffer`)
+- Functions/variables/modules: `snake_case`.
+- Types/structs/enums/traits: `PascalCase`.
+- Constants/statics: `UPPER_SNAKE_CASE`.
+- Test names should describe behavior, not implementation details.
+
+### Types, Serde, and Data Models
+- Use explicit structs for API and DB payloads.
+- Common derives: `Debug`, `Clone`, `Serialize`, `Deserialize`, `PartialEq`, `Eq` as needed.
+- Use `#[serde(rename = "...")]` for field mapping.
+- Use `#[serde(alias = "...")]` for backward-compatible input parsing.
 
 ### Error Handling
-- Use `thiserror` for custom error types (see `src/error.rs`)
-- Use `anyhow` for general error propagation
-- Prefer `?` operator over explicit match/unwrap
-- Log errors with `tracing::error!()` before returning
-- Avoid `unwrap()`/`expect()` in production paths (URL parsing, HTTP client creation, semaphore acquisition)
-- Non-critical failures should log a warning and fall back safely
+- Domain error type: `BotError` in `src/error.rs`.
+- Internal result alias: `crate::error::Result<T>`.
+- Use `anyhow::Result` + `Context` when richer propagation context is helpful.
+- Prefer `?` for propagation.
+- Avoid `unwrap()`/`expect()` in production paths; acceptable in tests/static init.
+- Log meaningful context (`music_id`, URL, file path, sizes) before fallback/return.
 
-### Config Parsing
-- Keep defaults on parse errors (no hard-coded fallback values)
-- Log invalid values with context
-
-### Quality Practices
-- Stability fixes and behavior-preserving refactors should include minimal tests (TDD preferred)
-
-Example:
-```rust
-use crate::error::{BotError, Result};
-
-pub async fn fetch_data() -> Result<Data> {
-    let response = client.get(url).await?;
-    let data = response.json::<Data>().await?;
-    Ok(data)
-}
-```
-
-### Async Patterns
-- Use `async fn` for I/O operations
-- Use `tokio::spawn()` for concurrent tasks
-- Use `tokio::join!()` for parallel awaits
-- Use `tokio::time::timeout()` for timeouts
-
-Example:
-```rust
-let (result1, result2) = tokio::join!(task1, task2);
-let handle = tokio::spawn(async move { process_data().await });
-```
-
-### Clippy Configuration
-- Configured in `main.rs` with `#![warn(clippy::all, clippy::pedantic)]`
-- Extensive allow list for acceptable patterns (main.rs lines 3-15)
-- **DO NOT** use `#[allow(...)]` unless matching existing patterns
+### Async and Concurrency
+- Use `async fn` for I/O-bound operations.
+- Prefer `tokio::join!` for independent awaits.
+- Use `tokio::spawn` for background workers that should not block handlers.
+- Guard high-volume work with semaphores (download/upload/message task limits).
+- Use `tokio::time::timeout` for operations that can stall.
 
 ### Logging
-- Use `tracing::info!()`, `tracing::warn!()`, `tracing::error!()`
-- Use `tracing::debug!()` for verbose debugging
-- Include context (e.g., music_id, file sizes)
+- Use `tracing::{debug, info, warn, error}` consistently.
+- Keep `info` operator-meaningful, move noisy details to `debug`.
+- Include actionable context in warnings and errors.
 
-### Comments
-- Use `///` for public API documentation
-- Use `//` for inline comments
-- Comments in Chinese or English both acceptable
+### Config Parsing
+- Start from `Config::default()` and override parsed file values.
+- For invalid numeric/boolean values, keep defaults and continue safely.
+- Validate required fields (`bot.token`) and fail fast if missing.
 
-### Structs and Serialization
-- Use `#[derive(Debug, Clone, Serialize, Deserialize)]`
-- Use `#[serde(rename = "...")]` for API field mapping
-- Use `#[serde(alias = "...")]` for backward compatibility
+### Database and SQLx
+- Use parameterized queries with `.bind(...)`.
+- Never interpolate user input into SQL strings.
+- Keep SQLite WAL-oriented settings unless a measured reason requires change.
+- Preserve `music_id` upsert semantics unless behavior change is intentional.
 
-## Project Structure
+### Testing Practices
+- Keep unit tests in `#[cfg(test)] mod tests` near end of source files.
+- Use `#[tokio::test]` for async cases.
+- Use unique temp file/DB names and clean up artifacts.
+- Add focused regression tests for bug fixes and behavior-preserving refactors.
 
-```
+## Project Layout
+```text
 src/
-├── main.rs           # Entry point, clippy config, jemalloc
-├── bot.rs            # Telegram bot handlers (largest file)
-├── music_api.rs      # NetEase API client
-├── audio_buffer.rs   # Audio download/storage (smart storage)
-├── database.rs       # SQLite operations (WAL mode enabled)
-├── config.rs         # INI configuration parsing
-├── error.rs          # Error types (thiserror)
-├── memory.rs         # Memory management (jemalloc)
-└── utils.rs          # Helper functions
+|- main.rs         # entry point, clippy policy, allocator setup
+|- bot.rs          # Telegram handlers and orchestration
+|- music_api.rs    # NetEase API client and media helpers
+|- audio_buffer.rs # disk/memory/hybrid buffering and cleanup
+|- database.rs     # SQLite schema and queries
+|- config.rs       # INI parsing and defaults
+|- error.rs        # BotError and Result alias
+|- memory.rs       # memory release helpers
+`- utils.rs        # shared utilities
 ```
 
-## Dependencies
-
-- **tokio** - Async runtime
-- **teloxide** - Telegram bot framework
-- **reqwest** - HTTP client (connection pool tuned)
-- **sqlx** - Async SQLite (WAL mode)
-- **serde** - Serialization
-- **tracing** - Structured logging
-- **anyhow/thiserror** - Error handling
-- **id3/metaflac** - Audio metadata
-- **tikv-jemallocator** - Memory allocator
-
-## CI/CD
-
-GitHub Actions builds for Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64).
-Release builds are created automatically on tag push.
-
-## License
-
-WTFPL - Do What The F*ck You Want To Public License
+CI builds release binaries for Linux/macOS/Windows targets; performance helper script: `scripts/perf_compare.py`.
