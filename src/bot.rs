@@ -184,7 +184,7 @@ fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
         download_original,
         download_thumbnail,
         embed_tags: true,
-        embed_cover: download_original,
+        embed_cover: download_original || download_thumbnail,
     }
 }
 
@@ -2034,11 +2034,21 @@ mod tests {
     use super::format_perf;
     use super::get_upload_bot;
     use super::parse_api_url;
+    use super::resolve_cover_policy;
+    use crate::config::CoverMode;
     use crate::config::UploadLogLevel;
     use teloxide::Bot;
 
     fn cached_size(size: u64) -> u64 {
         size
+    }
+
+    #[test]
+    fn cover_policy_embeds_for_thumbnail_mode() {
+        let policy = resolve_cover_policy(CoverMode::Thumbnail);
+        assert!(policy.embed_cover);
+        assert!(policy.download_thumbnail);
+        assert!(!policy.download_original);
     }
 
     #[test]

@@ -862,6 +862,28 @@ mod tests {
     }
 
     #[test]
+    fn thumbnail_resize_is_320_square_jpeg() {
+        let mut image = image::RgbImage::new(2, 2);
+        for pixel in image.pixels_mut() {
+            *pixel = image::Rgb([200, 10, 10]);
+        }
+
+        let dynamic = image::DynamicImage::ImageRgb8(image);
+        let mut png_bytes = Vec::new();
+        dynamic
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encode png");
+
+        let out = super::resize_album_art_to_thumbnail(&png_bytes).expect("thumbnail bytes");
+        let img = image::load_from_memory(&out).expect("decode");
+        assert_eq!(img.width(), 320);
+        assert_eq!(img.height(), 320);
+    }
+
+    #[test]
     fn song_url_cache_key_includes_bitrate() {
         let low = super::song_url_cache_key(42, 128_000);
         let high = super::song_url_cache_key(42, 320_000);
