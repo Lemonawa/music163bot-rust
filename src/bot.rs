@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use futures_util::StreamExt;
 use teloxide::RequestError;
@@ -9,9 +10,9 @@ use teloxide::types::{
     CallbackQuery, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery,
     InlineQueryResult, InlineQueryResultArticle, InputFile, InputMessageContent,
     InputMessageContentText, MaybeInaccessibleMessage, Message, MessageKind, ParseMode,
-    ReplyMarkup, ReplyParameters,
+    ReplyParameters,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode, UploadLogLevel};
@@ -26,6 +27,7 @@ pub struct BotState {
     pub config: Config,
     pub database: Database,
     pub music_api: MusicApi,
+    inflight_downloads: Arc<InflightDownloads>,
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
     pub upload_semaphore: Arc<tokio::sync::Semaphore>,
     pub message_task_semaphore: Arc<tokio::sync::Semaphore>,
@@ -64,6 +66,85 @@ pub enum MaintenanceSignal {
 enum UploadMode {
     Audio,
     Document,
+}
+
+#[derive(Debug, Default)]
+struct InflightDownloads {
+    entries: std::sync::Mutex<HashMap<u64, Arc<InflightEntry>>>,
+}
+
+#[derive(Debug)]
+struct InflightEntry {
+    notify: Notify,
+    done: AtomicBool,
+}
+
+#[derive(Debug)]
+enum InflightClaim {
+    Leader(InflightLeaderGuard),
+    Follower(Arc<InflightEntry>),
+}
+
+#[derive(Debug)]
+struct InflightLeaderGuard {
+    music_id: u64,
+    inflight: Arc<InflightDownloads>,
+}
+
+impl InflightDownloads {
+    fn begin(self: &Arc<Self>, music_id: u64) -> InflightClaim {
+        let mut entries = self.lock_entries();
+        if let Some(existing) = entries.get(&music_id) {
+            return InflightClaim::Follower(Arc::clone(existing));
+        }
+
+        entries.insert(music_id, Arc::new(InflightEntry::new()));
+        InflightClaim::Leader(InflightLeaderGuard {
+            music_id,
+            inflight: Arc::clone(self),
+        })
+    }
+
+    fn finish(&self, music_id: u64) {
+        if let Some(entry) = self.lock_entries().remove(&music_id) {
+            entry.finish();
+        }
+    }
+
+    fn lock_entries(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<InflightEntry>>> {
+        match self.entries.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+impl InflightEntry {
+    fn new() -> Self {
+        Self {
+            notify: Notify::new(),
+            done: AtomicBool::new(false),
+        }
+    }
+
+    async fn wait(&self) {
+        if self.done.load(Ordering::Acquire) {
+            return;
+        }
+
+        self.notify.notified().await;
+    }
+
+    fn finish(&self) {
+        self.done.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+}
+
+impl Drop for InflightLeaderGuard {
+    fn drop(&mut self) {
+        self.inflight.finish(self.music_id);
+    }
 }
 
 impl MaintenanceCounters {
@@ -220,6 +301,7 @@ pub async fn run(config: Config) -> Result<()> {
         config: config.clone(),
         database,
         music_api,
+        inflight_downloads: Arc::new(InflightDownloads::default()),
         download_semaphore: Arc::new(tokio::sync::Semaphore::new(
             config.max_concurrent_downloads as usize,
         )),
@@ -358,73 +440,35 @@ async fn handle_command(
     }
 }
 
+fn parse_start_music_id(args: Option<&str>) -> Option<u64> {
+    args.and_then(|arg| arg.trim().parse::<u64>().ok())
+}
+
+fn parse_inline_query_keyword(text: &str) -> (&str, bool) {
+    let trimmed = text.trim();
+
+    if let Some(prefix) = trimmed.get(..7)
+        && prefix.eq_ignore_ascii_case("search ")
+    {
+        let keyword = trimmed.get(7..).unwrap_or("").trim();
+        (keyword, true)
+    } else if let Some(prefix) = trimmed.get(..6)
+        && prefix.eq_ignore_ascii_case("search")
+    {
+        ("", true)
+    } else {
+        (trimmed, false)
+    }
+}
+
 async fn handle_start_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    if let Some(arg) = args
-        && let Ok(music_id) = arg.parse::<u64>()
-    {
-        // Check if we already have this in database
-        if let Ok(Some(song_info)) = state.database.get_song_by_music_id(music_id as i64).await
-            && let Some(file_id) = song_info.file_id
-        {
-            let caption = build_caption(
-                &song_info.song_name,
-                &song_info.song_artists,
-                &song_info.song_album,
-                &song_info.file_ext,
-                song_info.music_size,
-                song_info.bit_rate,
-                &state.bot_username,
-            );
-            let keyboard = create_music_keyboard(
-                song_info.music_id as u64,
-                &song_info.song_name,
-                &song_info.song_artists,
-            );
-
-            let mut send_audio = bot
-                .send_audio(msg.chat.id, InputFile::file_id(FileId(file_id)))
-                .caption(caption)
-                .reply_markup(ReplyMarkup::InlineKeyboard(keyboard))
-                .reply_parameters(ReplyParameters::new(msg.id));
-
-            if let Some(thumb_id) = song_info.thumb_file_id {
-                send_audio = send_audio.thumbnail(InputFile::file_id(FileId(thumb_id)));
-            }
-
-            match send_audio.await {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    let err_str = format!("{e}");
-                    if err_str.contains("invalid remote file identifier") {
-                        tracing::warn!(
-                            "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
-                            music_id,
-                            e
-                        );
-                        let _ = state
-                            .database
-                            .delete_song_by_music_id(music_id as i64)
-                            .await;
-                    } else {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-
-        // Not in database or no file_id, trigger download flow
-        return handle_music_url(
-            bot,
-            msg,
-            state,
-            &format!("https://music.163.com/song?id={music_id}"),
-        )
-        .await;
+    if let Some(music_id) = parse_start_music_id(args.as_deref()) {
+        return process_music(bot, msg, state, music_id).await;
     }
 
     let welcome_text = format!(
@@ -521,79 +565,101 @@ async fn handle_music_command(
     }
 }
 
+async fn try_send_cached_song(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    music_id: u64,
+) -> ResponseResult<bool> {
+    let music_id_i64 = music_id as i64;
+
+    let Ok(Some(cached_song)) = state.database.get_song_by_music_id(music_id_i64).await else {
+        return Ok(false);
+    };
+
+    let Some(file_id) = &cached_song.file_id else {
+        return Ok(false);
+    };
+
+    if cached_song.music_size <= 1024 {
+        tracing::warn!(
+            "Removing invalid cached file for music_id {}: size {} bytes",
+            music_id,
+            cached_song.music_size
+        );
+        let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+        return Ok(false);
+    }
+
+    let bitrate = if cached_song.bit_rate > 0 {
+        cached_song.bit_rate
+    } else {
+        let duration_sec = cached_song.duration.max(1) as f64;
+        (8.0 * cached_song.music_size as f64 / duration_sec) as i64
+    };
+
+    let caption = build_caption(
+        &cached_song.song_name,
+        &cached_song.song_artists,
+        &cached_song.song_album,
+        &cached_song.file_ext,
+        cached_song.music_size,
+        bitrate,
+        &state.bot_username,
+    );
+
+    let keyboard =
+        create_music_keyboard(music_id, &cached_song.song_name, &cached_song.song_artists);
+
+    match bot
+        .send_audio(msg.chat.id, InputFile::file_id(FileId(file_id.clone())))
+        .caption(caption)
+        .reply_markup(keyboard)
+        .reply_parameters(ReplyParameters::new(msg.id))
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            let err_str = format!("{e}");
+            if err_str.contains("invalid remote file identifier") {
+                tracing::warn!(
+                    "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
+                    music_id,
+                    e
+                );
+                let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 async fn process_music(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
     music_id: u64,
 ) -> ResponseResult<()> {
-    let music_id_i64 = music_id as i64;
+    if try_send_cached_song(bot, msg, state, music_id).await? {
+        return Ok(());
+    }
 
-    // Check if song is cached
-    if let Ok(Some(cached_song)) = state.database.get_song_by_music_id(music_id_i64).await {
-        // Validate cached file: must have file_id AND valid size (>1KB)
-        if let Some(file_id) = &cached_song.file_id {
-            if cached_song.music_size > 1024 {
-                // Must be larger than 1KB
-                // bitrate fallback if missing
-                let bitrate = if cached_song.bit_rate > 0 {
-                    cached_song.bit_rate
-                } else {
-                    let dur = (if cached_song.duration > 0 {
-                        cached_song.duration
-                    } else {
-                        1
-                    }) as f64;
-                    (8.0 * cached_song.music_size as f64 / dur) as i64
-                };
-                let caption = build_caption(
-                    &cached_song.song_name,
-                    &cached_song.song_artists,
-                    &cached_song.song_album,
-                    &cached_song.file_ext,
-                    cached_song.music_size,
-                    bitrate,
-                    &state.bot_username,
-                );
-
-                let keyboard = create_music_keyboard(
-                    music_id,
-                    &cached_song.song_name,
-                    &cached_song.song_artists,
-                );
-
-                match bot
-                    .send_audio(msg.chat.id, InputFile::file_id(FileId(file_id.clone())))
-                    .caption(caption)
-                    .reply_markup(keyboard)
-                    .reply_parameters(ReplyParameters::new(msg.id))
-                    .await
-                {
-                    Ok(_) => return Ok(()),
-                    Err(e) => {
-                        let err_str = format!("{e}");
-                        if err_str.contains("invalid remote file identifier") {
-                            tracing::warn!(
-                                "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
-                                music_id,
-                                e
-                            );
-                            let _ = state.database.delete_song_by_music_id(music_id_i64).await;
-                            // Continue to download flow below
-                        } else {
-                            return Err(e);
-                        }
-                    }
-                }
-            }
-            // Invalid cached file (too small), remove from database
-            tracing::warn!(
-                "Removing invalid cached file for music_id {}: size {} bytes",
-                music_id,
-                cached_song.music_size
-            );
-            let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+    let _singleflight_guard = loop {
+        if let Some(leader_guard) =
+            acquire_download_leader(&state.inflight_downloads, music_id).await
+        {
+            break leader_guard;
         }
+
+        if try_send_cached_song(bot, msg, state, music_id).await? {
+            return Ok(());
+        }
+    };
+
+    if try_send_cached_song(bot, msg, state, music_id).await? {
+        return Ok(());
     }
 
     // Send initial message
@@ -1063,42 +1129,14 @@ async fn download_and_send_music(
     // 封面处理：使用原始高分辨率图片嵌入文件，缩略图用于Telegram显示
     let tags_start = std::time::Instant::now();
     tracing::info!("Processing tags for {} format", file_ext);
-    let embed_artwork = if cover_policy.embed_cover {
-        original_artwork_data.as_deref()
-    } else {
-        None
-    };
-
-    // 根据文件格式嵌入封面（使用原始高分辨率图片）
-    match file_ext {
-        "mp3" => {
-            let cover_label = if cover_policy.embed_cover {
-                "original"
-            } else {
-                "none"
-            };
-            tracing::info!("Adding ID3 tags to MP3 (cover: {})", cover_label);
-            match audio_buffer.add_id3_tags(song_detail, embed_artwork) {
-                Ok(()) => tracing::info!("MP3 tags added successfully"),
-                Err(e) => tracing::warn!("Failed to add MP3 tags: {}", e),
-            }
-        }
-        "flac" => {
-            let cover_label = if cover_policy.embed_cover {
-                "original"
-            } else {
-                "none"
-            };
-            tracing::info!("Adding FLAC metadata (cover: {})", cover_label);
-            match audio_buffer.add_flac_metadata(song_detail, embed_artwork) {
-                Ok(()) => tracing::info!("FLAC metadata added successfully"),
-                Err(e) => tracing::warn!("Failed to add FLAC metadata: {}", e),
-            }
-        }
-        _ => {
-            tracing::info!("Unknown format {}, skipping tag embedding", file_ext);
-        }
-    }
+    audio_buffer = apply_tags_in_blocking(
+        audio_buffer,
+        file_ext.to_string(),
+        song_detail.clone(),
+        original_artwork_data,
+        cover_policy.embed_cover,
+    )
+    .await?;
 
     tracing::info!("{}", format_perf("process_tags", tags_start.elapsed()));
 
@@ -1368,6 +1406,48 @@ async fn download_and_send_music(
     Ok(())
 }
 
+async fn apply_tags_in_blocking(
+    mut audio_buffer: AudioBuffer,
+    file_ext: String,
+    song_detail: crate::music_api::SongDetail,
+    artwork_data: Option<Vec<u8>>,
+    embed_cover: bool,
+) -> Result<AudioBuffer> {
+    tokio::task::spawn_blocking(move || {
+        let embed_artwork = if embed_cover {
+            artwork_data.as_deref()
+        } else {
+            None
+        };
+
+        match file_ext.as_str() {
+            "mp3" => {
+                let cover_label = if embed_cover { "original" } else { "none" };
+                tracing::info!("Adding ID3 tags to MP3 (cover: {})", cover_label);
+                match audio_buffer.add_id3_tags(&song_detail, embed_artwork) {
+                    Ok(()) => tracing::info!("MP3 tags added successfully"),
+                    Err(e) => tracing::warn!("Failed to add MP3 tags: {}", e),
+                }
+            }
+            "flac" => {
+                let cover_label = if embed_cover { "original" } else { "none" };
+                tracing::info!("Adding FLAC metadata (cover: {})", cover_label);
+                match audio_buffer.add_flac_metadata(&song_detail, embed_artwork) {
+                    Ok(()) => tracing::info!("FLAC metadata added successfully"),
+                    Err(e) => tracing::warn!("Failed to add FLAC metadata: {}", e),
+                }
+            }
+            _ => {
+                tracing::info!("Unknown format {}, skipping tag embedding", file_ext);
+            }
+        }
+
+        audio_buffer
+    })
+    .await
+    .map_err(|e| BotError::Other(anyhow::anyhow!("metadata task join failed: {e}")))
+}
+
 fn create_music_keyboard(music_id: u64, song_name: &str, artists: &str) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     match build_music_url("https://music.163.com", music_id) {
@@ -1458,6 +1538,19 @@ fn collect_maintenance_signals(
     }
 
     signals
+}
+
+async fn acquire_download_leader(
+    inflight: &Arc<InflightDownloads>,
+    music_id: u64,
+) -> Option<InflightLeaderGuard> {
+    match inflight.begin(music_id) {
+        InflightClaim::Leader(guard) => Some(guard),
+        InflightClaim::Follower(entry) => {
+            entry.wait().await;
+            None
+        }
+    }
 }
 
 async fn maintenance_worker(
@@ -1663,6 +1756,9 @@ async fn acquire_upload_permit(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use super::UploadClientState;
     use super::acquire_download_permit;
     use super::append_search_result_line;
@@ -1864,6 +1960,136 @@ mod tests {
             super::next_upload_mode(super::UploadMode::Document, false),
             None
         );
+    }
+
+    #[test]
+    fn inflight_registry_first_is_leader() {
+        let inflight = Arc::new(super::InflightDownloads::default());
+        let claim = inflight.begin(42);
+        assert!(matches!(claim, super::InflightClaim::Leader(_)));
+    }
+
+    #[tokio::test]
+    async fn inflight_registry_second_waits() {
+        let inflight = Arc::new(super::InflightDownloads::default());
+        let leader = match inflight.begin(99) {
+            super::InflightClaim::Leader(guard) => guard,
+            super::InflightClaim::Follower(_) => panic!("first claim should be leader"),
+        };
+
+        let follower_entry = match inflight.begin(99) {
+            super::InflightClaim::Leader(_) => panic!("second claim should be follower"),
+            super::InflightClaim::Follower(entry) => entry,
+        };
+
+        let pending = tokio::time::timeout(Duration::from_millis(20), follower_entry.wait()).await;
+        assert!(pending.is_err(), "follower should wait while leader active");
+
+        drop(leader);
+
+        tokio::time::timeout(Duration::from_secs(1), follower_entry.wait())
+            .await
+            .expect("follower should be released after leader finishes");
+    }
+
+    #[tokio::test]
+    async fn singleflight_claim_helper_waits_for_existing_leader() {
+        let inflight = Arc::new(super::InflightDownloads::default());
+        let leader = super::acquire_download_leader(&inflight, 7)
+            .await
+            .expect("first claim should be leader");
+
+        let inflight_for_follower = Arc::clone(&inflight);
+        let follower = tokio::spawn(async move {
+            super::acquire_download_leader(&inflight_for_follower, 7)
+                .await
+                .is_none()
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!follower.is_finished(), "follower should still be waiting");
+
+        drop(leader);
+
+        let waited = tokio::time::timeout(Duration::from_secs(1), follower)
+            .await
+            .expect("follower task should complete")
+            .expect("follower task join should succeed");
+        assert!(waited, "follower claim should resolve as waiting follower");
+    }
+
+    #[tokio::test]
+    async fn tagging_wrapper_returns_buffer_for_unknown_format() {
+        let buffer = crate::audio_buffer::AudioBuffer::Memory {
+            data: vec![1, 2, 3],
+            filename: "sample.bin".to_string(),
+            capacity: 3,
+        };
+        let detail = crate::music_api::SongDetail {
+            id: 1,
+            name: "Song".to_string(),
+            dt: Some(1_000),
+            ar: Some(vec![]),
+            al: None,
+        };
+
+        let tagged = super::apply_tags_in_blocking(buffer, "bin".to_string(), detail, None, false)
+            .await
+            .expect("unknown format should keep buffer unchanged");
+
+        assert_eq!(tagged.size().await, 3);
+    }
+
+    #[tokio::test]
+    async fn tagging_wrapper_adds_mp3_id3_header() {
+        let buffer = crate::audio_buffer::AudioBuffer::Memory {
+            data: vec![0xFF, 0xFB, 0x90, 0x64],
+            filename: "sample.mp3".to_string(),
+            capacity: 4,
+        };
+        let detail = crate::music_api::SongDetail {
+            id: 2,
+            name: "Song".to_string(),
+            dt: Some(120_000),
+            ar: Some(vec![crate::music_api::Artist {
+                id: 1,
+                name: "Artist".to_string(),
+            }]),
+            al: Some(crate::music_api::Album {
+                id: 1,
+                name: "Album".to_string(),
+                pic_url: None,
+            }),
+        };
+
+        let tagged = super::apply_tags_in_blocking(buffer, "mp3".to_string(), detail, None, false)
+            .await
+            .expect("mp3 tagging should succeed");
+        let data = tagged.get_data().await.expect("read tagged data");
+        assert!(data.starts_with(b"ID3"));
+    }
+
+    #[test]
+    fn inline_query_search_prefix_parsed_once() {
+        let (keyword, is_search) = super::parse_inline_query_keyword("search keyword");
+        assert!(is_search);
+        assert_eq!(keyword, "keyword");
+
+        let (keyword, is_search) = super::parse_inline_query_keyword("search");
+        assert!(is_search);
+        assert!(keyword.is_empty());
+
+        let (keyword, is_search) = super::parse_inline_query_keyword("hello world");
+        assert!(!is_search);
+        assert_eq!(keyword, "hello world");
+    }
+
+    #[test]
+    fn start_with_music_id_uses_direct_process_path() {
+        assert_eq!(super::parse_start_music_id(Some("123")), Some(123));
+        assert_eq!(super::parse_start_music_id(Some("  456  ")), Some(456));
+        assert_eq!(super::parse_start_music_id(Some("invalid")), None);
+        assert_eq!(super::parse_start_music_id(None), None);
     }
 }
 
@@ -2319,17 +2545,8 @@ async fn handle_inline_query(
     query: InlineQuery,
     state: Arc<BotState>,
 ) -> ResponseResult<()> {
-    let text = query.query.trim();
-
     // Support "search" prefix for consistency with Go version
-    let (search_keyword, is_search_cmd) = if text.to_lowercase().starts_with("search ") {
-        let keyword = text[7..].trim();
-        (keyword, true)
-    } else if text.to_lowercase().starts_with("search") {
-        ("", true)
-    } else {
-        (text, false)
-    };
+    let (search_keyword, is_search_cmd) = parse_inline_query_keyword(&query.query);
 
     if search_keyword.is_empty() {
         if is_search_cmd {

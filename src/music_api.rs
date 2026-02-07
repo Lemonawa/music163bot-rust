@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aes::Aes128;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, block_padding::Pkcs7};
@@ -16,11 +16,14 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::error::{BotError, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MusicApi {
     client: Client,
     pub music_u: Option<String>,
     base_url: String,
+    song_detail_cache: std::sync::Mutex<HashMap<u64, TimedCacheEntry<SongDetail>>>,
+    song_url_cache: std::sync::Mutex<HashMap<(u64, u64), TimedCacheEntry<SongUrl>>>,
+    song_lyric_cache: std::sync::Mutex<HashMap<u64, TimedCacheEntry<String>>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,7 +32,7 @@ pub struct SongDetailResponse {
     pub songs: Vec<SongDetail>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SongDetail {
     pub id: u64,
     pub name: String,
@@ -41,13 +44,13 @@ pub struct SongDetail {
     pub al: Option<Album>, // Album info (may be missing)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artist {
     pub id: u64,
     pub name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Album {
     pub id: u64,
     pub name: String,
@@ -61,7 +64,7 @@ pub struct SongUrlResponse {
     pub data: Vec<SongUrl>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SongUrl {
     pub id: u64,
     pub url: String,
@@ -110,6 +113,50 @@ pub struct SearchSong {
     pub artists: Vec<Artist>,
     pub album: Album,
     pub duration: u64,
+}
+
+const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
+const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
+const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone)]
+struct TimedCacheEntry<T> {
+    value: T,
+    created_at: Instant,
+    ttl: Duration,
+}
+
+impl<T> TimedCacheEntry<T> {
+    fn new(value: T, ttl: Duration) -> Self {
+        Self {
+            value,
+            created_at: Instant::now(),
+            ttl,
+        }
+    }
+
+    fn is_fresh_at(&self, now: Instant) -> bool {
+        cache_entry_is_fresh(self.created_at, self.ttl, now)
+    }
+}
+
+fn cache_entry_is_fresh(created_at: Instant, ttl: Duration, now: Instant) -> bool {
+    if let Some(expires_at) = created_at.checked_add(ttl) {
+        now < expires_at
+    } else {
+        false
+    }
+}
+
+fn song_url_cache_key(song_id: u64, br: u64) -> (u64, u64) {
+    (song_id, br)
+}
+
+fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 impl MusicApi {
@@ -162,7 +209,66 @@ impl MusicApi {
             client,
             music_u,
             base_url,
+            song_detail_cache: std::sync::Mutex::new(HashMap::new()),
+            song_url_cache: std::sync::Mutex::new(HashMap::new()),
+            song_lyric_cache: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    fn get_cached_song_detail(&self, song_id: u64) -> Option<SongDetail> {
+        let now = Instant::now();
+        let mut cache = lock_or_recover(&self.song_detail_cache);
+        if let Some(entry) = cache.get(&song_id)
+            && entry.is_fresh_at(now)
+        {
+            return Some(entry.value.clone());
+        }
+
+        cache.remove(&song_id);
+        None
+    }
+
+    fn cache_song_detail(&self, song_id: u64, detail: SongDetail) {
+        let mut cache = lock_or_recover(&self.song_detail_cache);
+        cache.insert(song_id, TimedCacheEntry::new(detail, SONG_DETAIL_CACHE_TTL));
+    }
+
+    fn get_cached_song_url(&self, song_id: u64, br: u64) -> Option<SongUrl> {
+        let key = song_url_cache_key(song_id, br);
+        let now = Instant::now();
+        let mut cache = lock_or_recover(&self.song_url_cache);
+        if let Some(entry) = cache.get(&key)
+            && entry.is_fresh_at(now)
+        {
+            return Some(entry.value.clone());
+        }
+
+        cache.remove(&key);
+        None
+    }
+
+    fn cache_song_url(&self, song_id: u64, br: u64, song_url: SongUrl) {
+        let key = song_url_cache_key(song_id, br);
+        let mut cache = lock_or_recover(&self.song_url_cache);
+        cache.insert(key, TimedCacheEntry::new(song_url, SONG_URL_CACHE_TTL));
+    }
+
+    fn get_cached_song_lyric(&self, song_id: u64) -> Option<String> {
+        let now = Instant::now();
+        let mut cache = lock_or_recover(&self.song_lyric_cache);
+        if let Some(entry) = cache.get(&song_id)
+            && entry.is_fresh_at(now)
+        {
+            return Some(entry.value.clone());
+        }
+
+        cache.remove(&song_id);
+        None
+    }
+
+    fn cache_song_lyric(&self, song_id: u64, lyric: String) {
+        let mut cache = lock_or_recover(&self.song_lyric_cache);
+        cache.insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
     }
 
     fn build_eapi_cookie(&self) -> String {
@@ -238,6 +344,10 @@ impl MusicApi {
 
     /// Get song details
     pub async fn get_song_detail(&self, song_id: u64) -> Result<SongDetail> {
+        if let Some(cached) = self.get_cached_song_detail(song_id) {
+            return Ok(cached);
+        }
+
         let url = format!("{}/api/song/detail", self.base_url);
         let mut params = HashMap::new();
         params.insert("id", song_id.to_string());
@@ -260,14 +370,22 @@ impl MusicApi {
             )));
         }
 
-        data.songs
+        let detail = data
+            .songs
             .into_iter()
             .next()
-            .ok_or_else(|| BotError::MusicApi("No song found".to_string()))
+            .ok_or_else(|| BotError::MusicApi("No song found".to_string()))?;
+
+        self.cache_song_detail(song_id, detail.clone());
+        Ok(detail)
     }
 
     /// Get song download URL
     pub async fn get_song_url(&self, song_id: u64, br: u64) -> Result<SongUrl> {
+        if let Some(cached) = self.get_cached_song_url(song_id, br) {
+            return Ok(cached);
+        }
+
         let url = format!("{}/api/song/enhance/player/url", self.base_url);
         let mut params = HashMap::new();
         params.insert("ids", format!("[{song_id}]"));
@@ -289,14 +407,22 @@ impl MusicApi {
             )));
         }
 
-        data.data
+        let song_url = data
+            .data
             .into_iter()
             .next()
-            .ok_or_else(|| BotError::MusicApi("No download URL found".to_string()))
+            .ok_or_else(|| BotError::MusicApi("No download URL found".to_string()))?;
+
+        self.cache_song_url(song_id, br, song_url.clone());
+        Ok(song_url)
     }
 
     /// Get song lyrics
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
+        if let Some(cached) = self.get_cached_song_lyric(song_id) {
+            return Ok(cached);
+        }
+
         let url = format!("{}/api/song/lyric?id={}&lv=1&tv=1", self.base_url, song_id);
 
         let mut request = self.client.get(&url);
@@ -318,6 +444,8 @@ impl MusicApi {
         let lyric = data
             .lrc
             .map_or_else(|| "No lyrics available".to_string(), |l| l.lyric);
+
+        self.cache_song_lyric(song_id, lyric.clone());
 
         Ok(lyric)
     }
@@ -522,6 +650,8 @@ pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::MusicApi;
     use super::build_http_client;
 
@@ -604,6 +734,24 @@ mod tests {
         assert!(!thumbnail.is_empty());
         assert_eq!(thumbnail[0], 0xFF);
         assert_eq!(thumbnail[1], 0xD8);
+    }
+
+    #[test]
+    fn song_url_cache_key_includes_bitrate() {
+        let low = super::song_url_cache_key(42, 128_000);
+        let high = super::song_url_cache_key(42, 320_000);
+        assert_ne!(low, high);
+    }
+
+    #[test]
+    fn cache_entry_expires_after_ttl() {
+        let created_at = std::time::Instant::now();
+        let ttl = Duration::from_secs(1);
+        let before_expire = created_at + Duration::from_millis(900);
+        let after_expire = created_at + Duration::from_secs(2);
+
+        assert!(super::cache_entry_is_fresh(created_at, ttl, before_expire));
+        assert!(!super::cache_entry_is_fresh(created_at, ttl, after_expire));
     }
 }
 

@@ -58,10 +58,31 @@ class MemoryBench:
 
 
 @dataclass
+class SingleflightBench:
+    requests: int
+    rounds: int
+    before: Stats
+    after: Stats
+    before_upstream_calls_per_round: float
+    after_upstream_calls_per_round: float
+    call_reduction_percent: float
+
+
+@dataclass
+class ApiCacheBench:
+    rounds: int
+    before: Stats
+    after: Stats
+    speedup_x: float
+
+
+@dataclass
 class Report:
     status: StatusBench
     first_download: DownloadBench
     peak_memory: MemoryBench
+    singleflight: SingleflightBench
+    api_cache: ApiCacheBench
 
 
 class SilentLatencyHandler(SimpleHTTPRequestHandler):
@@ -222,6 +243,125 @@ def bench_peak_memory(base_url: str, rounds: int) -> MemoryBench:
     )
 
 
+def bench_singleflight(
+    requests: int, rounds: int, upstream_latency_ms: float
+) -> SingleflightBench:
+    upstream_sec = max(upstream_latency_ms, 0.0) / 1000.0
+
+    def before_round() -> tuple[float, int]:
+        call_count = 0
+        counter_lock = threading.Lock()
+
+        def worker() -> None:
+            nonlocal call_count
+            for _ in range(2):
+                time.sleep(upstream_sec)
+                with counter_lock:
+                    call_count += 1
+
+        threads = [threading.Thread(target=worker) for _ in range(requests)]
+        start = time.perf_counter()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return elapsed_ms, call_count
+
+    def after_round() -> tuple[float, int]:
+        call_count = 0
+        state_lock = threading.Lock()
+        leader_ready = threading.Event()
+        leader_claimed = False
+
+        def worker() -> None:
+            nonlocal call_count, leader_claimed
+            with state_lock:
+                is_leader = not leader_claimed
+                if is_leader:
+                    leader_claimed = True
+
+            if is_leader:
+                for _ in range(2):
+                    time.sleep(upstream_sec)
+                    with state_lock:
+                        call_count += 1
+                leader_ready.set()
+            else:
+                leader_ready.wait()
+
+        threads = [threading.Thread(target=worker) for _ in range(requests)]
+        start = time.perf_counter()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return elapsed_ms, call_count
+
+    before_samples: list[float] = []
+    after_samples: list[float] = []
+    before_calls_total = 0
+    after_calls_total = 0
+
+    for _ in range(rounds):
+        elapsed_before, calls_before = before_round()
+        elapsed_after, calls_after = after_round()
+        before_samples.append(elapsed_before)
+        after_samples.append(elapsed_after)
+        before_calls_total += calls_before
+        after_calls_total += calls_after
+
+    before_calls_per_round = before_calls_total / rounds if rounds else 0.0
+    after_calls_per_round = after_calls_total / rounds if rounds else 0.0
+    reduction = (
+        (
+            (before_calls_per_round - after_calls_per_round)
+            / before_calls_per_round
+            * 100.0
+        )
+        if before_calls_per_round
+        else 0.0
+    )
+
+    return SingleflightBench(
+        requests=requests,
+        rounds=rounds,
+        before=to_stats(before_samples),
+        after=to_stats(after_samples),
+        before_upstream_calls_per_round=before_calls_per_round,
+        after_upstream_calls_per_round=after_calls_per_round,
+        call_reduction_percent=reduction,
+    )
+
+
+def bench_api_cache(rounds: int, upstream_latency_ms: float) -> ApiCacheBench:
+    upstream_sec = max(upstream_latency_ms, 0.0) / 1000.0
+    before_samples: list[float] = []
+    after_samples: list[float] = []
+
+    for _ in range(rounds):
+        start = time.perf_counter()
+        time.sleep(upstream_sec)
+        before_samples.append((time.perf_counter() - start) * 1000.0)
+
+    cache_ready = False
+    for _ in range(rounds):
+        start = time.perf_counter()
+        if cache_ready:
+            pass
+        else:
+            time.sleep(upstream_sec)
+            cache_ready = True
+        after_samples.append((time.perf_counter() - start) * 1000.0)
+
+    before = to_stats(before_samples)
+    after = to_stats(after_samples)
+    speedup = before.mean_ms / after.mean_ms if after.mean_ms else 0.0
+
+    return ApiCacheBench(rounds=rounds, before=before, after=after, speedup_x=speedup)
+
+
 def create_fixtures(root: Path, cover_mb: int, audio_mb: int) -> None:
     (root / "cover.bin").write_bytes(os.urandom(max(1, cover_mb) * 1024 * 1024))
     (root / "audio.bin").write_bytes(os.urandom(max(1, audio_mb) * 1024 * 1024))
@@ -260,7 +400,23 @@ def to_markdown(report: Report) -> str:
         "| Metric | Before | After |\n"
         "|---|---:|---:|\n"
         f"| Peak allocated memory (MB) | {report.peak_memory.before_peak_mb:.2f} | {report.peak_memory.after_peak_mb:.2f} |\n"
-        f"| Reduction (%) | - | {report.peak_memory.reduction_percent:.2f}% |\n"
+        f"| Reduction (%) | - | {report.peak_memory.reduction_percent:.2f}% |\n\n"
+        "## Singleflight Fanout Model\n\n"
+        f"Requests per round: {report.singleflight.requests}, rounds: {report.singleflight.rounds}\n\n"
+        "| Metric | Before | After |\n"
+        "|---|---:|---:|\n"
+        f"| Mean latency (ms) | {report.singleflight.before.mean_ms:.2f} | {report.singleflight.after.mean_ms:.2f} |\n"
+        f"| P95 latency (ms) | {report.singleflight.before.p95_ms:.2f} | {report.singleflight.after.p95_ms:.2f} |\n"
+        f"| Upstream calls / round | {report.singleflight.before_upstream_calls_per_round:.2f} | {report.singleflight.after_upstream_calls_per_round:.2f} |\n"
+        f"| Call reduction (%) | - | {report.singleflight.call_reduction_percent:.2f}% |\n\n"
+        "## API Cache Hit Model\n\n"
+        f"Rounds: {report.api_cache.rounds}\n\n"
+        "| Metric | Before (always miss) | After (warm cache) |\n"
+        "|---|---:|---:|\n"
+        f"| First latency (ms) | {report.api_cache.before.first_ms:.2f} | {report.api_cache.after.first_ms:.2f} |\n"
+        f"| Mean latency (ms) | {report.api_cache.before.mean_ms:.2f} | {report.api_cache.after.mean_ms:.2f} |\n"
+        f"| P95 latency (ms) | {report.api_cache.before.p95_ms:.2f} | {report.api_cache.after.p95_ms:.2f} |\n"
+        f"| Speedup | - | {report.api_cache.speedup_x:.2f}x |\n"
     )
 
 
@@ -274,6 +430,9 @@ def main() -> int:
     parser.add_argument("--query-roundtrip-us", type=int, default=150)
     parser.add_argument("--cover-mb", type=int, default=4)
     parser.add_argument("--audio-mb", type=int, default=6)
+    parser.add_argument("--singleflight-rounds", type=int, default=40)
+    parser.add_argument("--singleflight-fanout", type=int, default=20)
+    parser.add_argument("--api-cache-rounds", type=int, default=200)
     parser.add_argument("--json-output", type=Path, required=False)
     parser.add_argument("--markdown-output", type=Path, required=False)
     args = parser.parse_args()
@@ -290,12 +449,25 @@ def main() -> int:
             )
             first_download = bench_first_download(base_url, rounds=args.download_rounds)
             peak_memory = bench_peak_memory(base_url, rounds=args.memory_rounds)
+            singleflight = bench_singleflight(
+                requests=args.singleflight_fanout,
+                rounds=args.singleflight_rounds,
+                upstream_latency_ms=args.latency_ms,
+            )
+            api_cache = bench_api_cache(
+                rounds=args.api_cache_rounds,
+                upstream_latency_ms=args.latency_ms,
+            )
         finally:
             server.shutdown()
             server.server_close()
 
     report = Report(
-        status=status, first_download=first_download, peak_memory=peak_memory
+        status=status,
+        first_download=first_download,
+        peak_memory=peak_memory,
+        singleflight=singleflight,
+        api_cache=api_cache,
     )
     payload = asdict(report)
 
