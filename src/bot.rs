@@ -898,7 +898,7 @@ async fn download_and_send_music(
 
         let mut stream = response.bytes_stream();
         let downloaded = if audio_buffer.is_disk() {
-            let stream = stream.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
+            let stream = stream.map_err(std::io::Error::other);
             let mut reader = StreamReader::new(stream);
             let file = audio_buffer
                 .disk_file_mut()
@@ -1311,7 +1311,7 @@ async fn apply_tags_in_blocking(
 ) -> Result<AudioBuffer> {
     tokio::task::spawn_blocking(move || {
         let embed_artwork = if embed_cover {
-            artwork_data.as_ref().map(|data| data.as_ref())
+            artwork_data.as_ref().map(std::convert::AsRef::as_ref)
         } else {
             None
         };
