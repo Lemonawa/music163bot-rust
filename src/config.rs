@@ -6,10 +6,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// Storage mode for temporary files during download processing
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageMode {
     /// Traditional disk file storage (stable, low memory, compatible with all scenarios)
+    #[default]
     Disk,
     /// In-memory processing (faster, reduces disk I/O, requires sufficient RAM)
     Memory,
@@ -18,21 +19,16 @@ pub enum StorageMode {
 }
 
 /// Cover art handling mode for downloads
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CoverMode {
     /// Only download a thumbnail for Telegram display
+    #[default]
     Thumbnail,
     /// Only download original cover art for embedding
     Original,
     /// Download both original and thumbnail (legacy behavior)
     Both,
-}
-
-impl Default for CoverMode {
-    fn default() -> Self {
-        Self::Thumbnail
-    }
 }
 
 impl std::str::FromStr for CoverMode {
@@ -45,12 +41,6 @@ impl std::str::FromStr for CoverMode {
             "both" => Ok(Self::Both),
             _ => Err(anyhow::anyhow!("Invalid cover mode: {s}")),
         }
-    }
-}
-
-impl Default for StorageMode {
-    fn default() -> Self {
-        Self::Disk // Backward compatible default
     }
 }
 
@@ -77,19 +67,14 @@ impl std::fmt::Display for StorageMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum UploadLogLevel {
     None,
     Error,
     Warning,
+    #[default]
     Info,
     Debug,
-}
-
-impl Default for UploadLogLevel {
-    fn default() -> Self {
-        Self::Info
-    }
 }
 
 impl std::str::FromStr for UploadLogLevel {

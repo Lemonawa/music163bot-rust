@@ -257,6 +257,17 @@ impl AudioBuffer {
         }
     }
 
+    /// Get the current size without async I/O.
+    /// For disk mode uses blocking `std::fs::metadata` — only call from
+    /// contexts where a brief blocking stat is acceptable (e.g. after
+    /// `spawn_blocking` tag processing has just written the file).
+    pub fn size_fast(&self) -> u64 {
+        match self {
+            Self::Disk { path, .. } => std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+            Self::Memory { data, .. } => data.len() as u64,
+        }
+    }
+
     /// Check if this is a memory-based buffer
     pub fn is_memory(&self) -> bool {
         matches!(self, Self::Memory { .. })

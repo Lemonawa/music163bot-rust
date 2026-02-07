@@ -1126,21 +1126,28 @@ async fn download_and_send_music(
     tracing::info!("File validation passed: {} bytes", downloaded);
 
     // 封面处理：使用原始高分辨率图片嵌入文件，缩略图用于Telegram显示
+    // Overlap tag processing with upload client/permit acquisition — they are independent.
     let tags_start = std::time::Instant::now();
     tracing::info!("Processing tags for {} format", file_ext);
-    audio_buffer = apply_tags_in_blocking(
-        audio_buffer,
-        file_ext.to_string(),
-        song_detail.clone(),
-        original_artwork_data,
-        cover_policy.embed_cover,
-    )
-    .await?;
+    let (tag_result, upload_client_result, upload_permit_result) = tokio::join!(
+        apply_tags_in_blocking(
+            audio_buffer,
+            file_ext.to_string(),
+            song_detail.clone(),
+            original_artwork_data,
+            cover_policy.embed_cover,
+        ),
+        acquire_upload_client(state),
+        acquire_upload_permit(&state.upload_semaphore),
+    );
+    audio_buffer = tag_result?;
+    let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
+    let _upload_permit = upload_permit_result?;
 
     tracing::info!("{}", format_perf("process_tags", tags_start.elapsed()));
 
-    // Get file size for database and logging (async to avoid blocking)
-    let file_size = audio_buffer.size().await;
+    // Get file size for database and logging
+    let file_size = audio_buffer.size_fast();
     let audio_file_size = file_size as i64;
     let duration_sec = (song_detail.dt.unwrap_or(0) / 1000) as i64;
 
@@ -1230,12 +1237,6 @@ async fn download_and_send_music(
         }
     );
 
-    // Bound upload concurrency to keep tail latency and memory stable under burst traffic.
-    let _upload_permit = acquire_upload_permit(&state.upload_semaphore).await?;
-
-    // Acquire upload client with minimal lock contention.
-    let (_upload_bot, raw_client, api_base_url) = acquire_upload_client(state).await?;
-
     tracing::info!(
         "{}",
         format_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_start.elapsed())
@@ -1255,6 +1256,13 @@ async fn download_and_send_music(
 
     // Serialize reply_markup once for reuse across attempts
     let reply_markup_json = serde_json::to_string(&keyboard).ok();
+
+    // Pre-convert memory audio data to Bytes (refcounted) so retry loops
+    // only pay an atomic-increment clone, not a full memcpy.
+    let audio_bytes: Option<Bytes> = match &audio_buffer {
+        AudioBuffer::Memory { data, .. } => Some(Bytes::from(data.clone())),
+        AudioBuffer::Disk { .. } => None,
+    };
 
     // Try sending as audio first, then fallback to document if audio upload fails.
     let in_flight = state
@@ -1306,6 +1314,7 @@ async fn download_and_send_music(
             &api_base_url,
             method,
             &audio_buffer,
+            audio_bytes.as_ref(),
             file_size,
             &params,
         )
@@ -1671,6 +1680,7 @@ async fn raw_send_file(
     api_base_url: &str,
     method: &str,
     audio_buffer: &AudioBuffer,
+    audio_bytes: Option<&Bytes>,
     file_size: u64,
     params: &RawUploadParams<'_>,
 ) -> Result<serde_json::Value> {
@@ -1684,22 +1694,24 @@ async fn raw_send_file(
     let mime_type = mime_for_filename(&filename);
 
     // Build the file part with known length for Content-Length header
-    let file_part = match audio_buffer {
-        AudioBuffer::Memory { data, .. } => {
-            reqwest::multipart::Part::stream_with_length(Bytes::from(data.clone()), file_size)
-                .file_name(filename.clone())
-                .mime_str(mime_type)?
-        }
-        AudioBuffer::Disk { path, .. } => {
-            let file = tokio::fs::File::open(path).await.map_err(|e| {
-                BotError::Other(anyhow::anyhow!("Failed to open file for upload: {e}"))
-            })?;
-            let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
-            let body = reqwest::Body::wrap_stream(stream);
-            reqwest::multipart::Part::stream_with_length(body, file_size)
-                .file_name(filename.clone())
-                .mime_str(mime_type)?
-        }
+    let file_part = if let Some(bytes) = audio_bytes {
+        // Memory mode: Bytes::clone() is O(1) — atomic refcount, no memcpy
+        reqwest::multipart::Part::stream_with_length(bytes.clone(), file_size)
+            .file_name(filename.clone())
+            .mime_str(mime_type)?
+    } else if let AudioBuffer::Disk { path, .. } = audio_buffer {
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to open file for upload: {e}")))?;
+        let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+        let body = reqwest::Body::wrap_stream(stream);
+        reqwest::multipart::Part::stream_with_length(body, file_size)
+            .file_name(filename.clone())
+            .mime_str(mime_type)?
+    } else {
+        return Err(BotError::Other(anyhow::anyhow!(
+            "Memory buffer without pre-shared Bytes"
+        )));
     };
 
     let mut form = reqwest::multipart::Form::new()
@@ -1741,15 +1753,17 @@ async fn raw_send_file(
                     .mime_str("image/jpeg")?
             }
             ThumbnailBuffer::Disk { path } => {
-                let meta = tokio::fs::metadata(path).await.map_err(|e| {
-                    BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}"))
-                })?;
                 let file = tokio::fs::File::open(path).await.map_err(|e| {
                     BotError::Other(anyhow::anyhow!("Failed to open thumbnail: {e}"))
                 })?;
+                let len = file
+                    .metadata()
+                    .await
+                    .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}")))?
+                    .len();
                 let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
                 let body = reqwest::Body::wrap_stream(stream);
-                reqwest::multipart::Part::stream_with_length(body, meta.len())
+                reqwest::multipart::Part::stream_with_length(body, len)
                     .file_name("thumb.jpg")
                     .mime_str("image/jpeg")?
             }
