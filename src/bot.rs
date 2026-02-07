@@ -1671,6 +1671,7 @@ fn build_upload_bot(config: &Config) -> Result<Bot> {
         .use_rustls_tls()
         .timeout(std::time::Duration::from_secs(config.upload_timeout_secs))
         .pool_max_idle_per_host(config.upload_pool_max_idle_per_host)
+        .tcp_nodelay(true)
         .no_gzip()
         .user_agent("Go-http-client/2.0")
         .default_headers(reqwest::header::HeaderMap::new());
