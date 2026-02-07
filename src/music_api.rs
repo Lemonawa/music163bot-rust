@@ -823,7 +823,14 @@ impl MusicApi {
 
         let response = request.send().await?.error_for_status()?;
         let payload: serde_json::Value = response.json().await?;
-        parse_batch_detail_and_url(&payload)
+        let result = parse_batch_detail_and_url(&payload);
+        if result.is_err() {
+            // One-shot diagnostic: log the payload's top-level structure (keys only, no values)
+            // so we can see what the API actually returns and fix the parser.
+            let shape = describe_payload_shape(&payload);
+            tracing::warn!("Batch parse failed for music_id {song_id}. Payload shape: {shape}");
+        }
+        result
     }
 }
 
@@ -914,6 +921,34 @@ fn find_batch_section<'a>(
                 .get("body")
                 .filter(|body| section_matches_shape(body))
         })
+}
+
+/// Describe the shape of a JSON value (keys and types, no actual values) for diagnostics.
+fn describe_payload_shape(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let entries: Vec<String> = map
+                .iter()
+                .map(|(k, v)| {
+                    let child = match v {
+                        serde_json::Value::Object(inner) => {
+                            let keys: Vec<&str> = inner.keys().map(String::as_str).collect();
+                            format!("obj{{{}}}", keys.join(","))
+                        }
+                        serde_json::Value::Array(arr) => format!("arr[{}]", arr.len()),
+                        serde_json::Value::String(_) => "str".to_string(),
+                        serde_json::Value::Number(_) => "num".to_string(),
+                        serde_json::Value::Bool(_) => "bool".to_string(),
+                        serde_json::Value::Null => "null".to_string(),
+                    };
+                    format!("{k}:{child}")
+                })
+                .collect();
+            format!("{{{}}}", entries.join(", "))
+        }
+        serde_json::Value::Array(arr) => format!("arr[{}]", arr.len()),
+        other => format!("{other}"),
+    }
 }
 
 fn merge_code_into_body(section: &serde_json::Value) -> Option<serde_json::Value> {
