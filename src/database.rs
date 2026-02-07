@@ -239,18 +239,11 @@ impl Database {
 
     /// Count status metrics in one query: total songs, songs from user, songs from chat
     pub async fn count_status_stats(&self, user_id: i64, chat_id: i64) -> Result<(i64, i64, i64)> {
-        let row = sqlx::query(
-            r"
-            SELECT
-                (SELECT COUNT(*) FROM song_infos) AS total_count,
-                (SELECT COUNT(*) FROM song_infos WHERE from_user_id = ?) AS user_count,
-                (SELECT COUNT(*) FROM song_infos WHERE from_chat_id = ?) AS chat_count
-            ",
-        )
-        .bind(user_id)
-        .bind(chat_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let row = sqlx::query(status_stats_query_sql())
+            .bind(user_id)
+            .bind(chat_id)
+            .fetch_one(&self.pool)
+            .await?;
 
         Ok((
             row.get("total_count"),
@@ -301,11 +294,28 @@ impl Database {
     }
 }
 
+fn status_stats_query_sql() -> &'static str {
+    r"
+    SELECT
+        COUNT(*) AS total_count,
+        COALESCE(SUM(CASE WHEN from_user_id = ? THEN 1 ELSE 0 END), 0) AS user_count,
+        COALESCE(SUM(CASE WHEN from_chat_id = ? THEN 1 ELSE 0 END), 0) AS chat_count
+    FROM song_infos
+    "
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{Database, SongInfo};
+
+    #[test]
+    fn status_stats_query_uses_single_scan_aggregation() {
+        let sql = super::status_stats_query_sql();
+        assert!(!sql.contains("(SELECT COUNT(*)"));
+        assert!(sql.contains("SUM(CASE"));
+    }
 
     #[tokio::test]
     async fn status_counts_returns_total_user_and_chat_counts() {

@@ -152,6 +152,24 @@ fn song_url_cache_key(song_id: u64, br: u64) -> (u64, u64) {
     (song_id, br)
 }
 
+fn fallback_bitrate_candidates(
+    bitrate_candidates: &[u64],
+    primary_attempted_unavailable: bool,
+) -> &[u64] {
+    if primary_attempted_unavailable {
+        bitrate_candidates
+            .split_first()
+            .map_or(bitrate_candidates, |(_, tail)| tail)
+    } else {
+        bitrate_candidates
+    }
+}
+
+#[must_use]
+fn should_retry_primary_after_fallback(primary_attempted_unavailable: bool) -> bool {
+    primary_attempted_unavailable
+}
+
 fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -441,6 +459,7 @@ impl MusicApi {
         }
 
         let mut primary_url = self.get_cached_song_url(song_id, primary_bitrate);
+        let mut primary_attempted_unavailable = false;
 
         // Fetch detail and primary URL in parallel when either is missing
         if cached_detail.is_none() || primary_url.is_none() {
@@ -471,12 +490,18 @@ impl MusicApi {
             if let Some(result) = url_result {
                 match result {
                     Ok(song_url) if !song_url.url.is_empty() => primary_url = Some(song_url),
-                    Ok(_) => tracing::info!(
-                        "Primary bitrate {primary_bitrate} returned empty URL for music_id {song_id}"
-                    ),
-                    Err(e) => tracing::warn!(
-                        "Primary bitrate {primary_bitrate} request failed for music_id {song_id}: {e}"
-                    ),
+                    Ok(_) => {
+                        primary_attempted_unavailable = true;
+                        tracing::info!(
+                            "Primary bitrate {primary_bitrate} returned empty URL for music_id {song_id}"
+                        );
+                    }
+                    Err(e) => {
+                        primary_attempted_unavailable = true;
+                        tracing::warn!(
+                            "Primary bitrate {primary_bitrate} request failed for music_id {song_id}: {e}"
+                        );
+                    }
                 }
             }
 
@@ -492,8 +517,10 @@ impl MusicApi {
 
         let mut last_error = None;
         let mut fallback_url_start = None;
-        for (index, &bitrate) in bitrate_candidates.iter().enumerate() {
-            let fetched_url = if index == 0 {
+        for &bitrate in
+            fallback_bitrate_candidates(bitrate_candidates, primary_attempted_unavailable)
+        {
+            let fetched_url = if bitrate == primary_bitrate {
                 if let Some(song_url) = primary_url.take() {
                     Ok(song_url)
                 } else {
@@ -533,6 +560,24 @@ impl MusicApi {
 
         if let Some(start) = fallback_url_start {
             tracing::info!("[fallback_url] {}ms", start.elapsed().as_millis());
+        }
+
+        if should_retry_primary_after_fallback(primary_attempted_unavailable) {
+            tracing::info!(
+                "Retrying primary bitrate {primary_bitrate} after fallback attempts for music_id {song_id}"
+            );
+            match self.get_song_url(song_id, primary_bitrate).await {
+                Ok(song_url) if !song_url.url.is_empty() => return Ok((detail, song_url)),
+                Ok(_) => tracing::info!(
+                    "Primary bitrate {primary_bitrate} retry returned empty URL for music_id {song_id}"
+                ),
+                Err(e) => {
+                    tracing::warn!(
+                        "Primary bitrate {primary_bitrate} retry failed for music_id {song_id}: {e}"
+                    );
+                    last_error = Some(e);
+                }
+            }
         }
 
         if let Some(e) = last_error {
@@ -699,13 +744,11 @@ impl MusicApi {
         }
 
         let bytes = response.bytes().await?;
-        let bytes_vec = bytes.to_vec();
 
         // Process image in spawn_blocking to avoid blocking async runtime
-        let processed =
-            tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes_vec))
-                .await
-                .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
+        let processed = tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes))
+            .await
+            .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
 
         Ok(processed)
     }
@@ -888,6 +931,30 @@ mod tests {
         let low = super::song_url_cache_key(42, 128_000);
         let high = super::song_url_cache_key(42, 320_000);
         assert_ne!(low, high);
+    }
+
+    #[test]
+    fn fallback_candidates_skip_primary_after_attempt() {
+        let candidates = [320_000, 192_000, 128_000];
+        let fallback = super::fallback_bitrate_candidates(&candidates, true);
+        assert_eq!(fallback, &[192_000, 128_000]);
+    }
+
+    #[test]
+    fn fallback_candidates_keep_primary_when_not_attempted() {
+        let candidates = [320_000, 192_000, 128_000];
+        let fallback = super::fallback_bitrate_candidates(&candidates, false);
+        assert_eq!(fallback, &[320_000, 192_000, 128_000]);
+    }
+
+    #[test]
+    fn should_retry_primary_after_fallback_when_primary_was_attempted_unavailable() {
+        assert!(super::should_retry_primary_after_fallback(true));
+    }
+
+    #[test]
+    fn should_not_retry_primary_after_fallback_when_primary_was_not_attempted() {
+        assert!(!super::should_retry_primary_after_fallback(false));
     }
 
     #[test]

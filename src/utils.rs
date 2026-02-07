@@ -14,10 +14,51 @@ static SHARE_LINK_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|
 static NUMBER_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"\d+").unwrap());
 
+fn parse_direct_numeric_id(text: &str) -> Option<u64> {
+    text.trim().parse::<u64>().ok()
+}
+
+fn extract_music_id_from_canonical_song_url(text: &str) -> Option<u64> {
+    let trimmed = text.trim();
+    let is_music_domain = trimmed.starts_with("https://music.163.com/")
+        || trimmed.starts_with("http://music.163.com/");
+    let is_song_url = trimmed.contains("/song?") || trimmed.contains("/#/song?");
+    if !is_music_domain || !is_song_url {
+        return None;
+    }
+
+    let query_start = trimmed.find('?')? + 1;
+    let query = &trimmed[query_start..];
+
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+
+        if key != "id" {
+            continue;
+        }
+
+        let id_len = value.bytes().take_while(u8::is_ascii_digit).count();
+        if id_len == 0 {
+            return None;
+        }
+
+        return value[..id_len].parse::<u64>().ok();
+    }
+
+    None
+}
+
 /// Extract music ID from text
 pub fn parse_music_id(text: &str) -> Option<u64> {
-    // 优化：直接对原始 text 使用正则，避免创建新 String
-    // SONG_REGEX 和 SHARE_LINK_REGEX 都能正确处理包含空白的字符串
+    if let Some(id) = parse_direct_numeric_id(text) {
+        return Some(id);
+    }
+
+    if let Some(id) = extract_music_id_from_canonical_song_url(text) {
+        return Some(id);
+    }
 
     // Try to extract from URL
     if let Some(captures) = SONG_REGEX.captures(text)
@@ -34,12 +75,6 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
         return id_match.as_str().parse().ok();
     }
 
-    // Try to parse as direct number (only if the entire text is a number)
-    // 去除空白后再检查是否为纯数字
-    let trimmed = text.trim();
-    if let Ok(id) = trimmed.parse::<u64>() {
-        return Some(id);
-    }
     None
 }
 
@@ -150,6 +185,37 @@ mod tests {
     use std::time::Duration;
 
     use super::{ensure_dir, parse_music_id, throughput_mbps, update_peak};
+
+    #[test]
+    fn parse_music_id_fast_path_detects_direct_numeric() {
+        assert_eq!(super::parse_direct_numeric_id("123456"), Some(123_456));
+        assert_eq!(super::parse_direct_numeric_id("  123456  "), Some(123_456));
+        assert_eq!(super::parse_direct_numeric_id("abc123"), None);
+    }
+
+    #[test]
+    fn parse_music_id_fast_path_handles_canonical_song_url() {
+        assert_eq!(
+            super::extract_music_id_from_canonical_song_url("https://music.163.com/song?id=424242"),
+            Some(424_242)
+        );
+        assert_eq!(
+            super::extract_music_id_from_canonical_song_url(
+                "https://music.163.com/#/song?id=424242&foo=bar"
+            ),
+            Some(424_242)
+        );
+        assert_eq!(
+            super::extract_music_id_from_canonical_song_url("https://example.com/song?id=424242"),
+            None
+        );
+        assert_eq!(
+            super::extract_music_id_from_canonical_song_url(
+                "https://music.163.com/song?userid=123&id=424242"
+            ),
+            Some(424_242)
+        );
+    }
 
     #[test]
     fn throughput_mbps_calculates_expected_value() {

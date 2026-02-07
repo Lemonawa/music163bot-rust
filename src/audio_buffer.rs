@@ -604,6 +604,15 @@ impl AudioBuffer {
         }
     }
 
+    /// Move memory-mode bytes out for upload without copying.
+    #[must_use]
+    pub fn take_memory_bytes_for_upload(&mut self) -> Option<Bytes> {
+        match self {
+            Self::Memory { data, .. } => Some(Bytes::from(std::mem::take(data))),
+            Self::Disk { .. } => None,
+        }
+    }
+
     /// Get raw data (for memory mode) or read from disk
     pub async fn get_data(&self) -> Result<Vec<u8>> {
         match self {
@@ -747,6 +756,48 @@ async fn remove_file_if_exists(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn sample_song_detail() -> SongDetail {
+        SongDetail {
+            id: 7,
+            name: "Sample Song".to_string(),
+            dt: Some(123_000),
+            ar: Some(vec![crate::music_api::Artist {
+                id: 1,
+                name: "Artist".to_string(),
+            }]),
+            al: Some(crate::music_api::Album {
+                id: 1,
+                name: "Album".to_string(),
+                pic_url: None,
+            }),
+        }
+    }
+
+    fn sample_cover_jpeg() -> Vec<u8> {
+        let mut image = image::RgbImage::new(2, 2);
+        for pixel in image.pixels_mut() {
+            *pixel = image::Rgb([10, 20, 30]);
+        }
+
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut out),
+                image::ImageFormat::Jpeg,
+            )
+            .expect("encode jpeg");
+        out
+    }
+
+    fn sample_flac_bytes() -> Vec<u8> {
+        let mut flac_data = b"fLaC".to_vec();
+        flac_data.push(0x80);
+        flac_data.extend_from_slice(&[0x00, 0x00, 0x22]);
+        flac_data.extend_from_slice(&[0u8; 34]);
+        flac_data.extend_from_slice(b"AUDIO_FRAMES");
+        flac_data
+    }
+
     #[test]
     fn test_find_flac_audio_start() {
         // Minimal FLAC with just streaminfo block (is_last=true)
@@ -826,5 +877,143 @@ mod tests {
         let data = bytes::Bytes::from_static(b"abc");
         let buf = ThumbnailBuffer::from_bytes(data.clone());
         assert_eq!(buf.get_data().await.unwrap_or_default(), b"abc");
+    }
+
+    #[test]
+    fn mp3_tagging_is_byte_identical_for_same_input() {
+        let detail = sample_song_detail();
+        let cover = sample_cover_jpeg();
+        let mut first = AudioBuffer::Memory {
+            data: vec![0xFF, 0xFB, 0x90, 0x64],
+            filename: "a.mp3".to_string(),
+            capacity: 4,
+        };
+        let mut second = AudioBuffer::Memory {
+            data: vec![0xFF, 0xFB, 0x90, 0x64],
+            filename: "b.mp3".to_string(),
+            capacity: 4,
+        };
+
+        first
+            .add_id3_tags(&detail, Some(&cover))
+            .expect("first mp3 tagging");
+        second
+            .add_id3_tags(&detail, Some(&cover))
+            .expect("second mp3 tagging");
+
+        let first_data = match first {
+            AudioBuffer::Memory { data, .. } => data,
+            AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
+        };
+        let second_data = match second {
+            AudioBuffer::Memory { data, .. } => data,
+            AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
+        };
+
+        assert_eq!(first_data, second_data);
+    }
+
+    #[test]
+    fn flac_tagging_keeps_equivalent_metadata_and_audio_payload() {
+        let detail = sample_song_detail();
+        let cover = sample_cover_jpeg();
+        let source = sample_flac_bytes();
+        let mut first = AudioBuffer::Memory {
+            data: source.clone(),
+            filename: "a.flac".to_string(),
+            capacity: source.len(),
+        };
+        let mut second = AudioBuffer::Memory {
+            data: source,
+            filename: "b.flac".to_string(),
+            capacity: 0,
+        };
+
+        first
+            .add_flac_metadata(&detail, Some(&cover))
+            .expect("first flac tagging");
+        second
+            .add_flac_metadata(&detail, Some(&cover))
+            .expect("second flac tagging");
+
+        let first_data = match first {
+            AudioBuffer::Memory { data, .. } => data,
+            AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
+        };
+        let second_data = match second {
+            AudioBuffer::Memory { data, .. } => data,
+            AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
+        };
+
+        let mut first_cursor = std::io::Cursor::new(first_data.as_slice());
+        let first_tag = metaflac::Tag::read_from(&mut first_cursor).expect("parse first flac tag");
+        let mut second_cursor = std::io::Cursor::new(second_data.as_slice());
+        let second_tag =
+            metaflac::Tag::read_from(&mut second_cursor).expect("parse second flac tag");
+
+        let collect_values = |tag: &metaflac::Tag, key: &str| {
+            tag.get_vorbis(key).map(|iter| {
+                iter.map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        assert_eq!(
+            collect_values(&first_tag, "TITLE"),
+            collect_values(&second_tag, "TITLE")
+        );
+        assert_eq!(
+            collect_values(&first_tag, "ALBUM"),
+            collect_values(&second_tag, "ALBUM")
+        );
+        assert_eq!(
+            collect_values(&first_tag, "ARTIST"),
+            collect_values(&second_tag, "ARTIST")
+        );
+
+        let first_cover = first_tag
+            .pictures()
+            .find(|pic| pic.picture_type == metaflac::block::PictureType::CoverFront)
+            .map(|pic| pic.data.clone())
+            .expect("first cover picture");
+        let second_cover = second_tag
+            .pictures()
+            .find(|pic| pic.picture_type == metaflac::block::PictureType::CoverFront)
+            .map(|pic| pic.data.clone())
+            .expect("second cover picture");
+        assert_eq!(first_cover, second_cover);
+
+        let first_audio_start =
+            AudioBuffer::find_flac_audio_start(&first_data).expect("first audio start");
+        let second_audio_start =
+            AudioBuffer::find_flac_audio_start(&second_data).expect("second audio start");
+        assert_eq!(&first_data[first_audio_start..], b"AUDIO_FRAMES");
+        assert_eq!(&second_data[second_audio_start..], b"AUDIO_FRAMES");
+    }
+
+    #[test]
+    fn memory_buffer_take_bytes_moves_data_without_copy() {
+        let mut buffer = AudioBuffer::Memory {
+            data: vec![1, 2, 3, 4, 5],
+            filename: "sample.mp3".to_string(),
+            capacity: 5,
+        };
+
+        let original_ptr = match &buffer {
+            AudioBuffer::Memory { data, .. } => data.as_ptr(),
+            AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
+        };
+
+        let bytes = buffer
+            .take_memory_bytes_for_upload()
+            .expect("memory buffer should produce bytes");
+
+        assert_eq!(bytes.as_ptr(), original_ptr);
+        assert_eq!(bytes.as_ref(), &[1, 2, 3, 4, 5]);
+
+        match buffer {
+            AudioBuffer::Memory { ref data, .. } => assert!(data.is_empty()),
+            AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
+        }
     }
 }

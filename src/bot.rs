@@ -67,12 +67,6 @@ pub enum MaintenanceSignal {
     ReleaseMemory,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UploadMode {
-    Audio,
-    Document,
-}
-
 #[derive(Debug, Default)]
 struct InflightDownloads {
     entries: std::sync::Mutex<HashMap<u64, Arc<InflightEntry>>>,
@@ -754,10 +748,7 @@ async fn process_music(
     )
     .await
     {
-        Ok(()) => {
-            // Delete status message
-            bot.delete_message(msg.chat.id, status_msg.id).await.ok();
-        }
+        Ok(()) => {}
         Err(e) => {
             bot.edit_message_text(msg.chat.id, status_msg.id, format!("❌ 处理失败: {e}"))
                 .await?;
@@ -776,8 +767,6 @@ async fn download_and_send_music(
     status_msg: &Message,
     pre_upload_path_start: std::time::Instant,
 ) -> Result<()> {
-    let _permit = acquire_download_permit(&state.download_semaphore).await?;
-
     // Determine file extension
     let file_ext = if song_url.url.contains(".flac") {
         "flac"
@@ -872,6 +861,7 @@ async fn download_and_send_music(
 
     // Download audio file using smart storage
     let audio_future = async {
+        let _download_permit = acquire_download_permit(&state.download_semaphore).await?;
         let download_start = std::time::Instant::now();
         let response = state.music_api.download_file(&song_url.url).await?;
 
@@ -908,29 +898,11 @@ async fn download_and_send_music(
                 .context("Failed to stream download to disk")?
         } else {
             let mut downloaded = 0u64;
-            let chunk_size = state.config.download_chunk_size_kb * 1024;
-            let mut buffer = Vec::with_capacity(chunk_size);
-
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk?;
                 downloaded += chunk.len() as u64;
 
-                if buffer.len() + chunk.len() > chunk_size {
-                    if !buffer.is_empty() {
-                        audio_buffer.write_chunk(&buffer).await?;
-                        buffer.clear();
-                    }
-                    if chunk.len() >= chunk_size {
-                        audio_buffer.write_chunk(&chunk).await?;
-                    } else {
-                        buffer.extend_from_slice(&chunk);
-                    }
-                } else {
-                    buffer.extend_from_slice(&chunk);
-                }
-            }
-            if !buffer.is_empty() {
-                audio_buffer.write_chunk(&buffer).await?;
+                audio_buffer.write_chunk(&chunk).await?;
             }
             downloaded
         };
@@ -1010,7 +982,7 @@ async fn download_and_send_music(
     // Overlap tag processing with upload client/permit acquisition — they are independent.
     let tags_start = std::time::Instant::now();
     tracing::info!("Processing tags for {} format", file_ext);
-    let (tag_result, upload_client_result, upload_permit_result) = tokio::join!(
+    let (tag_result, upload_client_result) = tokio::join!(
         apply_tags_in_blocking(
             audio_buffer,
             file_ext.to_string(),
@@ -1019,16 +991,15 @@ async fn download_and_send_music(
             cover_policy.embed_cover,
         ),
         acquire_upload_client(state),
-        acquire_upload_permit(&state.upload_semaphore),
     );
     audio_buffer = tag_result?;
     let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
-    let _upload_permit = upload_permit_result?;
+    let _upload_permit = acquire_upload_permit(&state.upload_semaphore).await?;
 
     tracing::info!("{}", format_perf("process_tags", tags_start.elapsed()));
 
     // Get file size for database and logging
-    let file_size = audio_buffer.size_fast();
+    let file_size = audio_buffer.size().await;
     let audio_file_size = file_size as i64;
     let duration_sec = (song_detail.dt.unwrap_or(0) / 1000) as i64;
 
@@ -1130,7 +1101,7 @@ async fn download_and_send_music(
         file_size as f64 / 1024.0 / 1024.0
     );
 
-    // Simple approach: try sending as audio first, fallback to document if needed
+    // Simple approach: send as audio only
     let is_flac = file_ext == "flac";
 
     tracing::info!("File format: {}", if is_flac { "FLAC" } else { "MP3" });
@@ -1138,14 +1109,10 @@ async fn download_and_send_music(
     // Serialize reply_markup once for reuse across attempts
     let reply_markup_json = serde_json::to_string(&keyboard).ok();
 
-    // Pre-convert memory audio data to Bytes (refcounted) so retry loops
-    // only pay an atomic-increment clone, not a full memcpy.
-    let audio_bytes: Option<Bytes> = match &audio_buffer {
-        AudioBuffer::Memory { data, .. } => Some(Bytes::from(data.clone())),
-        AudioBuffer::Disk { .. } => None,
-    };
+    // Move memory audio data to Bytes for upload without copying the full buffer.
+    let audio_bytes = audio_buffer.take_memory_bytes_for_upload();
 
-    // Try sending as audio first, then fallback to document if audio upload fails.
+    // Send as audio only.
     let in_flight = state
         .upload_counters
         .in_flight
@@ -1153,70 +1120,26 @@ async fn download_and_send_music(
         + 1;
     let peak_in_flight = update_peak(&state.upload_counters.peak_in_flight, in_flight);
     let upload_start = std::time::Instant::now();
-    let mut mode = UploadMode::Audio;
-    let mut upload_response = None;
-    let mut last_error: Option<BotError> = None;
+    let params = RawUploadParams {
+        chat_id: msg.chat.id.0,
+        caption: &caption,
+        reply_to_message_id: msg.id.0,
+        reply_markup_json: reply_markup_json.clone(),
+        title: Some(&song_info.song_name),
+        performer: Some(&song_info.song_artists),
+        duration: Some(song_info.duration as u32),
+        thumbnail: thumbnail_buffer.as_ref(),
+    };
 
-    loop {
-        let method = match mode {
-            UploadMode::Audio => "sendAudio",
-            UploadMode::Document => "sendDocument",
-        };
-
-        let params = RawUploadParams {
-            chat_id: msg.chat.id.0,
-            caption: &caption,
-            reply_to_message_id: msg.id.0,
-            reply_markup_json: reply_markup_json.clone(),
-            title: if mode == UploadMode::Audio {
-                Some(&song_info.song_name)
-            } else {
-                None
-            },
-            performer: if mode == UploadMode::Audio {
-                Some(&song_info.song_artists)
-            } else {
-                None
-            },
-            duration: if mode == UploadMode::Audio {
-                Some(song_info.duration as u32)
-            } else {
-                None
-            },
-            thumbnail: if mode == UploadMode::Audio {
-                thumbnail_buffer.as_ref()
-            } else {
-                None
-            },
-        };
-
-        match raw_send_file(
-            &raw_client,
-            &api_base_url,
-            method,
-            &audio_buffer,
-            audio_bytes.as_ref(),
-            file_size,
-            &params,
-        )
-        .await
-        {
-            Ok(json) => {
-                upload_response = Some(json);
-                break;
-            }
-            Err(e) => {
-                tracing::warn!("Upload attempt in mode {:?} failed: {}", mode, e);
-                last_error = Some(e);
-                if let Some(next_mode) = next_upload_mode(mode, false) {
-                    tracing::warn!("Audio send failed, retrying as document");
-                    mode = next_mode;
-                    continue;
-                }
-                break;
-            }
-        }
-    }
+    let upload_result = raw_send_file(
+        &raw_client,
+        &api_base_url,
+        &audio_buffer,
+        audio_bytes.as_ref(),
+        file_size,
+        &params,
+    )
+    .await;
 
     let upload_duration = upload_start.elapsed();
     let in_flight_after = state
@@ -1226,7 +1149,7 @@ async fn download_and_send_music(
         - 1;
     tracing::info!("{}", format_perf("upload_audio", upload_duration));
 
-    if let Some(ref resp_json) = upload_response {
+    if let Ok(ref resp_json) = upload_result {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
         tracing::info!(
             "Upload completed in {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
@@ -1235,31 +1158,17 @@ async fn download_and_send_music(
             in_flight_after,
             peak_in_flight
         );
-        tracing::info!("Upload completed in mode: {:?}", mode);
-        if mode == UploadMode::Audio {
-            tracing::info!(
-                "Successfully sent as audio: {}",
-                if is_flac { "FLAC" } else { "MP3" }
-            );
-        } else {
-            tracing::info!("Fallback document upload succeeded");
-        }
+        tracing::info!(
+            "Successfully sent as audio: {}",
+            if is_flac { "FLAC" } else { "MP3" }
+        );
 
         // Extract file_id from raw API response
-        if let Some(file_id) = extract_file_id_from_response(resp_json, mode) {
+        if let Some(file_id) = extract_file_id_from_response(resp_json) {
             song_info.file_id = Some(file_id);
         }
     } else {
-        let Some(e) = last_error else {
-            tracing::error!("Upload failed without error details");
-            audio_buffer.cleanup().await.ok();
-            if let Some(thumb_buf) = thumbnail_buffer {
-                thumb_buf.cleanup().await.ok();
-            }
-            return Err(BotError::Other(anyhow::anyhow!(
-                "upload failed without error details"
-            )));
-        };
+        let e = upload_result.expect_err("checked upload_result is Err");
 
         let upload_mbps = throughput_mbps(file_size, upload_duration);
         tracing::warn!(
@@ -1270,10 +1179,6 @@ async fn download_and_send_music(
             peak_in_flight
         );
         tracing::warn!("Upload failed: {}", e);
-
-        bot.edit_message_text(msg.chat.id, status_msg.id, format!("发送失败: {e}"))
-            .await
-            .ok();
 
         audio_buffer.cleanup().await.ok();
         if let Some(thumb_buf) = thumbnail_buffer {
@@ -1417,17 +1322,6 @@ fn should_refresh_upload_client(upload_state: &UploadClientState, reuse_limit: u
     upload_state.reuse_count >= reuse_limit
 }
 
-fn next_upload_mode(mode: UploadMode, succeeded: bool) -> Option<UploadMode> {
-    if succeeded {
-        return None;
-    }
-
-    match mode {
-        UploadMode::Audio => Some(UploadMode::Document),
-        UploadMode::Document => None,
-    }
-}
-
 fn collect_maintenance_signals(
     counters: &MaintenanceCounters,
     config: &Config,
@@ -1559,18 +1453,11 @@ struct RawUploadParams<'a> {
 async fn raw_send_file(
     client: &reqwest::Client,
     api_base_url: &str,
-    method: &str,
     audio_buffer: &AudioBuffer,
     audio_bytes: Option<&Bytes>,
     file_size: u64,
     params: &RawUploadParams<'_>,
 ) -> Result<serde_json::Value> {
-    let file_field_name = if method == "sendAudio" {
-        "audio"
-    } else {
-        "document"
-    };
-
     let filename = audio_buffer.filename().to_owned();
     let mime_type = mime_for_filename(&filename);
 
@@ -1598,7 +1485,7 @@ async fn raw_send_file(
     let mut form = reqwest::multipart::Form::new()
         .text("chat_id", params.chat_id.to_string())
         .text("caption", params.caption.to_owned())
-        .part(file_field_name, file_part);
+        .part("audio", file_part);
 
     // reply_parameters as JSON
     let reply_params = serde_json::json!({
@@ -1611,17 +1498,14 @@ async fn raw_send_file(
         form = form.text("reply_markup", markup_json.clone());
     }
 
-    // sendAudio-specific fields
-    if method == "sendAudio" {
-        if let Some(title) = params.title {
-            form = form.text("title", title.to_owned());
-        }
-        if let Some(performer) = params.performer {
-            form = form.text("performer", performer.to_owned());
-        }
-        if let Some(duration) = params.duration {
-            form = form.text("duration", duration.to_string());
-        }
+    if let Some(title) = params.title {
+        form = form.text("title", title.to_owned());
+    }
+    if let Some(performer) = params.performer {
+        form = form.text("performer", performer.to_owned());
+    }
+    if let Some(duration) = params.duration {
+        form = form.text("duration", duration.to_string());
     }
 
     // Attach thumbnail if available
@@ -1652,7 +1536,7 @@ async fn raw_send_file(
         form = form.part("thumbnail", thumb_part);
     }
 
-    let url = format!("{api_base_url}{method}");
+    let url = format!("{api_base_url}sendAudio");
     let resp = client
         .post(&url)
         .multipart(form)
@@ -1679,7 +1563,7 @@ async fn raw_send_file(
             .get("description")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error");
-        tracing::error!("Telegram API error ({status}): {description} [method={method}]",);
+        tracing::error!("Telegram API error ({status}): {description} [method=sendAudio]",);
         return Err(BotError::Other(anyhow::anyhow!(
             "Telegram API error: {description} (HTTP {status})",
         )));
@@ -1688,21 +1572,14 @@ async fn raw_send_file(
     Ok(json)
 }
 
-/// Extract file_id from a raw Telegram API sendAudio/sendDocument response.
-fn extract_file_id_from_response(json: &serde_json::Value, mode: UploadMode) -> Option<String> {
+/// Extract file_id from a raw Telegram API sendAudio response.
+fn extract_file_id_from_response(json: &serde_json::Value) -> Option<String> {
     let result = json.get("result")?;
-    match mode {
-        UploadMode::Audio => result
-            .get("audio")
-            .and_then(|a| a.get("file_id"))
-            .and_then(|v| v.as_str())
-            .map(String::from),
-        UploadMode::Document => result
-            .get("document")
-            .and_then(|d| d.get("file_id"))
-            .and_then(|v| v.as_str())
-            .map(String::from),
-    }
+    result
+        .get("audio")
+        .and_then(|a| a.get("file_id"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
 }
 
 /// Map filename extension to MIME type string.
@@ -2188,18 +2065,19 @@ mod tests {
     }
 
     #[test]
-    fn upload_mode_switches_to_document_after_audio_failure() {
+    fn extract_file_id_reads_audio_field() {
+        let payload = serde_json::json!({
+            "ok": true,
+            "result": {
+                "audio": {
+                    "file_id": "audio_file_123"
+                }
+            }
+        });
+
         assert_eq!(
-            super::next_upload_mode(super::UploadMode::Audio, false),
-            Some(super::UploadMode::Document)
-        );
-        assert_eq!(
-            super::next_upload_mode(super::UploadMode::Audio, true),
-            None
-        );
-        assert_eq!(
-            super::next_upload_mode(super::UploadMode::Document, false),
-            None
+            super::extract_file_id_from_response(&payload),
+            Some("audio_file_123".to_string())
         );
     }
 
