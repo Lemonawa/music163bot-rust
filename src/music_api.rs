@@ -10,7 +10,6 @@ use hex::encode_upper;
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use md5::compute as md5_compute;
 use reqwest::Client;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -25,7 +24,6 @@ pub struct MusicApi {
     song_detail_cache: std::sync::Mutex<HashMap<u64, TimedCacheEntry<SongDetail>>>,
     song_url_cache: std::sync::Mutex<HashMap<(u64, u64), TimedCacheEntry<SongUrl>>>,
     song_lyric_cache: std::sync::Mutex<HashMap<u64, TimedCacheEntry<String>>>,
-    batch_circuit: std::sync::Mutex<BatchCircuitState>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,14 +118,6 @@ pub struct SearchSong {
 const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
-const BATCH_CIRCUIT_BREAKER_THRESHOLD: u8 = 3;
-const BATCH_CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(120);
-
-#[derive(Debug, Clone, Copy, Default)]
-struct BatchCircuitState {
-    consecutive_failures: u8,
-    disabled_until: Option<Instant>,
-}
 
 #[derive(Debug, Clone)]
 struct TimedCacheEntry<T> {
@@ -222,7 +212,6 @@ impl MusicApi {
             song_detail_cache: std::sync::Mutex::new(HashMap::new()),
             song_url_cache: std::sync::Mutex::new(HashMap::new()),
             song_lyric_cache: std::sync::Mutex::new(HashMap::new()),
-            batch_circuit: std::sync::Mutex::new(BatchCircuitState::default()),
         }
     }
 
@@ -280,47 +269,6 @@ impl MusicApi {
     fn cache_song_lyric(&self, song_id: u64, lyric: String) {
         let mut cache = lock_or_recover(&self.song_lyric_cache);
         cache.insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
-    }
-
-    fn batch_circuit_allows_attempt(&self) -> bool {
-        self.batch_circuit_allows_attempt_at(Instant::now())
-    }
-
-    fn batch_circuit_allows_attempt_at(&self, now: Instant) -> bool {
-        let mut state = lock_or_recover(&self.batch_circuit);
-        match state.disabled_until {
-            Some(until) if now < until => false,
-            Some(_) => {
-                state.disabled_until = None;
-                state.consecutive_failures = 0;
-                true
-            }
-            None => true,
-        }
-    }
-
-    fn record_batch_failure(&self) -> Option<Instant> {
-        self.record_batch_failure_at(Instant::now())
-    }
-
-    fn record_batch_failure_at(&self, now: Instant) -> Option<Instant> {
-        let mut state = lock_or_recover(&self.batch_circuit);
-        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
-
-        if state.consecutive_failures >= BATCH_CIRCUIT_BREAKER_THRESHOLD {
-            let until = now + BATCH_CIRCUIT_BREAKER_COOLDOWN;
-            state.disabled_until = Some(until);
-            state.consecutive_failures = 0;
-            return Some(until);
-        }
-
-        None
-    }
-
-    fn record_batch_success(&self) {
-        let mut state = lock_or_recover(&self.batch_circuit);
-        state.consecutive_failures = 0;
-        state.disabled_until = None;
     }
 
     fn build_eapi_cookie(&self) -> String {
@@ -493,57 +441,54 @@ impl MusicApi {
         }
 
         let mut primary_url = self.get_cached_song_url(song_id, primary_bitrate);
-        if cached_detail.is_none() || primary_url.is_none() {
-            if self.batch_circuit_allows_attempt() {
-                let batch_start = Instant::now();
-                match self
-                    .fetch_song_detail_and_url_batch(song_id, primary_bitrate)
-                    .await
-                {
-                    Ok((detail, song_url)) => {
-                        self.record_batch_success();
-                        self.cache_song_detail(song_id, detail.clone());
-                        self.cache_song_url(song_id, primary_bitrate, song_url.clone());
-                        cached_detail = Some(detail);
-                        primary_url = Some(song_url);
-                    }
-                    Err(e) => {
-                        let breaker_until = self.record_batch_failure();
-                        tracing::warn!(
-                            "Batch detail+url fetch failed for music_id {} (br={}): {}. Falling back.",
-                            song_id,
-                            primary_bitrate,
-                            e
-                        );
-                        if let Some(until) = breaker_until {
-                            tracing::warn!(
-                                "Batch circuit opened until {:?} after consecutive failures",
-                                until
-                            );
-                        }
-                    }
-                }
 
-                tracing::info!("[batch_attempt] {}ms", batch_start.elapsed().as_millis());
-            } else {
-                tracing::info!(
-                    "Skipping batch detail+url fetch for music_id {} due to open circuit",
-                    song_id
-                );
+        // Fetch detail and primary URL in parallel when either is missing
+        if cached_detail.is_none() || primary_url.is_none() {
+            let parallel_start = Instant::now();
+            let need_detail = cached_detail.is_none();
+            let need_url = primary_url.is_none();
+
+            let detail_fut = async {
+                if need_detail {
+                    Some(self.get_song_detail(song_id).await)
+                } else {
+                    None
+                }
+            };
+            let url_fut = async {
+                if need_url {
+                    Some(self.get_song_url(song_id, primary_bitrate).await)
+                } else {
+                    None
+                }
+            };
+
+            let (detail_result, url_result) = tokio::join!(detail_fut, url_fut);
+
+            if let Some(result) = detail_result {
+                cached_detail = Some(result?);
             }
+            if let Some(result) = url_result {
+                match result {
+                    Ok(song_url) if !song_url.url.is_empty() => primary_url = Some(song_url),
+                    Ok(_) => tracing::info!(
+                        "Primary bitrate {primary_bitrate} returned empty URL for music_id {song_id}"
+                    ),
+                    Err(e) => tracing::warn!(
+                        "Primary bitrate {primary_bitrate} request failed for music_id {song_id}: {e}"
+                    ),
+                }
+            }
+
+            tracing::info!(
+                "[parallel_fetch] {}ms (detail={need_detail}, url={need_url})",
+                parallel_start.elapsed().as_millis()
+            );
         }
 
-        let detail = if let Some(detail) = cached_detail {
-            detail
-        } else {
-            let fallback_detail_start = Instant::now();
-            let detail = self.get_song_detail(song_id).await?;
-            tracing::info!(
-                "[fallback_detail] {}ms",
-                fallback_detail_start.elapsed().as_millis()
-            );
-            detail
-        };
+        let detail = cached_detail.ok_or_else(|| {
+            BotError::MusicApi(format!("Failed to get song detail for {song_id}"))
+        })?;
 
         let mut last_error = None;
         let mut fallback_url_start = None;
@@ -798,253 +743,6 @@ impl MusicApi {
 
         Ok(bytes.to_vec())
     }
-
-    async fn fetch_song_detail_and_url_batch(
-        &self,
-        song_id: u64,
-        bitrate: u64,
-    ) -> Result<(SongDetail, SongUrl)> {
-        let url = format!("{}/api/batch", self.base_url);
-        let mut params = HashMap::new();
-        params.insert(
-            "/api/v3/song/detail".to_string(),
-            format!("c=[{{\"id\":{song_id}}}]"),
-        );
-        params.insert("/api/song/detail".to_string(), format!("ids=[{song_id}]"));
-        params.insert(
-            "/api/song/enhance/player/url".to_string(),
-            format!("ids=[{song_id}]&br={bitrate}"),
-        );
-
-        let mut request = self.client.post(url).form(&params);
-        if let Some(music_u) = &self.music_u {
-            request = request.header("Cookie", format!("MUSIC_U={music_u}"));
-        }
-
-        let response = request.send().await?.error_for_status()?;
-        let payload: serde_json::Value = response.json().await?;
-        let result = parse_batch_detail_and_url(&payload);
-        if result.is_err() {
-            // One-shot diagnostic: log the payload's top-level structure (keys only, no values)
-            // so we can see what the API actually returns and fix the parser.
-            let shape = describe_payload_shape(&payload);
-            tracing::warn!("Batch parse failed for music_id {song_id}. Payload shape: {shape}");
-        }
-        result
-    }
-}
-
-fn find_batch_section<'a>(
-    payload: &'a serde_json::Value,
-    needle: &str,
-) -> Option<&'a serde_json::Value> {
-    let section_matches_shape = |section: &serde_json::Value| {
-        if needle.contains("/song/detail") {
-            return section
-                .get("songs")
-                .and_then(serde_json::Value::as_array)
-                .is_some();
-        }
-        if needle.contains("/song/enhance/player/url") {
-            return section
-                .get("data")
-                .and_then(serde_json::Value::as_array)
-                .is_some();
-        }
-        false
-    };
-
-    let section_payload = |section: &'a serde_json::Value| {
-        section
-            .get("body")
-            .or_else(|| section.get("result"))
-            .unwrap_or(section)
-    };
-
-    let from_object = |value: &'a serde_json::Value| {
-        value.as_object().and_then(|obj| {
-            obj.iter().find_map(|(key, section)| {
-                if key.contains(needle) {
-                    return Some(section);
-                }
-
-                let path_match = section
-                    .get("path")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|path| path.contains(needle));
-                if path_match {
-                    return Some(section_payload(section));
-                }
-
-                let candidate = section_payload(section);
-                if section_matches_shape(candidate) {
-                    return Some(candidate);
-                }
-
-                None
-            })
-        })
-    };
-
-    let from_array = |value: &'a serde_json::Value| {
-        value.as_array().and_then(|entries| {
-            entries.iter().find_map(|entry| {
-                let path_match = entry
-                    .get("path")
-                    .or_else(|| entry.get("url"))
-                    .or_else(|| entry.get("key"))
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|path| path.contains(needle));
-                if !path_match {
-                    let candidate = section_payload(entry);
-                    if section_matches_shape(candidate) {
-                        return Some(candidate);
-                    }
-                    return None;
-                }
-
-                Some(section_payload(entry))
-            })
-        })
-    };
-
-    payload
-        .get(needle)
-        .or_else(|| payload.get("body").and_then(|body| body.get(needle)))
-        .or_else(|| from_object(payload))
-        .or_else(|| payload.get("body").and_then(from_object))
-        .or_else(|| from_array(payload))
-        .or_else(|| payload.get("body").and_then(from_array))
-        .or_else(|| section_matches_shape(payload).then_some(payload))
-        .or_else(|| {
-            payload
-                .get("body")
-                .filter(|body| section_matches_shape(body))
-        })
-}
-
-/// Describe the shape of a JSON value (keys and types, no actual values) for diagnostics.
-fn describe_payload_shape(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Object(map) => {
-            let entries: Vec<String> = map
-                .iter()
-                .map(|(k, v)| {
-                    let child = match v {
-                        serde_json::Value::Object(inner) => {
-                            let keys: Vec<&str> = inner.keys().map(String::as_str).collect();
-                            format!("obj{{{}}}", keys.join(","))
-                        }
-                        serde_json::Value::Array(arr) => format!("arr[{}]", arr.len()),
-                        serde_json::Value::String(_) => "str".to_string(),
-                        serde_json::Value::Number(_) => "num".to_string(),
-                        serde_json::Value::Bool(_) => "bool".to_string(),
-                        serde_json::Value::Null => "null".to_string(),
-                    };
-                    format!("{k}:{child}")
-                })
-                .collect();
-            format!("{{{}}}", entries.join(", "))
-        }
-        serde_json::Value::Array(arr) => format!("arr[{}]", arr.len()),
-        other => format!("{other}"),
-    }
-}
-
-fn merge_code_into_body(section: &serde_json::Value) -> Option<serde_json::Value> {
-    let body = section.get("body")?.as_object()?;
-    let mut merged = body.clone();
-
-    if !merged.contains_key("code") {
-        merged.insert(
-            "code".to_string(),
-            section
-                .get("code")
-                .cloned()
-                .unwrap_or_else(|| serde_json::Value::from(200)),
-        );
-    }
-
-    Some(serde_json::Value::Object(merged))
-}
-
-fn merge_default_code(section: &serde_json::Value) -> Option<serde_json::Value> {
-    let object = section.as_object()?;
-    if object.contains_key("code") {
-        return None;
-    }
-
-    let mut merged = object.clone();
-    merged.insert("code".to_string(), serde_json::Value::from(200));
-    Some(serde_json::Value::Object(merged))
-}
-
-fn parse_batch_response_section<T>(section: &serde_json::Value, section_name: &str) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    let mut candidates: Vec<serde_json::Value> = vec![section.clone()];
-    if let Some(merged) = merge_default_code(section) {
-        candidates.push(merged);
-    }
-    if let Some(body) = section.get("body") {
-        candidates.push(body.clone());
-        if let Some(merged) = merge_default_code(body) {
-            candidates.push(merged);
-        }
-    }
-    if let Some(merged) = merge_code_into_body(section) {
-        candidates.push(merged);
-    }
-
-    for candidate in candidates {
-        if let Ok(parsed) = serde_json::from_value::<T>(candidate) {
-            return Ok(parsed);
-        }
-    }
-
-    Err(BotError::MusicApi(format!(
-        "Batch {section_name} section has unexpected structure"
-    )))
-}
-
-fn parse_batch_detail_and_url(payload: &serde_json::Value) -> Result<(SongDetail, SongUrl)> {
-    let detail_section = find_batch_section(payload, "/song/detail").ok_or_else(|| {
-        BotError::MusicApi("Batch payload missing song detail section".to_string())
-    })?;
-    let url_section = find_batch_section(payload, "/song/enhance/player/url")
-        .ok_or_else(|| BotError::MusicApi("Batch payload missing song URL section".to_string()))?;
-
-    let detail_response: SongDetailResponse =
-        parse_batch_response_section(detail_section, "song detail")?;
-    let url_response: SongUrlResponse = parse_batch_response_section(url_section, "song URL")?;
-
-    if detail_response.code != 200 {
-        return Err(BotError::MusicApi(format!(
-            "Batch detail API returned code {}",
-            detail_response.code
-        )));
-    }
-
-    if url_response.code != 200 {
-        return Err(BotError::MusicApi(format!(
-            "Batch URL API returned code {}",
-            url_response.code
-        )));
-    }
-
-    let detail = detail_response
-        .songs
-        .into_iter()
-        .next()
-        .ok_or_else(|| BotError::MusicApi("Batch response has no song detail".to_string()))?;
-    let song_url = url_response
-        .data
-        .into_iter()
-        .next()
-        .ok_or_else(|| BotError::MusicApi("Batch response has no song URL".to_string()))?;
-
-    Ok((detail, song_url))
 }
 
 fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
@@ -1179,198 +877,6 @@ mod tests {
 
         assert!(super::cache_entry_is_fresh(created_at, ttl, before_expire));
         assert!(!super::cache_entry_is_fresh(created_at, ttl, after_expire));
-    }
-
-    #[test]
-    fn batch_parser_extracts_detail_and_url() {
-        let payload = serde_json::json!({
-            "code": 200,
-            "body": {
-                "/api/song/detail?ids=[123]": {
-                    "code": 200,
-                    "songs": [
-                        {
-                            "id": 123,
-                            "name": "Song",
-                            "dt": 180000,
-                            "ar": [{"id": 7, "name": "Artist"}],
-                            "al": {"id": 9, "name": "Album", "picUrl": "https://img"}
-                        }
-                    ]
-                },
-                "/api/song/enhance/player/url": {
-                    "code": 200,
-                    "data": [
-                        {
-                            "id": 123,
-                            "url": "https://audio.test/song.flac",
-                            "br": 999000,
-                            "size": 123456,
-                            "md5": "abc",
-                            "type": "flac"
-                        }
-                    ]
-                }
-            }
-        });
-
-        let (detail, song_url) = super::parse_batch_detail_and_url(&payload).expect("parse batch");
-        assert_eq!(detail.id, 123);
-        assert_eq!(song_url.id, 123);
-        assert_eq!(song_url.url, "https://audio.test/song.flac");
-        assert_eq!(song_url.br, 999000);
-    }
-
-    #[test]
-    fn batch_parser_supports_nested_body_sections() {
-        let payload = serde_json::json!({
-            "code": 200,
-            "body": {
-                "/api/v3/song/detail": {
-                    "code": 200,
-                    "body": {
-                        "songs": [
-                            {
-                                "id": 456,
-                                "name": "Nested Song",
-                                "dt": 200000,
-                                "ar": [{"id": 8, "name": "Nested Artist"}],
-                                "al": {"id": 10, "name": "Nested Album", "picUrl": "https://img2"}
-                            }
-                        ]
-                    }
-                },
-                "/api/song/enhance/player/url": {
-                    "code": 200,
-                    "body": {
-                        "data": [
-                            {
-                                "id": 456,
-                                "url": "https://audio.test/song2.flac",
-                                "br": 999000,
-                                "size": 223344,
-                                "md5": "def",
-                                "type": "flac"
-                            }
-                        ]
-                    }
-                }
-            }
-        });
-
-        let (detail, song_url) =
-            super::parse_batch_detail_and_url(&payload).expect("parse nested batch");
-        assert_eq!(detail.id, 456);
-        assert_eq!(song_url.id, 456);
-        assert_eq!(song_url.url, "https://audio.test/song2.flac");
-    }
-
-    #[test]
-    fn batch_parser_supports_array_body_entries() {
-        let payload = serde_json::json!({
-            "code": 200,
-            "body": [
-                {
-                    "path": "/api/v3/song/detail",
-                    "body": {
-                        "code": 200,
-                        "songs": [
-                            {
-                                "id": 789,
-                                "name": "Array Song",
-                                "dt": 180000,
-                                "ar": [{"id": 9, "name": "Array Artist"}],
-                                "al": {"id": 11, "name": "Array Album", "picUrl": "https://img3"}
-                            }
-                        ]
-                    }
-                },
-                {
-                    "path": "/api/song/enhance/player/url",
-                    "body": {
-                        "code": 200,
-                        "data": [
-                            {
-                                "id": 789,
-                                "url": "https://audio.test/song3.flac",
-                                "br": 320000,
-                                "size": 998877,
-                                "md5": "ghi",
-                                "type": "mp3"
-                            }
-                        ]
-                    }
-                }
-            ]
-        });
-
-        let (detail, song_url) =
-            super::parse_batch_detail_and_url(&payload).expect("parse array batch");
-        assert_eq!(detail.id, 789);
-        assert_eq!(song_url.id, 789);
-        assert_eq!(song_url.url, "https://audio.test/song3.flac");
-    }
-
-    #[test]
-    fn batch_parser_supports_array_entries_without_path() {
-        let payload = serde_json::json!({
-            "code": 200,
-            "body": [
-                {
-                    "code": 200,
-                    "body": {
-                        "songs": [
-                            {
-                                "id": 321,
-                                "name": "Shape Song",
-                                "dt": 123000,
-                                "ar": [{"id": 77, "name": "Shape Artist"}],
-                                "al": {"id": 88, "name": "Shape Album", "picUrl": "https://img-shape"}
-                            }
-                        ]
-                    }
-                },
-                {
-                    "code": 200,
-                    "body": {
-                        "data": [
-                            {
-                                "id": 321,
-                                "url": "https://audio.test/shape.flac",
-                                "br": 999000,
-                                "size": 888777,
-                                "md5": "shape",
-                                "type": "flac"
-                            }
-                        ]
-                    }
-                }
-            ]
-        });
-
-        let (detail, song_url) =
-            super::parse_batch_detail_and_url(&payload).expect("parse shape-only array batch");
-        assert_eq!(detail.id, 321);
-        assert_eq!(song_url.id, 321);
-        assert_eq!(song_url.url, "https://audio.test/shape.flac");
-    }
-
-    #[test]
-    fn batch_circuit_breaker_opens_after_repeated_failures() {
-        let api = MusicApi::new(None, "https://music.163.com".to_string());
-        let now = std::time::Instant::now();
-
-        assert!(api.batch_circuit_allows_attempt_at(now));
-        assert!(api.record_batch_failure_at(now).is_none());
-        assert!(api.record_batch_failure_at(now).is_none());
-        let opened_until = api
-            .record_batch_failure_at(now)
-            .expect("circuit should open at threshold");
-        assert!(opened_until > now);
-        assert!(!api.batch_circuit_allows_attempt_at(now));
-
-        api.record_batch_success();
-        assert!(api.batch_circuit_allows_attempt_at(now));
     }
 }
 
