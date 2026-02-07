@@ -67,8 +67,8 @@ tikv-jemallocator = { version = "0.6", features = ["profiling", "stats"] }
 tikv-jemalloc-sys = { version = "0.6" }
 
 [profile.release]
-# 优化级别: z=最小体积, s=平衡
-opt-level = "z"
+# 优化级别: 3=最大速度 (TLS/memcpy/序列化等热路径均受益)
+opt-level = 3
 
 # 链接时优化
 lto = true
