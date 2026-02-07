@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use bytes::Bytes;
 use futures_util::StreamExt;
 use teloxide::RequestError;
 use teloxide::prelude::*;
@@ -13,6 +14,7 @@ use teloxide::types::{
     ReplyParameters,
 };
 use tokio::sync::{Mutex, Notify};
+use tokio_util::io::ReaderStream;
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode, UploadLogLevel};
@@ -41,6 +43,8 @@ pub struct BotState {
 #[derive(Debug)]
 pub struct UploadClientState {
     pub bot: Option<Bot>,
+    pub raw_client: Option<reqwest::Client>,
+    pub upload_api_url: String,
     pub reuse_count: u32,
 }
 
@@ -315,6 +319,8 @@ pub async fn run(config: Config) -> Result<()> {
         bot_username,
         upload_client_state: Arc::new(Mutex::new(UploadClientState {
             bot: None,
+            raw_client: None,
+            upload_api_url: String::new(),
             reuse_count: 0,
         })),
         maintenance_counters: MaintenanceCounters::new(),
@@ -323,8 +329,10 @@ pub async fn run(config: Config) -> Result<()> {
 
     let prewarm_state = Arc::clone(&bot_state);
     tokio::spawn(async move {
-        let _ =
-            run_upload_prewarm(&prewarm_state.config, || acquire_upload_bot(&prewarm_state)).await;
+        let _ = run_upload_prewarm(&prewarm_state.config, || {
+            acquire_upload_client(&prewarm_state)
+        })
+        .await;
     });
 
     // Create dispatcher
@@ -1225,8 +1233,8 @@ async fn download_and_send_music(
     // Bound upload concurrency to keep tail latency and memory stable under burst traffic.
     let _upload_permit = acquire_upload_permit(&state.upload_semaphore).await?;
 
-    // Acquire upload bot with minimal lock contention.
-    let upload_bot = acquire_upload_bot(state).await?;
+    // Acquire upload client with minimal lock contention.
+    let (_upload_bot, raw_client, api_base_url) = acquire_upload_client(state).await?;
 
     tracing::info!(
         "{}",
@@ -1245,6 +1253,9 @@ async fn download_and_send_music(
 
     tracing::info!("File format: {}", if is_flac { "FLAC" } else { "MP3" });
 
+    // Serialize reply_markup once for reuse across attempts
+    let reply_markup_json = serde_json::to_string(&keyboard).ok();
+
     // Try sending as audio first, then fallback to document if audio upload fails.
     let in_flight = state
         .upload_counters
@@ -1254,47 +1265,54 @@ async fn download_and_send_music(
     let peak_in_flight = update_peak(&state.upload_counters.peak_in_flight, in_flight);
     let upload_start = std::time::Instant::now();
     let mut mode = UploadMode::Audio;
-    let mut sent_message = None;
-    let mut last_error = None;
+    let mut upload_response = None;
+    let mut last_error: Option<BotError> = None;
 
     loop {
-        let attempt_result = match mode {
-            UploadMode::Audio => {
-                let mut audio_req = upload_bot
-                    .send_audio(msg.chat.id, audio_buffer.to_input_file())
-                    .caption(&caption)
-                    .title(&song_info.song_name)
-                    .performer(&song_info.song_artists)
-                    .duration(song_info.duration as u32)
-                    .reply_markup(keyboard.clone())
-                    .reply_parameters(ReplyParameters::new(msg.id));
-
-                if let Some(thumb_buf) = thumbnail_buffer.as_ref() {
-                    match thumb_buf.to_input_file() {
-                        Ok(thumb_input) => {
-                            audio_req = audio_req.thumbnail(thumb_input);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to prepare thumbnail input: {}", e);
-                        }
-                    }
-                }
-
-                audio_req.await
-            }
-            UploadMode::Document => {
-                upload_bot
-                    .send_document(msg.chat.id, audio_buffer.to_input_file())
-                    .caption(&caption)
-                    .reply_markup(keyboard.clone())
-                    .reply_parameters(ReplyParameters::new(msg.id))
-                    .await
-            }
+        let method = match mode {
+            UploadMode::Audio => "sendAudio",
+            UploadMode::Document => "sendDocument",
         };
 
-        match attempt_result {
-            Ok(sent_msg) => {
-                sent_message = Some(sent_msg);
+        let params = RawUploadParams {
+            chat_id: msg.chat.id.0,
+            caption: &caption,
+            reply_to_message_id: msg.id.0,
+            reply_markup_json: reply_markup_json.clone(),
+            title: if mode == UploadMode::Audio {
+                Some(&song_info.song_name)
+            } else {
+                None
+            },
+            performer: if mode == UploadMode::Audio {
+                Some(&song_info.song_artists)
+            } else {
+                None
+            },
+            duration: if mode == UploadMode::Audio {
+                Some(song_info.duration as u32)
+            } else {
+                None
+            },
+            thumbnail: if mode == UploadMode::Audio {
+                thumbnail_buffer.as_ref()
+            } else {
+                None
+            },
+        };
+
+        match raw_send_file(
+            &raw_client,
+            &api_base_url,
+            method,
+            &audio_buffer,
+            file_size,
+            &params,
+        )
+        .await
+        {
+            Ok(json) => {
+                upload_response = Some(json);
                 break;
             }
             Err(e) => {
@@ -1318,7 +1336,7 @@ async fn download_and_send_music(
         - 1;
     tracing::info!("{}", format_perf("upload_audio", upload_duration));
 
-    if let Some(sent_msg) = sent_message {
+    if let Some(ref resp_json) = upload_response {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
         tracing::info!(
             "Upload completed in {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
@@ -1337,17 +1355,9 @@ async fn download_and_send_music(
             tracing::info!("Fallback document upload succeeded");
         }
 
-        // Extract file_id from sent message (audio/document)
-        if let MessageKind::Common(common) = &sent_msg.kind {
-            match &common.media_kind {
-                teloxide::types::MediaKind::Audio(audio) => {
-                    song_info.file_id = Some(audio.audio.file.id.to_string());
-                }
-                teloxide::types::MediaKind::Document(document) => {
-                    song_info.file_id = Some(document.document.file.id.to_string());
-                }
-                _ => {}
-            }
+        // Extract file_id from raw API response
+        if let Some(file_id) = extract_file_id_from_response(resp_json, mode) {
+            song_info.file_id = Some(file_id);
         }
     } else {
         let Some(e) = last_error else {
@@ -1380,7 +1390,7 @@ async fn download_and_send_music(
             thumb_buf.cleanup().await.ok();
         }
 
-        return Err(e.into());
+        return Err(e);
     }
 
     audio_buffer.cleanup().await.ok();
@@ -1629,7 +1639,188 @@ fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
     }
 }
 
-fn build_upload_bot(config: &Config) -> Result<Bot> {
+struct UploadBotBundle {
+    bot: Bot,
+    raw_client: reqwest::Client,
+    /// Full API base URL including bot token, e.g. "http://host:port/bot<TOKEN>/"
+    api_base_url: String,
+}
+
+/// Streaming chunk size for raw uploads (256 KiB).
+/// Matches the benchmark script's chunk size that achieves ~14 MB/s.
+const RAW_UPLOAD_CHUNK_SIZE: usize = 256 * 1024;
+
+/// Parameters for raw Telegram file upload.
+struct RawUploadParams<'a> {
+    chat_id: i64,
+    caption: &'a str,
+    reply_to_message_id: i32,
+    reply_markup_json: Option<String>,
+    /// sendAudio-specific fields
+    title: Option<&'a str>,
+    performer: Option<&'a str>,
+    duration: Option<u32>,
+    /// Thumbnail data (already in memory as bytes)
+    thumbnail: Option<&'a ThumbnailBuffer>,
+}
+
+/// Upload a file via raw reqwest multipart with pre-computed Content-Length
+/// and 256 KiB streaming chunks — bypasses teloxide's 8 KiB FramedRead + chunked encoding.
+async fn raw_send_file(
+    client: &reqwest::Client,
+    api_base_url: &str,
+    method: &str,
+    audio_buffer: &AudioBuffer,
+    file_size: u64,
+    params: &RawUploadParams<'_>,
+) -> Result<serde_json::Value> {
+    let file_field_name = if method == "sendAudio" {
+        "audio"
+    } else {
+        "document"
+    };
+
+    let filename = audio_buffer.filename().to_owned();
+    let mime_type = mime_for_filename(&filename);
+
+    // Build the file part with known length for Content-Length header
+    let file_part = match audio_buffer {
+        AudioBuffer::Memory { data, .. } => {
+            reqwest::multipart::Part::stream_with_length(Bytes::from(data.clone()), file_size)
+                .file_name(filename.clone())
+                .mime_str(mime_type)?
+        }
+        AudioBuffer::Disk { path, .. } => {
+            let file = tokio::fs::File::open(path).await.map_err(|e| {
+                BotError::Other(anyhow::anyhow!("Failed to open file for upload: {e}"))
+            })?;
+            let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+            let body = reqwest::Body::wrap_stream(stream);
+            reqwest::multipart::Part::stream_with_length(body, file_size)
+                .file_name(filename.clone())
+                .mime_str(mime_type)?
+        }
+    };
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("chat_id", params.chat_id.to_string())
+        .text("caption", params.caption.to_owned())
+        .part(file_field_name, file_part);
+
+    // reply_parameters as JSON
+    let reply_params = serde_json::json!({
+        "message_id": params.reply_to_message_id
+    });
+    form = form.text("reply_parameters", reply_params.to_string());
+
+    // reply_markup as JSON
+    if let Some(ref markup_json) = params.reply_markup_json {
+        form = form.text("reply_markup", markup_json.clone());
+    }
+
+    // sendAudio-specific fields
+    if method == "sendAudio" {
+        if let Some(title) = params.title {
+            form = form.text("title", title.to_owned());
+        }
+        if let Some(performer) = params.performer {
+            form = form.text("performer", performer.to_owned());
+        }
+        if let Some(duration) = params.duration {
+            form = form.text("duration", duration.to_string());
+        }
+    }
+
+    // Attach thumbnail if available
+    if let Some(thumb) = params.thumbnail {
+        let thumb_part = match thumb {
+            ThumbnailBuffer::Memory { data } => {
+                let len = data.len() as u64;
+                reqwest::multipart::Part::stream_with_length(Bytes::from(data.clone()), len)
+                    .file_name("thumb.jpg")
+                    .mime_str("image/jpeg")?
+            }
+            ThumbnailBuffer::Disk { path } => {
+                let meta = tokio::fs::metadata(path).await.map_err(|e| {
+                    BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}"))
+                })?;
+                let file = tokio::fs::File::open(path).await.map_err(|e| {
+                    BotError::Other(anyhow::anyhow!("Failed to open thumbnail: {e}"))
+                })?;
+                let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+                let body = reqwest::Body::wrap_stream(stream);
+                reqwest::multipart::Part::stream_with_length(body, meta.len())
+                    .file_name("thumb.jpg")
+                    .mime_str("image/jpeg")?
+            }
+        };
+        form = form.part("thumbnail", thumb_part);
+    }
+
+    let url = format!("{api_base_url}{method}");
+    let resp = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| BotError::Other(anyhow::anyhow!("Raw upload request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to read upload response: {e}")))?;
+
+    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+        tracing::error!(
+            "Upload response parse error: {e}. Body: {}",
+            &body[..body.len().min(500)]
+        );
+        BotError::Other(anyhow::anyhow!("Failed to parse upload response: {e}"))
+    })?;
+
+    if !status.is_success() || json.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        let description = json
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown error");
+        tracing::error!("Telegram API error ({status}): {description} [method={method}]",);
+        return Err(BotError::Other(anyhow::anyhow!(
+            "Telegram API error: {description} (HTTP {status})",
+        )));
+    }
+
+    Ok(json)
+}
+
+/// Extract file_id from a raw Telegram API sendAudio/sendDocument response.
+fn extract_file_id_from_response(json: &serde_json::Value, mode: UploadMode) -> Option<String> {
+    let result = json.get("result")?;
+    match mode {
+        UploadMode::Audio => result
+            .get("audio")
+            .and_then(|a| a.get("file_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        UploadMode::Document => result
+            .get("document")
+            .and_then(|d| d.get("file_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    }
+}
+
+/// Map filename extension to MIME type string.
+fn mime_for_filename(filename: &str) -> &'static str {
+    let path = std::path::Path::new(filename);
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("flac") => "audio/flac",
+        Some(ext) if ext.eq_ignore_ascii_case("mp3") => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
+}
+
+fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     // API URL must match teloxide's internal format: base URL without "/bot" suffix
     // teloxide automatically appends "bot<TOKEN>/" to the path
     let api_url_str = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org"
@@ -1690,10 +1881,19 @@ fn build_upload_bot(config: &Config) -> Result<Bot> {
     }
 
     let client = build_reqwest_client(client_builder)?;
-    Ok(Bot::with_client(&config.bot_token, client).set_api_url(api_url))
+    let bot = Bot::with_client(&config.bot_token, client.clone()).set_api_url(api_url);
+
+    // Build full API base URL for raw requests: "{base}bot{token}/"
+    let raw_api_base = format!("{}bot{}/", api_url_str, config.bot_token);
+
+    Ok(UploadBotBundle {
+        bot,
+        raw_client: client,
+        api_base_url: raw_api_base,
+    })
 }
 
-async fn acquire_upload_bot(state: &Arc<BotState>) -> Result<Bot> {
+async fn acquire_upload_client(state: &Arc<BotState>) -> Result<(Bot, reqwest::Client, String)> {
     let reuse_limit = state.config.upload_client_reuse_requests;
 
     let (reason, reuse_count_before) = {
@@ -1710,7 +1910,13 @@ async fn acquire_upload_bot(state: &Arc<BotState>) -> Result<Bot> {
                 tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
             }
             upload_state.reuse_count = next_reuse_count;
-            return get_upload_bot(&upload_state);
+            let bot = get_upload_bot(&upload_state)?;
+            let raw_client = upload_state
+                .raw_client
+                .clone()
+                .unwrap_or_else(reqwest::Client::new);
+            let api_url = upload_state.upload_api_url.clone();
+            return Ok((bot, raw_client, api_url));
         }
 
         let reason = if upload_state.bot.is_none() {
@@ -1731,11 +1937,13 @@ async fn acquire_upload_bot(state: &Arc<BotState>) -> Result<Bot> {
     }
 
     let build_start = std::time::Instant::now();
-    let built_bot = build_upload_bot(&state.config)?;
+    let bundle = build_upload_bot(&state.config)?;
 
     let mut upload_state = state.upload_client_state.lock().await;
     if should_refresh_upload_client(&upload_state, reuse_limit) {
-        upload_state.bot = Some(built_bot);
+        upload_state.bot = Some(bundle.bot);
+        upload_state.raw_client = Some(bundle.raw_client);
+        upload_state.upload_api_url = bundle.api_base_url;
         upload_state.reuse_count = 0;
         if upload_log_enabled(&state.config, UploadLogLevel::Info) {
             tracing::info!(
@@ -1753,7 +1961,13 @@ async fn acquire_upload_bot(state: &Arc<BotState>) -> Result<Bot> {
     }
     upload_state.reuse_count = next_reuse_count;
 
-    get_upload_bot(&upload_state)
+    let bot = get_upload_bot(&upload_state)?;
+    let raw_client = upload_state
+        .raw_client
+        .clone()
+        .unwrap_or_else(reqwest::Client::new);
+    let api_url = upload_state.upload_api_url.clone();
+    Ok((bot, raw_client, api_url))
 }
 
 async fn run_upload_prewarm<T, F, Fut>(config: &Config, warmup: F) -> bool
@@ -1854,6 +2068,8 @@ mod tests {
     fn get_upload_bot_returns_error_when_missing() {
         let state = UploadClientState {
             bot: None,
+            raw_client: None,
+            upload_api_url: String::new(),
             reuse_count: 0,
         };
         assert!(get_upload_bot(&state).is_err());
@@ -1864,6 +2080,8 @@ mod tests {
         let bot = Bot::new("token");
         let state = UploadClientState {
             bot: Some(bot),
+            raw_client: None,
+            upload_api_url: String::new(),
             reuse_count: 0,
         };
         assert!(get_upload_bot(&state).is_ok());
@@ -1990,14 +2208,20 @@ mod tests {
     fn upload_client_refresh_decision_works() {
         let has_bot = UploadClientState {
             bot: Some(Bot::new("token")),
+            raw_client: None,
+            upload_api_url: String::new(),
             reuse_count: 0,
         };
         let no_bot = UploadClientState {
             bot: None,
+            raw_client: None,
+            upload_api_url: String::new(),
             reuse_count: 0,
         };
         let exhausted = UploadClientState {
             bot: Some(Bot::new("token")),
+            raw_client: None,
+            upload_api_url: String::new(),
             reuse_count: 10,
         };
 
