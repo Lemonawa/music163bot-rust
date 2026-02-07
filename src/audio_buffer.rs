@@ -5,10 +5,12 @@
 //! - Memory: In-memory processing (faster, reduces disk I/O)
 //! - Hybrid: Smart selection based on file size and available memory (recommended)
 
-use anyhow::{Context, Result};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
+
+use anyhow::{Context, Result};
+use bytes::Bytes;
 use sysinfo::System;
 use teloxide::types::InputFile;
 use tokio::fs::File;
@@ -45,7 +47,7 @@ pub enum ThumbnailBuffer {
     /// Disk-based thumbnail
     Disk { path: PathBuf },
     /// Memory-based thumbnail
-    Memory { data: Vec<u8> },
+    Memory { data: Bytes },
 }
 
 impl AudioBuffer {
@@ -633,7 +635,7 @@ impl ThumbnailBuffer {
     /// Create a new thumbnail buffer
     pub async fn new(
         config: &Config,
-        data: Vec<u8>,
+        data: Bytes,
         cache_dir: &str,
         filename: &str,
     ) -> Result<Self> {
@@ -650,7 +652,7 @@ impl ThumbnailBuffer {
             Ok(Self::Memory { data })
         } else {
             let path = PathBuf::from(cache_dir).join(filename);
-            tokio::fs::write(&path, &data)
+            tokio::fs::write(&path, data.as_ref())
                 .await
                 .with_context(|| format!("Failed to write thumbnail: {}", path.display()))?;
             Ok(Self::Disk { path })
@@ -666,16 +668,24 @@ impl ThumbnailBuffer {
     /// Create from memory data
     #[must_use]
     pub fn from_memory(data: Vec<u8>) -> Self {
+        Self::Memory {
+            data: Bytes::from(data),
+        }
+    }
+
+    /// Create from Bytes data
+    #[must_use]
+    pub fn from_bytes(data: Bytes) -> Self {
         Self::Memory { data }
     }
 
     /// Get the thumbnail data
-    pub async fn get_data(&self) -> Result<Vec<u8>> {
+    pub fn get_data(&self) -> Result<Vec<u8>> {
         match self {
-            Self::Disk { path } => tokio::fs::read(path)
-                .await
-                .with_context(|| format!("Failed to read thumbnail: {}", path.display())),
-            Self::Memory { data } => Ok(data.clone()),
+            Self::Disk { path } => {
+                std::fs::read(path).with_context(|| format!("Failed to read thumbnail: {}", path.display()))
+            }
+            Self::Memory { data } => Ok(data.to_vec()),
         }
     }
 
@@ -809,5 +819,12 @@ mod tests {
 
         assert!(!memory_buffer.is_disk());
         assert!(memory_buffer.is_memory());
+    }
+
+    #[test]
+    fn thumbnail_buffer_memory_bytes_roundtrip() {
+        let data = bytes::Bytes::from_static(b"abc");
+        let buf = ThumbnailBuffer::from_bytes(data.clone());
+        assert_eq!(buf.get_data().unwrap_or_default(), b"abc");
     }
 }

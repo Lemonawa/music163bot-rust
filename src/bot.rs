@@ -826,6 +826,7 @@ async fn download_and_send_music(
                                     data.len()
                                 );
 
+                                let data = Bytes::from(data);
                                 let thumbnail_buffer = if download_thumbnail {
                                     let thumb_filename = format!(
                                         "thumb_{}_{}.jpg",
@@ -1305,12 +1306,12 @@ async fn apply_tags_in_blocking(
     mut audio_buffer: AudioBuffer,
     file_ext: String,
     song_detail: crate::music_api::SongDetail,
-    artwork_data: Option<Vec<u8>>,
+    artwork_data: Option<Bytes>,
     embed_cover: bool,
 ) -> Result<AudioBuffer> {
     tokio::task::spawn_blocking(move || {
         let embed_artwork = if embed_cover {
-            artwork_data.as_deref()
+            artwork_data.as_ref().map(|data| data.as_ref())
         } else {
             None
         };
@@ -1628,7 +1629,7 @@ async fn raw_send_file(
         let thumb_part = match thumb {
             ThumbnailBuffer::Memory { data } => {
                 let len = data.len() as u64;
-                reqwest::multipart::Part::stream_with_length(Bytes::from(data.clone()), len)
+                reqwest::multipart::Part::stream_with_length(data.clone(), len)
                     .file_name("thumb.jpg")
                     .mime_str("image/jpeg")?
             }
