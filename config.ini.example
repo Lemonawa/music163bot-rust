@@ -40,6 +40,12 @@ dir = ./downloads
 # - hybrid: 智能选择 (小文件用内存，大文件用磁盘)
 storage_mode = disk
 
+# 封面模式
+# - thumbnail: 默认，下载缩略图并嵌入 320x320 JPEG (Telegram 规范)
+# - original: 仅下载原始封面并嵌入
+# - both: 同时下载原始封面与缩略图 (旧行为)
+cover_mode = thumbnail
+
 # 混合模式阈值 (MB)，文件大于此值使用磁盘模式
 memory_threshold = 100
 
