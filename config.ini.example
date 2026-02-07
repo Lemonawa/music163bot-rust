@@ -41,9 +41,9 @@ dir = ./downloads
 storage_mode = disk
 
 # 封面模式
-# - thumbnail: 默认，仅下载缩略图；嵌入封面始终为 320x320 JPEG (Telegram 规范)
-# - original: 仅下载原始封面；嵌入封面仍为 320x320 JPEG
-# - both: 同时下载原始封面与缩略图 (旧行为)；嵌入封面仍为 320x320 JPEG
+# - thumbnail: 默认，仅下载 320x320 缩略图；嵌入封面始终为 320x320 JPEG (Telegram 规范)
+# - original: 兼容项，当前与 thumbnail 一致，不再下载原始分辨率
+# - both: 兼容项，当前与 thumbnail 一致，不再下载原始分辨率
 # 备注: 未来可能扩展高分辨率嵌入，但当前始终为 320x320 JPEG
 cover_mode = thumbnail
 

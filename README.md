@@ -54,7 +54,7 @@ cargo build --release
     - 可选：在 `[music]` 部分设置 `music_u` cookie 来访问付费歌曲。
     - 调整 `cache_dir` 和 `database` 路径。
     - （v1.1.0+）在 `[download]` 部分配置存储模式（推荐 `disk`）。
-    - 在 `[download]` 部分配置 `cover_mode`（默认 `thumbnail`，嵌入封面固定 320x320 JPEG）。
+    - 在 `[download]` 部分配置 `cover_mode`（默认 `thumbnail`，嵌入封面固定 320x320 JPEG；`original/both` 仅保留兼容，不再下载原始分辨率）。
     - （v1.1.14+）可在 `[upload]` 调整 `client_reuse_requests`（`0` 表示不按请求次数刷新）。
 
 ### 存储模式配置 (v1.1.0+)
@@ -102,9 +102,9 @@ pool_idle_timeout_secs = 300
 
 ### 封面处理说明
 
-- 默认 `cover_mode=thumbnail`，仍会嵌入封面，并复用同一张缩略图。
 - 内嵌封面固定为 320x320 JPEG（符合 Telegram 封面规范）。
-- 若需要高分辨率封面，未来可通过配置扩展。
+- `cover_mode=thumbnail` 使用 320x320 缩略图。
+- `cover_mode=original/both` 仅保留兼容，当前与 `thumbnail` 行为一致，不再下载原始分辨率。
 
 ### 运行
 
