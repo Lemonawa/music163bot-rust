@@ -680,8 +680,6 @@ async fn process_music(
     );
 
     // Fetch song details and a usable URL through batch-first path with fallback
-    let fetch_detail_start = std::time::Instant::now();
-    let fetch_url_start = std::time::Instant::now();
     let select_url_start = std::time::Instant::now();
     let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
     let detail_and_url_result = state
@@ -689,12 +687,6 @@ async fn process_music(
         .get_song_detail_and_best_url(music_id, &bitrate_candidates)
         .await;
     let select_url_duration = select_url_start.elapsed();
-
-    tracing::info!(
-        "{}",
-        format_perf("fetch_detail", fetch_detail_start.elapsed())
-    );
-    tracing::info!("{}", format_perf("fetch_url", fetch_url_start.elapsed()));
     tracing::info!(
         "{}",
         format_perf(PERF_STAGE_SELECT_URL, select_url_duration)
