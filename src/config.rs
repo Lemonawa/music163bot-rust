@@ -232,11 +232,11 @@ impl Default for Config {
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,
             cover_mode: CoverMode::Thumbnail,
-            upload_client_reuse_requests: 10,
-            upload_max_concurrent: 2,
+            upload_client_reuse_requests: 0,
+            upload_max_concurrent: 1,
             upload_log_level: UploadLogLevel::default(),
             upload_pool_max_idle_per_host: 1,
-            upload_pool_idle_timeout_secs: 60,
+            upload_pool_idle_timeout_secs: 300,
             upload_timeout_secs: 300,
             memory_release_interval_requests: 10,
             db_analyze_interval_requests: 20,
@@ -512,10 +512,10 @@ mod tests {
     #[test]
     fn upload_defaults_use_reuse_settings() {
         let config = Config::default();
-        assert_eq!(config.upload_client_reuse_requests, 10);
-        assert_eq!(config.upload_max_concurrent, 2);
+        assert_eq!(config.upload_client_reuse_requests, 0);
+        assert_eq!(config.upload_max_concurrent, 1);
         assert_eq!(config.upload_pool_max_idle_per_host, 1);
-        assert_eq!(config.upload_pool_idle_timeout_secs, 60);
+        assert_eq!(config.upload_pool_idle_timeout_secs, 300);
         assert_eq!(config.upload_timeout_secs, 300);
     }
 
@@ -628,6 +628,26 @@ upload.max_concurrent=6\n";
         let _ = std::fs::remove_file(&temp_path);
 
         assert_eq!(loaded.upload_max_concurrent, 6);
+    }
+
+    #[test]
+    fn upload_client_reuse_requests_allows_zero() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_upload_reuse_{temp_name}.ini"));
+        let content = "bot.token=token\n\
+upload.client_reuse_requests=0\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.upload_client_reuse_requests, 0);
     }
 
     #[test]

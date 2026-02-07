@@ -417,6 +417,97 @@ impl MusicApi {
         Ok(song_url)
     }
 
+    /// Get song details and best available URL using a batch-first strategy with safe fallback.
+    pub async fn get_song_detail_and_best_url(
+        &self,
+        song_id: u64,
+        bitrate_candidates: &[u64],
+    ) -> Result<(SongDetail, SongUrl)> {
+        let Some((&primary_bitrate, _)) = bitrate_candidates.split_first() else {
+            return Err(BotError::MusicApi(
+                "No bitrate candidates provided".to_string(),
+            ));
+        };
+
+        let mut cached_detail = self.get_cached_song_detail(song_id);
+        if let Some(detail) = cached_detail.clone() {
+            for &bitrate in bitrate_candidates {
+                if let Some(song_url) = self.get_cached_song_url(song_id, bitrate)
+                    && !song_url.url.is_empty()
+                {
+                    return Ok((detail, song_url));
+                }
+            }
+        }
+
+        let mut primary_url = self.get_cached_song_url(song_id, primary_bitrate);
+        if cached_detail.is_none() || primary_url.is_none() {
+            match self
+                .fetch_song_detail_and_url_batch(song_id, primary_bitrate)
+                .await
+            {
+                Ok((detail, song_url)) => {
+                    self.cache_song_detail(song_id, detail.clone());
+                    self.cache_song_url(song_id, primary_bitrate, song_url.clone());
+                    cached_detail = Some(detail);
+                    primary_url = Some(song_url);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Batch detail+url fetch failed for music_id {} (br={}): {}. Falling back.",
+                        song_id,
+                        primary_bitrate,
+                        e
+                    );
+                }
+            }
+        }
+
+        let detail = match cached_detail {
+            Some(detail) => detail,
+            None => self.get_song_detail(song_id).await?,
+        };
+
+        let mut last_error = None;
+        for (index, &bitrate) in bitrate_candidates.iter().enumerate() {
+            let fetched_url = if index == 0 {
+                if let Some(song_url) = primary_url.take() {
+                    Ok(song_url)
+                } else {
+                    self.get_song_url(song_id, bitrate).await
+                }
+            } else {
+                self.get_song_url(song_id, bitrate).await
+            };
+
+            match fetched_url {
+                Ok(song_url) if !song_url.url.is_empty() => return Ok((detail.clone(), song_url)),
+                Ok(_) => {
+                    tracing::info!(
+                        "Bitrate {} returned empty URL for music_id {}, trying next fallback",
+                        bitrate,
+                        song_id
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Bitrate {} request failed for music_id {}: {}",
+                        bitrate,
+                        song_id,
+                        e
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        if let Some(e) = last_error {
+            Err(e)
+        } else {
+            Err(BotError::MusicApi("No download URL found".to_string()))
+        }
+    }
+
     /// Get song lyrics
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
         if let Some(cached) = self.get_cached_song_lyric(song_id) {
@@ -618,6 +709,88 @@ impl MusicApi {
 
         Ok(bytes.to_vec())
     }
+
+    async fn fetch_song_detail_and_url_batch(
+        &self,
+        song_id: u64,
+        bitrate: u64,
+    ) -> Result<(SongDetail, SongUrl)> {
+        let url = format!("{}/api/batch", self.base_url);
+        let mut params = HashMap::new();
+        params.insert(
+            "/api/song/detail".to_string(),
+            format!("id={song_id}&ids=[{song_id}]"),
+        );
+        params.insert(
+            "/api/song/enhance/player/url".to_string(),
+            format!("ids=[{song_id}]&br={bitrate}"),
+        );
+
+        let mut request = self.client.post(url).form(&params);
+        if let Some(music_u) = &self.music_u {
+            request = request.header("Cookie", format!("MUSIC_U={music_u}"));
+        }
+
+        let response = request.send().await?.error_for_status()?;
+        let payload: serde_json::Value = response.json().await?;
+        parse_batch_detail_and_url(&payload)
+    }
+}
+
+fn find_batch_section<'a>(
+    payload: &'a serde_json::Value,
+    needle: &str,
+) -> Option<&'a serde_json::Value> {
+    let from_object = |value: &'a serde_json::Value| {
+        value.as_object().and_then(|obj| {
+            obj.iter()
+                .find_map(|(key, section)| key.contains(needle).then_some(section))
+        })
+    };
+
+    payload
+        .get(needle)
+        .or_else(|| payload.get("body").and_then(|body| body.get(needle)))
+        .or_else(|| from_object(payload))
+        .or_else(|| payload.get("body").and_then(from_object))
+}
+
+fn parse_batch_detail_and_url(payload: &serde_json::Value) -> Result<(SongDetail, SongUrl)> {
+    let detail_section = find_batch_section(payload, "/song/detail").ok_or_else(|| {
+        BotError::MusicApi("Batch payload missing song detail section".to_string())
+    })?;
+    let url_section = find_batch_section(payload, "/song/enhance/player/url")
+        .ok_or_else(|| BotError::MusicApi("Batch payload missing song URL section".to_string()))?;
+
+    let detail_response: SongDetailResponse = serde_json::from_value(detail_section.clone())?;
+    let url_response: SongUrlResponse = serde_json::from_value(url_section.clone())?;
+
+    if detail_response.code != 200 {
+        return Err(BotError::MusicApi(format!(
+            "Batch detail API returned code {}",
+            detail_response.code
+        )));
+    }
+
+    if url_response.code != 200 {
+        return Err(BotError::MusicApi(format!(
+            "Batch URL API returned code {}",
+            url_response.code
+        )));
+    }
+
+    let detail = detail_response
+        .songs
+        .into_iter()
+        .next()
+        .ok_or_else(|| BotError::MusicApi("Batch response has no song detail".to_string()))?;
+    let song_url = url_response
+        .data
+        .into_iter()
+        .next()
+        .ok_or_else(|| BotError::MusicApi("Batch response has no song URL".to_string()))?;
+
+    Ok((detail, song_url))
 }
 
 fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
@@ -752,6 +925,46 @@ mod tests {
 
         assert!(super::cache_entry_is_fresh(created_at, ttl, before_expire));
         assert!(!super::cache_entry_is_fresh(created_at, ttl, after_expire));
+    }
+
+    #[test]
+    fn batch_parser_extracts_detail_and_url() {
+        let payload = serde_json::json!({
+            "code": 200,
+            "body": {
+                "/api/song/detail?ids=[123]": {
+                    "code": 200,
+                    "songs": [
+                        {
+                            "id": 123,
+                            "name": "Song",
+                            "dt": 180000,
+                            "ar": [{"id": 7, "name": "Artist"}],
+                            "al": {"id": 9, "name": "Album", "picUrl": "https://img"}
+                        }
+                    ]
+                },
+                "/api/song/enhance/player/url": {
+                    "code": 200,
+                    "data": [
+                        {
+                            "id": 123,
+                            "url": "https://audio.test/song.flac",
+                            "br": 999000,
+                            "size": 123456,
+                            "md5": "abc",
+                            "type": "flac"
+                        }
+                    ]
+                }
+            }
+        });
+
+        let (detail, song_url) = super::parse_batch_detail_and_url(&payload).expect("parse batch");
+        assert_eq!(detail.id, 123);
+        assert_eq!(song_url.id, 123);
+        assert_eq!(song_url.url, "https://audio.test/song.flac");
+        assert_eq!(song_url.br, 999000);
     }
 }
 

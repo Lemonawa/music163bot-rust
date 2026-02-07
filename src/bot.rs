@@ -321,6 +321,12 @@ pub async fn run(config: Config) -> Result<()> {
         upload_counters: UploadCounters::default(),
     });
 
+    let prewarm_state = Arc::clone(&bot_state);
+    tokio::spawn(async move {
+        let _ =
+            run_upload_prewarm(&prewarm_state.config, || acquire_upload_bot(&prewarm_state)).await;
+    });
+
     // Create dispatcher
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(handle_message))
@@ -663,71 +669,49 @@ async fn process_music(
     }
 
     // Send initial message
+    let status_init_start = std::time::Instant::now();
     let status_msg = bot
         .send_message(msg.chat.id, "🔄 正在获取歌曲信息...")
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
+    tracing::info!(
+        "{}",
+        format_perf(PERF_STAGE_STATUS_INIT, status_init_start.elapsed())
+    );
 
-    // Fetch song details and a usable URL in parallel
+    // Fetch song details and a usable URL through batch-first path with fallback
     let fetch_detail_start = std::time::Instant::now();
     let fetch_url_start = std::time::Instant::now();
-    let song_detail_future = state.music_api.get_song_detail(music_id);
-    let song_url_future = async {
-        match state.music_api.get_song_url(music_id, 320_000).await {
-            Ok(url) if !url.url.is_empty() => Ok(url),
-            Ok(_) | Err(_) => state.music_api.get_song_url(music_id, 128_000).await,
-        }
-    };
-
-    let (song_detail_result, song_url_result) = tokio::join!(song_detail_future, song_url_future);
+    let select_url_start = std::time::Instant::now();
+    let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
+    let detail_and_url_result = state
+        .music_api
+        .get_song_detail_and_best_url(music_id, &bitrate_candidates)
+        .await;
+    let select_url_duration = select_url_start.elapsed();
 
     tracing::info!(
         "{}",
         format_perf("fetch_detail", fetch_detail_start.elapsed())
     );
     tracing::info!("{}", format_perf("fetch_url", fetch_url_start.elapsed()));
+    tracing::info!(
+        "{}",
+        format_perf(PERF_STAGE_SELECT_URL, select_url_duration)
+    );
 
-    let song_detail = match song_detail_result {
-        Ok(detail) => detail,
+    let (song_detail, song_url) = match detail_and_url_result {
+        Ok(result) => result,
         Err(e) => {
             bot.edit_message_text(
                 msg.chat.id,
                 status_msg.id,
-                format!("❌ 获取歌曲信息失败: {e}"),
+                format!("❌ 获取歌曲信息或下载链接失败: {e}"),
             )
             .await?;
             return Ok(());
         }
     };
-
-    let mut song_url = match song_url_result {
-        Ok(url) => url,
-        Err(e) => {
-            bot.edit_message_text(
-                msg.chat.id,
-                status_msg.id,
-                format!("❌ 获取下载链接失败: {e}"),
-            )
-            .await?;
-            return Ok(());
-        }
-    };
-
-    // Try FLAC after parallel fetch when MUSIC_U is available
-    if state.music_api.music_u.is_some() {
-        match state.music_api.get_song_url(music_id, 999_000).await {
-            Ok(url) if !url.url.is_empty() => {
-                tracing::info!("Using FLAC quality for music_id {}", music_id);
-                song_url = url;
-            }
-            _ => {
-                tracing::info!(
-                    "FLAC not available, falling back to MP3 for music_id {}",
-                    music_id
-                );
-            }
-        }
-    }
 
     if song_url.url.is_empty() {
         bot.edit_message_text(
@@ -739,6 +723,8 @@ async fn process_music(
         return Ok(());
     }
 
+    let pre_upload_path_start = std::time::Instant::now();
+
     // Update status
     let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
     bot.edit_message_text(
@@ -749,7 +735,17 @@ async fn process_music(
     .await?;
 
     // Download and process the song
-    match download_and_send_music(bot, msg, state, &song_detail, &song_url, &status_msg).await {
+    match download_and_send_music(
+        bot,
+        msg,
+        state,
+        &song_detail,
+        &song_url,
+        &status_msg,
+        pre_upload_path_start,
+    )
+    .await
+    {
         Ok(()) => {
             // Delete status message
             bot.delete_message(msg.chat.id, status_msg.id).await.ok();
@@ -770,6 +766,7 @@ async fn download_and_send_music(
     song_detail: &crate::music_api::SongDetail,
     song_url: &crate::music_api::SongUrl,
     status_msg: &Message,
+    pre_upload_path_start: std::time::Instant,
 ) -> Result<()> {
     let _permit = acquire_download_permit(&state.download_semaphore).await?;
 
@@ -1237,6 +1234,11 @@ async fn download_and_send_music(
     // Acquire upload bot with minimal lock contention.
     let upload_bot = acquire_upload_bot(state).await?;
 
+    tracing::info!(
+        "{}",
+        format_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_start.elapsed())
+    );
+
     // Send audio file with enhanced error handling and proper MIME type
     tracing::info!(
         "Sending audio file: {} ({:.2} MB)",
@@ -1484,6 +1486,14 @@ fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseE
     reqwest::Url::parse(api_url)
 }
 
+fn url_bitrate_candidates(has_music_u: bool) -> Vec<u64> {
+    if has_music_u {
+        vec![999_000, 320_000, 128_000]
+    } else {
+        vec![320_000, 128_000]
+    }
+}
+
 fn should_spawn_message_task(text: &str) -> bool {
     text.starts_with('/')
         || text.contains("music.163.com")
@@ -1502,8 +1512,15 @@ fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
 }
 
 fn should_refresh_upload_client(upload_state: &UploadClientState, reuse_limit: u32) -> bool {
-    let reuse_limit = reuse_limit.max(1);
-    upload_state.bot.is_none() || upload_state.reuse_count >= reuse_limit
+    if upload_state.bot.is_none() {
+        return true;
+    }
+
+    if reuse_limit == 0 {
+        return false;
+    }
+
+    upload_state.reuse_count >= reuse_limit
 }
 
 fn next_upload_mode(mode: UploadMode, succeeded: bool) -> Option<UploadMode> {
@@ -1577,6 +1594,19 @@ fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Clie
         tracing::error!("Failed to build HTTP client: {}", e);
         e.into()
     })
+}
+
+const PERF_STAGE_STATUS_INIT: &str = "status_init";
+const PERF_STAGE_SELECT_URL: &str = "select_url";
+const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
+
+#[cfg(test)]
+fn critical_path_stage_labels() -> [&'static str; 3] {
+    [
+        PERF_STAGE_STATUS_INIT,
+        PERF_STAGE_SELECT_URL,
+        PERF_STAGE_PRE_UPLOAD_PATH,
+    ]
 }
 
 fn format_perf(label: &str, duration: std::time::Duration) -> String {
@@ -1674,7 +1704,7 @@ fn build_upload_bot(config: &Config) -> Result<Bot> {
 }
 
 async fn acquire_upload_bot(state: &Arc<BotState>) -> Result<Bot> {
-    let reuse_limit = state.config.upload_client_reuse_requests.max(1);
+    let reuse_limit = state.config.upload_client_reuse_requests;
 
     let (reason, reuse_count_before) = {
         let mut upload_state = state.upload_client_state.lock().await;
@@ -1734,6 +1764,25 @@ async fn acquire_upload_bot(state: &Arc<BotState>) -> Result<Bot> {
     upload_state.reuse_count = next_reuse_count;
 
     get_upload_bot(&upload_state)
+}
+
+async fn run_upload_prewarm<T, F, Fut>(config: &Config, warmup: F) -> bool
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    match warmup().await {
+        Ok(_) => {
+            if upload_log_enabled(config, UploadLogLevel::Info) {
+                tracing::info!("Upload prewarm completed");
+            }
+            true
+        }
+        Err(e) => {
+            tracing::warn!("Upload prewarm failed, continuing startup: {}", e);
+            false
+        }
+    }
 }
 
 async fn acquire_download_permit(
@@ -1869,6 +1918,27 @@ mod tests {
     }
 
     #[test]
+    fn critical_path_stage_labels_are_stable() {
+        assert_eq!(
+            super::critical_path_stage_labels(),
+            ["status_init", "select_url", "pre_upload_path"]
+        );
+    }
+
+    #[test]
+    fn url_bitrate_candidates_prefers_flac_with_music_u() {
+        assert_eq!(
+            super::url_bitrate_candidates(true),
+            vec![999_000, 320_000, 128_000]
+        );
+    }
+
+    #[test]
+    fn url_bitrate_candidates_uses_mp3_without_music_u() {
+        assert_eq!(super::url_bitrate_candidates(false), vec![320_000, 128_000]);
+    }
+
+    #[test]
     fn spawn_gate_identifies_supported_messages() {
         assert!(super::should_spawn_message_task("/start"));
         assert!(super::should_spawn_message_task(
@@ -1944,6 +2014,30 @@ mod tests {
         assert!(super::should_refresh_upload_client(&no_bot, 10));
         assert!(!super::should_refresh_upload_client(&has_bot, 10));
         assert!(super::should_refresh_upload_client(&exhausted, 10));
+        assert!(!super::should_refresh_upload_client(&exhausted, 0));
+    }
+
+    #[tokio::test]
+    async fn upload_prewarm_failure_is_non_fatal() {
+        let config = crate::config::Config::default();
+        let ok = super::run_upload_prewarm(&config, || async {
+            Err::<(), crate::error::BotError>(crate::error::BotError::MusicApi(
+                "simulated prewarm failure".to_string(),
+            ))
+        })
+        .await;
+
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn upload_prewarm_runs_warmup_path() {
+        let config = crate::config::Config::default();
+        let ok =
+            super::run_upload_prewarm(&config, || async { Ok::<(), crate::error::BotError>(()) })
+                .await;
+
+        assert!(ok);
     }
 
     #[test]
