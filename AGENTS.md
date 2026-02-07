@@ -64,6 +64,7 @@ cargo test
 
 ## Git Workflow
 - Prefer small, logical commits.
+- Opportunistically create atomic commits for each independent change.
 - Use conventional commit prefixes: `feat:`, `fix:`, `perf:`, `docs:`, `chore:`.
 - Keep work local by default; do not push unless explicitly requested.
 - Do not rewrite published history unless explicitly requested.
