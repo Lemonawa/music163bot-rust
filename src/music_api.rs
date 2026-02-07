@@ -831,6 +831,29 @@ fn find_batch_section<'a>(
     payload: &'a serde_json::Value,
     needle: &str,
 ) -> Option<&'a serde_json::Value> {
+    let section_matches_shape = |section: &serde_json::Value| {
+        if needle.contains("/song/detail") {
+            return section
+                .get("songs")
+                .and_then(serde_json::Value::as_array)
+                .is_some();
+        }
+        if needle.contains("/song/enhance/player/url") {
+            return section
+                .get("data")
+                .and_then(serde_json::Value::as_array)
+                .is_some();
+        }
+        false
+    };
+
+    let section_payload = |section: &'a serde_json::Value| {
+        section
+            .get("body")
+            .or_else(|| section.get("result"))
+            .unwrap_or(section)
+    };
+
     let from_object = |value: &'a serde_json::Value| {
         value.as_object().and_then(|obj| {
             obj.iter().find_map(|(key, section)| {
@@ -843,10 +866,12 @@ fn find_batch_section<'a>(
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|path| path.contains(needle));
                 if path_match {
-                    return section
-                        .get("body")
-                        .or_else(|| section.get("result"))
-                        .or(Some(section));
+                    return Some(section_payload(section));
+                }
+
+                let candidate = section_payload(section);
+                if section_matches_shape(candidate) {
+                    return Some(candidate);
                 }
 
                 None
@@ -864,13 +889,14 @@ fn find_batch_section<'a>(
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|path| path.contains(needle));
                 if !path_match {
+                    let candidate = section_payload(entry);
+                    if section_matches_shape(candidate) {
+                        return Some(candidate);
+                    }
                     return None;
                 }
 
-                entry
-                    .get("body")
-                    .or_else(|| entry.get("result"))
-                    .or(Some(entry))
+                Some(section_payload(entry))
             })
         })
     };
@@ -882,6 +908,12 @@ fn find_batch_section<'a>(
         .or_else(|| payload.get("body").and_then(from_object))
         .or_else(|| from_array(payload))
         .or_else(|| payload.get("body").and_then(from_array))
+        .or_else(|| section_matches_shape(payload).then_some(payload))
+        .or_else(|| {
+            payload
+                .get("body")
+                .filter(|body| section_matches_shape(body))
+        })
 }
 
 fn merge_code_into_body(section: &serde_json::Value) -> Option<serde_json::Value> {
@@ -901,13 +933,30 @@ fn merge_code_into_body(section: &serde_json::Value) -> Option<serde_json::Value
     Some(serde_json::Value::Object(merged))
 }
 
+fn merge_default_code(section: &serde_json::Value) -> Option<serde_json::Value> {
+    let object = section.as_object()?;
+    if object.contains_key("code") {
+        return None;
+    }
+
+    let mut merged = object.clone();
+    merged.insert("code".to_string(), serde_json::Value::from(200));
+    Some(serde_json::Value::Object(merged))
+}
+
 fn parse_batch_response_section<T>(section: &serde_json::Value, section_name: &str) -> Result<T>
 where
     T: DeserializeOwned,
 {
     let mut candidates: Vec<serde_json::Value> = vec![section.clone()];
+    if let Some(merged) = merge_default_code(section) {
+        candidates.push(merged);
+    }
     if let Some(body) = section.get("body") {
         candidates.push(body.clone());
+        if let Some(merged) = merge_default_code(body) {
+            candidates.push(merged);
+        }
     }
     if let Some(merged) = merge_code_into_body(section) {
         candidates.push(merged);
@@ -1225,6 +1274,50 @@ mod tests {
         assert_eq!(detail.id, 789);
         assert_eq!(song_url.id, 789);
         assert_eq!(song_url.url, "https://audio.test/song3.flac");
+    }
+
+    #[test]
+    fn batch_parser_supports_array_entries_without_path() {
+        let payload = serde_json::json!({
+            "code": 200,
+            "body": [
+                {
+                    "code": 200,
+                    "body": {
+                        "songs": [
+                            {
+                                "id": 321,
+                                "name": "Shape Song",
+                                "dt": 123000,
+                                "ar": [{"id": 77, "name": "Shape Artist"}],
+                                "al": {"id": 88, "name": "Shape Album", "picUrl": "https://img-shape"}
+                            }
+                        ]
+                    }
+                },
+                {
+                    "code": 200,
+                    "body": {
+                        "data": [
+                            {
+                                "id": 321,
+                                "url": "https://audio.test/shape.flac",
+                                "br": 999000,
+                                "size": 888777,
+                                "md5": "shape",
+                                "type": "flac"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let (detail, song_url) =
+            super::parse_batch_detail_and_url(&payload).expect("parse shape-only array batch");
+        assert_eq!(detail.id, 321);
+        assert_eq!(song_url.id, 321);
+        assert_eq!(song_url.url, "https://audio.test/shape.flac");
     }
 
     #[test]
