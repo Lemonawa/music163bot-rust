@@ -126,17 +126,49 @@ impl InflightEntry {
     }
 
     async fn wait(&self) {
+        let notified = self.notify.notified();
+
+        #[cfg(test)]
+        if let Some(hook) = take_inflight_wait_hook() {
+            hook();
+        }
+
         if self.done.load(Ordering::Acquire) {
             return;
         }
 
-        self.notify.notified().await;
+        notified.await;
     }
 
     fn finish(&self) {
         self.done.store(true, Ordering::Release);
         self.notify.notify_waiters();
     }
+}
+
+#[cfg(test)]
+static INFLIGHT_WAIT_HOOK: std::sync::OnceLock<
+    std::sync::Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn set_inflight_wait_hook(hook: impl FnOnce() + Send + 'static) {
+    let slot = INFLIGHT_WAIT_HOOK.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *guard = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn take_inflight_wait_hook() -> Option<Box<dyn FnOnce() + Send + 'static>> {
+    let slot = INFLIGHT_WAIT_HOOK.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.take()
 }
 
 impl Drop for InflightLeaderGuard {
@@ -224,7 +256,6 @@ pub async fn run(config: Config) -> Result<()> {
                     .user_agent("Go-http-client/2.0")
                     .pool_max_idle_per_host(2)
                     .pool_idle_timeout(std::time::Duration::from_secs(60))
-                    .danger_accept_invalid_certs(false)
                     .timeout(std::time::Duration::from_secs(30))
                     .no_gzip();
                 let client = build_reqwest_client(client_builder)?;
@@ -300,19 +331,22 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!("Bot @{} started successfully!", bot_username);
 
     // Create bot state (needs bot username)
+    let max_concurrent_downloads = config.max_concurrent_downloads;
+    let upload_max_concurrent = config.upload_max_concurrent;
+
     let bot_state = Arc::new(BotState {
-        config: config.clone(),
+        config,
         database,
         music_api,
         inflight_downloads: Arc::new(InflightDownloads::default()),
         download_semaphore: Arc::new(tokio::sync::Semaphore::new(
-            config.max_concurrent_downloads as usize,
+            max_concurrent_downloads as usize,
         )),
         upload_semaphore: Arc::new(tokio::sync::Semaphore::new(upload_task_limit(
-            config.upload_max_concurrent,
+            upload_max_concurrent,
         ))),
         message_task_semaphore: Arc::new(tokio::sync::Semaphore::new(message_task_limit(
-            config.max_concurrent_downloads,
+            max_concurrent_downloads,
         ))),
         maintenance_tx,
         bot_username,
@@ -880,7 +914,6 @@ async fn download_and_send_music(
             &state.config,
             content_length,
             filename.clone(),
-            file_ext,
             &state.config.cache_dir,
         )
         .await?;
@@ -958,14 +991,18 @@ async fn download_and_send_music(
 
     // Validate file size using downloaded byte count
     if downloaded == 0 {
-        audio_buffer.cleanup().await.ok();
+        if let Err(e) = audio_buffer.cleanup().await {
+            tracing::warn!("Audio buffer cleanup failed: {}", e);
+        }
         bot.edit_message_text(msg.chat.id, status_msg.id, "下载失败: 文件为空")
             .await?;
         return Ok(());
     }
 
     if downloaded < 1024 {
-        audio_buffer.cleanup().await.ok();
+        if let Err(e) = audio_buffer.cleanup().await {
+            tracing::warn!("Audio buffer cleanup failed: {}", e);
+        }
         bot.edit_message_text(
             msg.chat.id,
             status_msg.id,
@@ -1070,9 +1107,13 @@ async fn download_and_send_music(
     );
 
     if file_size == 0 {
-        audio_buffer.cleanup().await.ok();
-        if let Some(thumb_buf) = thumbnail_buffer {
-            thumb_buf.cleanup().await.ok();
+        if let Err(e) = audio_buffer.cleanup().await {
+            tracing::warn!("Audio buffer cleanup failed: {}", e);
+        }
+        if let Some(thumb_buf) = thumbnail_buffer
+            && let Err(e) = thumb_buf.cleanup().await
+        {
+            tracing::warn!("Thumbnail cleanup failed: {}", e);
         }
         return Err(anyhow::anyhow!("Audio file is empty after processing").into());
     }
@@ -1167,9 +1208,7 @@ async fn download_and_send_music(
         if let Some(file_id) = extract_file_id_from_response(resp_json) {
             song_info.file_id = Some(file_id);
         }
-    } else {
-        let e = upload_result.expect_err("checked upload_result is Err");
-
+    } else if let Err(e) = upload_result {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
         tracing::warn!(
             "Upload failed after {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
@@ -1180,17 +1219,25 @@ async fn download_and_send_music(
         );
         tracing::warn!("Upload failed: {}", e);
 
-        audio_buffer.cleanup().await.ok();
-        if let Some(thumb_buf) = thumbnail_buffer {
-            thumb_buf.cleanup().await.ok();
+        if let Err(cleanup_err) = audio_buffer.cleanup().await {
+            tracing::warn!("Audio buffer cleanup failed: {}", cleanup_err);
+        }
+        if let Some(thumb_buf) = thumbnail_buffer
+            && let Err(cleanup_err) = thumb_buf.cleanup().await
+        {
+            tracing::warn!("Thumbnail cleanup failed: {}", cleanup_err);
         }
 
         return Err(e);
     }
 
-    audio_buffer.cleanup().await.ok();
-    if let Some(thumb_buf) = thumbnail_buffer {
-        thumb_buf.cleanup().await.ok();
+    if let Err(e) = audio_buffer.cleanup().await {
+        tracing::warn!("Audio buffer cleanup failed: {}", e);
+    }
+    if let Some(thumb_buf) = thumbnail_buffer
+        && let Err(e) = thumb_buf.cleanup().await
+    {
+        tracing::warn!("Thumbnail cleanup failed: {}", e);
     }
 
     // Save to database and update query statistics
@@ -1285,6 +1332,11 @@ fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseE
     reqwest::Url::parse(api_url)
 }
 
+fn is_admin(msg: &Message, config: &Config) -> bool {
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    config.bot_admin.contains(&user_id)
+}
+
 fn is_official_telegram_api(api_url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(api_url) else {
         return false;
@@ -1330,8 +1382,7 @@ async fn select_local_upload_target(
 ) -> UploadFileTarget {
     maybe_local_file_uri(config, api_base_url, path)
         .await
-        .map(UploadFileTarget::LocalUri)
-        .unwrap_or(UploadFileTarget::Multipart)
+        .map_or(UploadFileTarget::Multipart, UploadFileTarget::LocalUri)
 }
 
 fn url_bitrate_candidates(has_music_u: bool) -> Vec<u64> {
@@ -1435,11 +1486,6 @@ fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Clie
 
 const PERF_STAGE_SELECT_URL: &str = "select_url";
 const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
-
-#[cfg(test)]
-fn critical_path_stage_labels() -> [&'static str; 2] {
-    [PERF_STAGE_SELECT_URL, PERF_STAGE_PRE_UPLOAD_PATH]
-}
 
 fn format_perf(label: &str, duration: std::time::Duration) -> String {
     format!("[{label}] {}ms", duration.as_millis())
@@ -1570,27 +1616,7 @@ async fn raw_send_document(
         .text()
         .await
         .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to read upload response: {e}")))?;
-
-    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
-        tracing::error!(
-            "Upload response parse error: {e}. Body: {}",
-            &body[..body.len().min(500)]
-        );
-        BotError::Other(anyhow::anyhow!("Failed to parse upload response: {e}"))
-    })?;
-
-    if !status.is_success() || json.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-        let description = json
-            .get("description")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown error");
-        tracing::error!("Telegram API error ({status}): {description} [method=sendDocument]",);
-        return Err(BotError::Other(anyhow::anyhow!(
-            "Telegram API error: {description} (HTTP {status})",
-        )));
-    }
-
-    Ok(json)
+    parse_telegram_api_response(&body, status, "sendDocument")
 }
 
 /// Upload a file via raw reqwest multipart with pre-computed Content-Length
@@ -1678,32 +1704,31 @@ async fn raw_send_file(
                     .mime_str("image/jpeg")?;
                 form = form.part("thumbnail", thumb_part);
             }
-            ThumbnailBuffer::Disk { path } => match select_local_upload_target(
-                config,
-                api_base_url,
-                path,
-            )
-            .await
-            {
-                UploadFileTarget::LocalUri(uri) => {
-                    form = form.text("thumbnail", uri);
+            ThumbnailBuffer::Disk { path } => {
+                match select_local_upload_target(config, api_base_url, path).await {
+                    UploadFileTarget::LocalUri(uri) => {
+                        form = form.text("thumbnail", uri);
+                    }
+                    UploadFileTarget::Multipart => {
+                        let file = tokio::fs::File::open(path).await.map_err(|e| {
+                            BotError::Other(anyhow::anyhow!("Failed to open thumbnail: {e}"))
+                        })?;
+                        let len = file
+                            .metadata()
+                            .await
+                            .map_err(|e| {
+                                BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}"))
+                            })?
+                            .len();
+                        let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+                        let body = reqwest::Body::wrap_stream(stream);
+                        let thumb_part = reqwest::multipart::Part::stream_with_length(body, len)
+                            .file_name("thumb.jpg")
+                            .mime_str("image/jpeg")?;
+                        form = form.part("thumbnail", thumb_part);
+                    }
                 }
-                UploadFileTarget::Multipart => {
-                    let file = tokio::fs::File::open(path).await.map_err(|e| {
-                        BotError::Other(anyhow::anyhow!("Failed to open thumbnail: {e}"))
-                    })?;
-                    let len = file.metadata().await.map_err(|e| {
-                        BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}"))
-                    })?
-                    .len();
-                    let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
-                    let body = reqwest::Body::wrap_stream(stream);
-                    let thumb_part = reqwest::multipart::Part::stream_with_length(body, len)
-                        .file_name("thumb.jpg")
-                        .mime_str("image/jpeg")?;
-                    form = form.part("thumbnail", thumb_part);
-                }
-            },
+            }
         }
     }
 
@@ -1720,8 +1745,15 @@ async fn raw_send_file(
         .text()
         .await
         .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to read upload response: {e}")))?;
+    parse_telegram_api_response(&body, status, "sendAudio")
+}
 
-    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+fn parse_telegram_api_response(
+    body: &str,
+    status: reqwest::StatusCode,
+    method: &str,
+) -> Result<serde_json::Value> {
+    let json: serde_json::Value = serde_json::from_str(body).map_err(|e| {
         tracing::error!(
             "Upload response parse error: {e}. Body: {}",
             &body[..body.len().min(500)]
@@ -1734,7 +1766,7 @@ async fn raw_send_file(
             .get("description")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error");
-        tracing::error!("Telegram API error ({status}): {description} [method=sendAudio]",);
+        tracing::error!("Telegram API error ({status}): {description} [method={method}]",);
         return Err(BotError::Other(anyhow::anyhow!(
             "Telegram API error: {description} (HTTP {status})",
         )));
@@ -1980,8 +2012,33 @@ mod tests {
         path
     }
 
-    fn cached_size(size: u64) -> u64 {
-        size
+    fn critical_path_stage_labels() -> [&'static str; 2] {
+        [
+            super::PERF_STAGE_SELECT_URL,
+            super::PERF_STAGE_PRE_UPLOAD_PATH,
+        ]
+    }
+
+    #[tokio::test]
+    async fn inflight_entry_wait_returns_after_finish() {
+        let entry = super::InflightEntry::new();
+        entry.finish();
+
+        tokio::time::timeout(Duration::from_secs(1), entry.wait())
+            .await
+            .expect("wait should return when already finished");
+    }
+
+    #[tokio::test]
+    async fn inflight_entry_wait_wakes_on_finish() {
+        let entry = Arc::new(super::InflightEntry::new());
+        let entry_for_hook = Arc::clone(&entry);
+        super::set_inflight_wait_hook(move || {
+            entry_for_hook.finish();
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(1), entry.wait()).await;
+        assert!(result.is_ok(), "wait should complete after finish");
     }
 
     #[test]
@@ -2122,12 +2179,9 @@ mod tests {
         config.upload_local_file_uri = true;
 
         let path = create_temp_file();
-        let target = super::select_local_upload_target(
-            &config,
-            "http://127.0.0.1:8081/botTOKEN/",
-            &path,
-        )
-        .await;
+        let target =
+            super::select_local_upload_target(&config, "http://127.0.0.1:8081/botTOKEN/", &path)
+                .await;
         fs::remove_file(&path).expect("remove temp file");
 
         match target {
@@ -2171,9 +2225,10 @@ mod tests {
         let semaphore = tokio::sync::Semaphore::new(1);
         semaphore.close();
 
-        let err = acquire_download_permit(&semaphore)
-            .await
-            .expect_err("expected error for closed semaphore");
+        let err = match acquire_download_permit(&semaphore).await {
+            Ok(_) => panic!("expected error for closed semaphore"),
+            Err(err) => err,
+        };
         let err_str = format!("{err}");
         assert!(err_str.contains("download semaphore closed"));
     }
@@ -2193,12 +2248,6 @@ mod tests {
     }
 
     #[test]
-    fn cached_file_size_is_reused() {
-        let size = cached_size(1024);
-        assert_eq!(size, 1024);
-    }
-
-    #[test]
     fn perf_log_includes_stage_label() {
         let s = format_perf("download", std::time::Duration::from_millis(50));
         assert!(s.contains("download"));
@@ -2207,7 +2256,7 @@ mod tests {
     #[test]
     fn critical_path_stage_labels_are_stable() {
         assert_eq!(
-            super::critical_path_stage_labels(),
+            critical_path_stage_labels(),
             ["select_url", "pre_upload_path"]
         );
     }
@@ -2549,13 +2598,13 @@ async fn handle_search_command(
             }
 
             let mut results = String::new();
-            let mut buttons = Vec::new();
+            let mut buttons = Vec::with_capacity(songs.len().min(8));
 
             for (i, song) in songs.iter().take(8).enumerate() {
                 let artists = format_artists(&song.artists);
                 append_search_result_line(&mut results, i + 1, &song.name, &artists);
                 buttons.push(InlineKeyboardButton::callback(
-                    format!("{}", i + 1),
+                    (i + 1).to_string(),
                     format!("music {}", song.id),
                 ));
             }
@@ -2680,12 +2729,8 @@ async fn handle_lyric_command(
             let lrc_path = std::path::PathBuf::from(&state.config.cache_dir).join(&lrc_filename);
 
             if let Err(e) = tokio::fs::write(&lrc_path, &lyric).await {
-                bot.edit_message_text(
-                    msg.chat.id,
-                    status_msg.id,
-                    format!("写入歌词文件失败: {e}"),
-                )
-                .await?;
+                bot.edit_message_text(msg.chat.id, status_msg.id, format!("写入歌词文件失败: {e}"))
+                    .await?;
                 return Ok(());
             }
 
@@ -2703,8 +2748,7 @@ async fn handle_lyric_command(
                 }
             };
 
-            let (_upload_bot, raw_client, api_base_url) = match acquire_upload_client(state).await
-            {
+            let (_upload_bot, raw_client, api_base_url) = match acquire_upload_client(state).await {
                 Ok(bundle) => bundle,
                 Err(e) => {
                     tokio::fs::remove_file(&lrc_path).await.ok();
@@ -2754,12 +2798,8 @@ async fn handle_lyric_command(
                     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
                 }
                 Err(e) => {
-                    bot.edit_message_text(
-                        msg.chat.id,
-                        status_msg.id,
-                        format!("发送歌词失败: {e}"),
-                    )
-                    .await?;
+                    bot.edit_message_text(msg.chat.id, status_msg.id, format!("发送歌词失败: {e}"))
+                        .await?;
                 }
             }
         }
@@ -2822,7 +2862,7 @@ async fn handle_rmcache_command(
         state.config.bot_admin
     );
 
-    if !state.config.bot_admin.contains(&user_id) {
+    if !is_admin(msg, &state.config) {
         bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
             .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
@@ -2895,7 +2935,7 @@ async fn handle_clearallcache_command(
         state.config.bot_admin
     );
 
-    if !state.config.bot_admin.contains(&user_id) {
+    if !is_admin(msg, &state.config) {
         bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
             .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
@@ -2919,7 +2959,7 @@ async fn handle_clearallcache_confirm_command(
     // Check if user is admin
     let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
 
-    if !state.config.bot_admin.contains(&user_id) {
+    if !is_admin(msg, &state.config) {
         bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
             .reply_parameters(ReplyParameters::new(msg.id))
             .await?;
@@ -3038,7 +3078,7 @@ async fn handle_inline_query(
 
     match state.music_api.search_songs(search_keyword, 10).await {
         Ok(songs) => {
-            let mut results = Vec::new();
+            let mut results = Vec::with_capacity(songs.len().min(10));
 
             for (i, song) in songs.iter().take(10).enumerate() {
                 let artists = format_artists(&song.artists);

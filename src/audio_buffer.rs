@@ -57,13 +57,11 @@ impl AudioBuffer {
     /// * `config` - Application configuration
     /// * `content_length` - Expected file size in bytes (0 if unknown)
     /// * `filename` - Target filename
-    /// * `file_ext` - File extension (mp3, flac)
     /// * `cache_dir` - Directory for disk storage
     pub async fn new(
         config: &Config,
         content_length: u64,
         filename: String,
-        _file_ext: &str,
         cache_dir: &str,
     ) -> Result<Self> {
         let use_memory = Self::should_use_memory(config, content_length);
@@ -220,11 +218,10 @@ impl AudioBuffer {
     pub async fn write_chunk(&mut self, chunk: &[u8]) -> Result<()> {
         match self {
             Self::Disk { file, .. } => {
-                if let Some(f) = file {
-                    f.write_all(chunk)
-                        .await
-                        .context("Failed to write chunk to disk")?;
-                }
+                let f = file.as_mut().context("Disk buffer missing file handle")?;
+                f.write_all(chunk)
+                    .await
+                    .context("Failed to write chunk to disk")?;
             }
             Self::Memory { data, .. } => {
                 data.extend_from_slice(chunk);
@@ -310,60 +307,17 @@ impl AudioBuffer {
         song_detail: &SongDetail,
         artwork_data: Option<&[u8]>,
     ) -> Result<()> {
-        use crate::music_api::format_artists;
-        use id3::{Tag, TagLike, Version, frame};
+        use id3::Version;
+
+        let tag = Self::build_id3_tag(song_detail, artwork_data);
 
         match self {
             Self::Disk { path, .. } => {
-                // Disk mode: use existing file-based approach
-                let mut tag = Tag::new();
-
-                tag.set_title(&song_detail.name);
-                let album_name = song_detail
-                    .al
-                    .as_ref()
-                    .map_or("Unknown Album", |al| al.name.as_str());
-                tag.set_album(album_name);
-                tag.set_artist(format_artists(song_detail.ar.as_deref().unwrap_or(&[])));
-                tag.set_duration((song_detail.dt.unwrap_or(0) / 1000) as u32);
-
-                if let Some(artwork) = artwork_data {
-                    let picture = frame::Picture {
-                        mime_type: "image/jpeg".to_string(),
-                        picture_type: frame::PictureType::CoverFront,
-                        description: "Album Cover".to_string(),
-                        data: artwork.to_vec(),
-                    };
-                    tag.add_frame(picture);
-                }
-
                 tag.write_to_path(path, Version::Id3v24)
                     .context("Failed to write ID3 tags to disk file")?;
             }
             Self::Memory { data, .. } => {
                 // Memory mode: create new tag and prepend to audio data
-                let mut tag = Tag::new();
-
-                tag.set_title(&song_detail.name);
-                let album_name = song_detail
-                    .al
-                    .as_ref()
-                    .map_or("Unknown Album", |al| al.name.as_str());
-                tag.set_album(album_name);
-                tag.set_artist(format_artists(song_detail.ar.as_deref().unwrap_or(&[])));
-                tag.set_duration((song_detail.dt.unwrap_or(0) / 1000) as u32);
-
-                if let Some(artwork) = artwork_data {
-                    let picture = frame::Picture {
-                        mime_type: "image/jpeg".to_string(),
-                        picture_type: frame::PictureType::CoverFront,
-                        description: "Album Cover".to_string(),
-                        data: artwork.to_vec(),
-                    };
-                    tag.add_frame(picture);
-                }
-
-                // Write tag to buffer
                 let mut tag_buffer = Vec::new();
                 tag.write_to(&mut tag_buffer, Version::Id3v24)
                     .context("Failed to write ID3 tags to memory")?;
@@ -387,12 +341,38 @@ impl AudioBuffer {
                     new_data.extend_from_slice(data);
                     *data = new_data;
                 }
-
-                // Release unused capacity to reduce memory footprint
             }
         }
 
         Ok(())
+    }
+
+    fn build_id3_tag(song_detail: &SongDetail, artwork_data: Option<&[u8]>) -> id3::Tag {
+        use crate::music_api::format_artists;
+        use id3::{Tag, TagLike, frame};
+
+        let mut tag = Tag::new();
+
+        tag.set_title(&song_detail.name);
+        let album_name = song_detail
+            .al
+            .as_ref()
+            .map_or("Unknown Album", |al| al.name.as_str());
+        tag.set_album(album_name);
+        tag.set_artist(format_artists(song_detail.ar.as_deref().unwrap_or(&[])));
+        tag.set_duration((song_detail.dt.unwrap_or(0) / 1000) as u32);
+
+        if let Some(artwork) = artwork_data {
+            let picture = frame::Picture {
+                mime_type: "image/jpeg".to_string(),
+                picture_type: frame::PictureType::CoverFront,
+                description: "Album Cover".to_string(),
+                data: artwork.to_vec(),
+            };
+            tag.add_frame(picture);
+        }
+
+        tag
     }
 
     /// Find the start of MP3 audio data (after ID3v2 tag)
@@ -435,11 +415,69 @@ impl AudioBuffer {
         song_detail: &SongDetail,
         artwork_data: Option<&[u8]>,
     ) -> Result<()> {
-        use crate::music_api::format_artists;
         use metaflac::Tag;
-        use metaflac::block::{Picture, PictureType};
+        let mut tag = match Tag::read_from_path(path) {
+            Ok(tag) => tag,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    path = %path.display(),
+                    "Failed to read FLAC tags from disk"
+                );
+                Tag::new()
+            }
+        };
 
-        let mut tag = Tag::read_from_path(path).unwrap_or_else(|_| Tag::new());
+        Self::build_flac_tag_updates(&mut tag, song_detail, artwork_data);
+
+        tag.write_to_path(path)
+            .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata: {e}"))?;
+
+        Ok(())
+    }
+
+    /// Add FLAC metadata in memory by parsing and rebuilding the file
+    fn add_flac_metadata_memory(
+        data: &mut Vec<u8>,
+        song_detail: &SongDetail,
+        artwork_data: Option<&[u8]>,
+    ) -> Result<()> {
+        use metaflac::Tag;
+
+        // 1. Find where audio data starts
+        let audio_start = Self::find_flac_audio_start(data)?;
+        // Clone only the audio portion we need
+        let audio_data = &data[audio_start..];
+
+        // 2. Read existing metadata
+        let mut cursor = Cursor::new(&data[..]);
+        let mut tag = match Tag::read_from(&mut cursor) {
+            Ok(tag) => tag,
+            Err(err) => {
+                tracing::warn!(error = %err, "Failed to read FLAC tags from memory");
+                Tag::new()
+            }
+        };
+
+        Self::build_flac_tag_updates(&mut tag, song_detail, artwork_data);
+
+        // 5. Build new data with single allocation
+        let mut new_data = Vec::new();
+        tag.write_to(&mut new_data)
+            .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
+        new_data.extend_from_slice(audio_data);
+        *data = new_data;
+
+        Ok(())
+    }
+
+    fn build_flac_tag_updates(
+        tag: &mut metaflac::Tag,
+        song_detail: &SongDetail,
+        artwork_data: Option<&[u8]>,
+    ) {
+        use crate::music_api::format_artists;
+        use metaflac::block::{Picture, PictureType};
 
         // Add Vorbis Comments (text metadata)
         // Title
@@ -483,76 +521,6 @@ impl AudioBuffer {
 
             tag.push_block(metaflac::Block::Picture(pic));
         }
-
-        tag.write_to_path(path)
-            .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata: {e}"))?;
-
-        Ok(())
-    }
-
-    /// Add FLAC metadata in memory by parsing and rebuilding the file
-    fn add_flac_metadata_memory(
-        data: &mut Vec<u8>,
-        song_detail: &SongDetail,
-        artwork_data: Option<&[u8]>,
-    ) -> Result<()> {
-        use crate::music_api::format_artists;
-        use metaflac::Tag;
-        use metaflac::block::{Picture, PictureType};
-
-        // 1. Find where audio data starts
-        let audio_start = Self::find_flac_audio_start(data)?;
-        // Clone only the audio portion we need
-        let audio_data = &data[audio_start..];
-
-        // 2. Read existing metadata
-        let mut cursor = Cursor::new(&data[..]);
-        let mut tag = Tag::read_from(&mut cursor).unwrap_or_else(|_| Tag::new());
-
-        // 3. Add Vorbis Comments (text metadata)
-        tag.set_vorbis("TITLE", vec![song_detail.name.clone()]);
-
-        let album_name = song_detail
-            .al
-            .as_ref()
-            .map_or("Unknown Album", |al| al.name.as_str());
-        tag.set_vorbis("ALBUM", vec![album_name.to_string()]);
-
-        let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
-        tag.set_vorbis("ARTIST", vec![artist]);
-
-        // 4. Add album artwork if provided
-        if let Some(artwork_data) = artwork_data {
-            tag.remove_picture_type(PictureType::CoverFront);
-
-            // 优化：使用 ImageReader 避免完整解码，减少内存占用
-            let (width, height) = image::ImageReader::new(std::io::Cursor::new(artwork_data))
-                .with_guessed_format()
-                .ok()
-                .and_then(|r| r.into_dimensions().ok())
-                .unwrap_or((0, 0));
-
-            let mut pic = Picture::new();
-            pic.picture_type = PictureType::CoverFront;
-            pic.mime_type = "image/jpeg".to_string();
-            pic.description = "Front cover".to_string();
-            pic.width = width;
-            pic.height = height;
-            pic.depth = 24;
-            pic.num_colors = 0;
-            pic.data = artwork_data.to_vec();
-
-            tag.push_block(metaflac::Block::Picture(pic));
-        }
-
-        // 5. Build new data with single allocation
-        let mut new_data = Vec::new();
-        tag.write_to(&mut new_data)
-            .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
-        new_data.extend_from_slice(audio_data);
-        *data = new_data;
-
-        Ok(())
     }
 
     /// Find the start of FLAC audio frames (after all metadata blocks)
@@ -755,6 +723,64 @@ async fn remove_file_if_exists(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::fmt::MakeWriter;
+
+    struct BufferWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    struct BufferGuard {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl std::io::Write for BufferGuard {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut buffer = self
+                .buffer
+                .lock()
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock poisoned"))?;
+            buffer.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for BufferWriter {
+        type Writer = BufferGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            BufferGuard {
+                buffer: Arc::clone(&self.buffer),
+            }
+        }
+    }
+
+    fn capture_warn_logs<F>(action: F) -> String
+    where
+        F: FnOnce(),
+    {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+            .with_writer(BufferWriter {
+                buffer: Arc::clone(&buffer),
+            })
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, action);
+
+        let buffer = buffer
+            .lock()
+            .expect("log buffer lock should succeed")
+            .clone();
+        String::from_utf8_lossy(&buffer).to_string()
+    }
 
     fn sample_song_detail() -> SongDetail {
         SongDetail {
@@ -794,6 +820,17 @@ mod tests {
         flac_data.push(0x80);
         flac_data.extend_from_slice(&[0x00, 0x00, 0x22]);
         flac_data.extend_from_slice(&[0u8; 34]);
+        flac_data.extend_from_slice(b"AUDIO_FRAMES");
+        flac_data
+    }
+
+    fn sample_flac_bytes_with_invalid_vorbis() -> Vec<u8> {
+        let mut flac_data = b"fLaC".to_vec();
+        flac_data.push(0x80 | 0x04);
+        flac_data.extend_from_slice(&[0x00, 0x00, 0x09]);
+        flac_data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        flac_data.push(0xFF);
+        flac_data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
         flac_data.extend_from_slice(b"AUDIO_FRAMES");
         flac_data
     }
@@ -862,7 +899,6 @@ mod tests {
             &config,
             1024,
             "test.mp3".to_string(),
-            "mp3",
             cache_dir.to_str().unwrap(),
         )
         .await
@@ -870,6 +906,22 @@ mod tests {
 
         assert!(!memory_buffer.is_disk());
         assert!(memory_buffer.is_memory());
+    }
+
+    #[tokio::test]
+    async fn write_chunk_errors_without_disk_handle() {
+        let path = std::env::temp_dir().join(format!(
+            "music163bot_audio_buffer_none_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let mut buffer = AudioBuffer::Disk {
+            path,
+            file: None,
+            filename: "missing.mp3".to_string(),
+        };
+
+        let result = buffer.write_chunk(b"abc").await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -989,6 +1041,45 @@ mod tests {
             AudioBuffer::find_flac_audio_start(&second_data).expect("second audio start");
         assert_eq!(&first_data[first_audio_start..], b"AUDIO_FRAMES");
         assert_eq!(&second_data[second_audio_start..], b"AUDIO_FRAMES");
+    }
+
+    #[test]
+    fn flac_disk_logs_warning_on_tag_read_failure() {
+        let detail = sample_song_detail();
+        let path = std::env::temp_dir().join(format!(
+            "music163bot_bad_flac_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::write(&path, b"NOTFLAC").expect("write temp flac");
+        let mut buffer = AudioBuffer::Disk {
+            path: path.clone(),
+            file: None,
+            filename: "bad.flac".to_string(),
+        };
+
+        let logs = capture_warn_logs(|| {
+            let _ = buffer.add_flac_metadata(&detail, None);
+        });
+
+        let _ = std::fs::remove_file(&path);
+        assert!(logs.contains("Failed to read FLAC tags from disk"));
+    }
+
+    #[test]
+    fn flac_memory_logs_warning_on_tag_read_failure() {
+        let detail = sample_song_detail();
+        let data = sample_flac_bytes_with_invalid_vorbis();
+        let mut buffer = AudioBuffer::Memory {
+            data,
+            filename: "bad.flac".to_string(),
+            capacity: 0,
+        };
+
+        let logs = capture_warn_logs(|| {
+            let _ = buffer.add_flac_metadata(&detail, None);
+        });
+
+        assert!(logs.contains("Failed to read FLAC tags from memory"));
     }
 
     #[test]
