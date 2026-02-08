@@ -133,6 +133,25 @@ fn parse_bool_like(value: &str) -> Option<bool> {
     }
 }
 
+/// Parse a string value into type T, returning `default` and logging a warning on failure.
+#[allow(dead_code)]
+fn parse_field<T: std::str::FromStr>(value: &str, default: T, key: &str) -> T {
+    value.parse().unwrap_or_else(|_| {
+        tracing::warn!("Invalid {key} '{value}', using default");
+        default
+    })
+}
+
+/// Parse a boolean config field, updating `target` on success and logging a warning on failure.
+#[allow(dead_code)]
+fn apply_bool_field(value: &str, target: &mut bool, key: &str) {
+    if let Some(parsed) = parse_bool_like(value) {
+        *target = parsed;
+    } else {
+        tracing::warn!("Invalid {key} '{value}', using default {target}");
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Required fields
@@ -727,5 +746,31 @@ token=token\n";
         let _ = std::fs::remove_file(&temp_path);
 
         assert_eq!(loaded.bot_token, "token");
+    }
+
+    #[test]
+    fn parse_field_returns_parsed_value() {
+        let result: u32 = super::parse_field("42", 0, "test_key");
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn parse_field_returns_default_on_invalid() {
+        let result: u32 = super::parse_field("not_a_number", 99, "test_key");
+        assert_eq!(result, 99);
+    }
+
+    #[test]
+    fn parse_bool_field_updates_target() {
+        let mut target = false;
+        super::apply_bool_field("true", &mut target, "test_key");
+        assert!(target);
+    }
+
+    #[test]
+    fn parse_bool_field_keeps_default_on_invalid() {
+        let mut target = true;
+        super::apply_bool_field("banana", &mut target, "test_key");
+        assert!(target); // unchanged
     }
 }

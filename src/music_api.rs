@@ -231,58 +231,55 @@ impl MusicApi {
 
     fn get_cached_song_detail(&self, song_id: u64) -> Option<SongDetail> {
         let now = Instant::now();
-        let mut cache = lock_or_recover(&self.song_detail_cache);
-        if let Some(entry) = cache.get(&song_id)
-            && entry.is_fresh_at(now)
-        {
-            return Some(entry.value.clone());
+        let entry = self.song_detail_cache.get(&song_id)?;
+        if entry.is_fresh_at(now) {
+            Some(entry.value.clone())
+        } else {
+            drop(entry);
+            self.song_detail_cache.remove(&song_id);
+            None
         }
-
-        cache.remove(&song_id);
-        None
     }
 
     fn cache_song_detail(&self, song_id: u64, detail: SongDetail) {
-        let mut cache = lock_or_recover(&self.song_detail_cache);
-        cache.insert(song_id, TimedCacheEntry::new(detail, SONG_DETAIL_CACHE_TTL));
+        self.song_detail_cache
+            .insert(song_id, TimedCacheEntry::new(detail, SONG_DETAIL_CACHE_TTL));
     }
 
     fn get_cached_song_url(&self, song_id: u64, br: u64) -> Option<SongUrl> {
         let key = song_url_cache_key(song_id, br);
         let now = Instant::now();
-        let mut cache = lock_or_recover(&self.song_url_cache);
-        if let Some(entry) = cache.get(&key)
-            && entry.is_fresh_at(now)
-        {
-            return Some(entry.value.clone());
+        let entry = self.song_url_cache.get(&key)?;
+        if entry.is_fresh_at(now) {
+            Some(entry.value.clone())
+        } else {
+            drop(entry);
+            self.song_url_cache.remove(&key);
+            None
         }
-
-        cache.remove(&key);
-        None
     }
 
     fn cache_song_url(&self, song_id: u64, br: u64, song_url: SongUrl) {
         let key = song_url_cache_key(song_id, br);
-        let mut cache = lock_or_recover(&self.song_url_cache);
-        cache.insert(key, TimedCacheEntry::new(song_url, SONG_URL_CACHE_TTL));
+        self.song_url_cache
+            .insert(key, TimedCacheEntry::new(song_url, SONG_URL_CACHE_TTL));
     }
 
     fn get_cached_song_lyric(&self, song_id: u64) -> Option<String> {
         let now = Instant::now();
-        let mut cache = lock_or_recover(&self.song_lyric_cache);
-        if let Some(entry) = cache.get(&song_id)
-            && entry.is_fresh_at(now)
-        {
-            return Some(entry.value.clone());
+        let entry = self.song_lyric_cache.get(&song_id)?;
+        if entry.is_fresh_at(now) {
+            Some(entry.value.clone())
+        } else {
+            drop(entry);
+            self.song_lyric_cache.remove(&song_id);
+            None
         }
-
-        cache.remove(&song_id);
-        None
     }
 
     fn cache_song_lyric(&self, song_id: u64, lyric: String) {
-        let mut cache = lock_or_recover(&self.song_lyric_cache);
-        cache.insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
+        self.song_lyric_cache
+            .insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
     }
 
     fn build_eapi_cookie(&self) -> String {

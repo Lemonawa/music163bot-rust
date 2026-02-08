@@ -101,10 +101,16 @@ impl Database {
 
     /// Get song info by music ID
     pub async fn get_song_by_music_id(&self, music_id: i64) -> Result<Option<SongInfo>> {
-        let row = sqlx::query("SELECT * FROM song_infos WHERE music_id = ? LIMIT 1")
-            .bind(music_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT id, music_id, song_name, song_artists, song_album, file_ext, \
+             music_size, pic_size, emb_pic_size, bit_rate, duration, file_id, \
+             thumb_file_id, from_user_id, from_user_name, from_chat_id, \
+             from_chat_name, created_at, updated_at \
+             FROM song_infos WHERE music_id = ? LIMIT 1",
+        )
+        .bind(music_id)
+        .fetch_optional(&self.pool)
+        .await?;
 
         match row {
             Some(row) => {
@@ -379,6 +385,40 @@ mod tests {
 
         drop(db);
         cleanup_db_files(&temp_path);
+    }
+
+    #[tokio::test]
+    async fn get_song_returns_all_mapped_fields() {
+        let db = Database::new("sqlite::memory:").await.unwrap();
+        let now = chrono::Utc::now();
+        let song = SongInfo {
+            id: 0,
+            music_id: 12345,
+            song_name: "Test".to_string(),
+            song_artists: "Artist".to_string(),
+            song_album: "Album".to_string(),
+            file_ext: "mp3".to_string(),
+            music_size: 5_000_000,
+            pic_size: 0,
+            emb_pic_size: 0,
+            bit_rate: 320_000,
+            duration: 180,
+            file_id: Some("file_abc".to_string()),
+            thumb_file_id: Some("thumb_abc".to_string()),
+            from_user_id: 100,
+            from_user_name: "user".to_string(),
+            from_chat_id: 200,
+            from_chat_name: "chat".to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+        db.save_song_info(&song).await.unwrap();
+        let fetched = db.get_song_by_music_id(12345).await.unwrap().unwrap();
+        assert_eq!(fetched.music_id, 12345);
+        assert_eq!(fetched.song_name, "Test");
+        assert_eq!(fetched.file_id, Some("file_abc".to_string()));
+        assert_eq!(fetched.bit_rate, 320_000);
+        assert_eq!(fetched.duration, 180);
     }
 
     #[tokio::test]
