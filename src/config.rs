@@ -257,15 +257,19 @@ impl Config {
             }
 
             // Check for section headers [section]
-            if line.starts_with('[') && line.ends_with(']') {
-                current_section = line[1..line.len() - 1].to_string();
+            if line.starts_with('[') {
+                current_section = line
+                    .strip_prefix('[')
+                    .and_then(|section| section.strip_suffix(']'))
+                    .unwrap_or("")
+                    .to_string();
                 continue;
             }
 
             // Parse key=value pairs
-            if let Some(pos) = line.find('=') {
-                let key = line[..pos].trim().to_lowercase();
-                let value = line[pos + 1..].trim().to_string();
+            if let Some((raw_key, raw_value)) = line.split_once('=') {
+                let key = raw_key.trim().to_lowercase();
+                let value = raw_value.trim().to_string();
 
                 // Create full key with section prefix
                 let full_key = if current_section.is_empty() {
@@ -441,7 +445,9 @@ impl Config {
             }
         }
         if let Some(pool_size) = config_map.get("upload.pool_max_idle_per_host") {
-            config.upload_pool_max_idle_per_host = pool_size.parse().unwrap_or(0);
+            config.upload_pool_max_idle_per_host = pool_size
+                .parse()
+                .unwrap_or(config.upload_pool_max_idle_per_host);
         }
         if let Some(timeout) = config_map.get("upload.pool_idle_timeout_secs") {
             config.upload_pool_idle_timeout_secs = timeout
@@ -650,6 +656,30 @@ upload.client_reuse_requests=0\n";
     }
 
     #[test]
+    fn upload_pool_max_idle_falls_back_to_default() {
+        let default_config = Config::default();
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_upload_pool_bad_{temp_name}.ini"));
+        let content = "bot.token=token\n\
+upload.pool_max_idle_per_host=not-a-number\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(
+            loaded.upload_pool_max_idle_per_host,
+            default_config.upload_pool_max_idle_per_host
+        );
+    }
+
+    #[test]
     fn upload_local_file_uri_defaults_false() {
         let config = Config::default();
         assert!(!config.upload_local_file_uri);
@@ -675,5 +705,27 @@ upload.client_reuse_requests=0\n";
         assert_eq!(super::parse_bool_like("TRUE"), Some(true));
         assert_eq!(super::parse_bool_like(" false "), Some(false));
         assert_eq!(super::parse_bool_like("invalid"), None);
+    }
+
+    #[test]
+    fn ini_section_with_non_ascii_name_does_not_panic() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_non_ascii_section_{temp_name}.ini"));
+        let content = "[音乐]\n\
+unused=1\n\
+[bot]\n\
+token=token\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.bot_token, "token");
     }
 }

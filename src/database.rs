@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::time::Duration;
@@ -40,7 +40,7 @@ impl Database {
         if let Some(parent) = std::path::Path::new(database_url).parent()
             && !parent.exists()
         {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
 
         // Configure connection pool with WAL mode for better concurrency
@@ -126,14 +126,10 @@ impl Database {
                     from_user_name: row.get("from_user_name"),
                     from_chat_id: row.get("from_chat_id"),
                     from_chat_name: row.get("from_chat_name"),
-                    created_at: row
-                        .get::<String, _>("created_at")
-                        .parse()
-                        .unwrap_or_else(|_| Utc::now()),
-                    updated_at: row
-                        .get::<String, _>("updated_at")
-                        .parse()
-                        .unwrap_or_else(|_| Utc::now()),
+                    created_at: parse_sqlite_timestamp(&row.get::<String, _>("created_at"))
+                        .unwrap_or_else(Utc::now),
+                    updated_at: parse_sqlite_timestamp(&row.get::<String, _>("updated_at"))
+                        .unwrap_or_else(Utc::now),
                 };
                 Ok(Some(song_info))
             }
@@ -304,11 +300,26 @@ fn status_stats_query_sql() -> &'static str {
     "
 }
 
+#[must_use]
+fn parse_sqlite_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{Database, SongInfo};
+    use chrono::{TimeZone, Utc};
+
+    fn cleanup_db_files(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{path}-wal", path = path.display()));
+        let _ = std::fs::remove_file(format!("{path}-shm", path = path.display()));
+    }
 
     #[test]
     fn status_stats_query_uses_single_scan_aggregation() {
@@ -365,5 +376,67 @@ mod tests {
         assert_eq!(total, 2);
         assert_eq!(from_user, 1);
         assert_eq!(from_chat, 2);
+
+        drop(db);
+        cleanup_db_files(&temp_path);
+    }
+
+    #[tokio::test]
+    async fn get_song_by_music_id_parses_sqlite_timestamp() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_timestamp_parse_{temp_name}.db"));
+        let temp_path_str = temp_path.to_string_lossy().to_string();
+
+        let db = Database::new(&temp_path_str).await.expect("create db");
+
+        sqlx::query(
+            r"
+            INSERT INTO song_infos (
+                music_id, song_name, song_artists, song_album, file_ext,
+                music_size, pic_size, emb_pic_size, bit_rate, duration,
+                file_id, thumb_file_id, from_user_id, from_user_name,
+                from_chat_id, from_chat_name, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ",
+        )
+        .bind(42_i64)
+        .bind("Song Timestamp")
+        .bind("Artist Timestamp")
+        .bind("Album Timestamp")
+        .bind("mp3")
+        .bind(2048_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(128_000_i64)
+        .bind(200_i64)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind(100_i64)
+        .bind("user-timestamp")
+        .bind(200_i64)
+        .bind("chat-timestamp")
+        .bind("2024-02-01 12:34:56")
+        .bind("2024-02-01 12:34:56")
+        .execute(&db.pool)
+        .await
+        .expect("insert row");
+
+        let song = db
+            .get_song_by_music_id(42)
+            .await
+            .expect("get song")
+            .expect("song exists");
+
+        let expected = Utc.with_ymd_and_hms(2024, 2, 1, 12, 34, 56).unwrap();
+        assert_eq!(song.created_at, expected);
+        assert_eq!(song.updated_at, expected);
+
+        drop(db);
+        cleanup_db_files(&temp_path);
     }
 }
