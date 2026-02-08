@@ -95,14 +95,20 @@ pub fn ensure_dir(path: &str) -> std::io::Result<()> {
 /// Clean filename for safe file operations
 #[must_use]
 pub fn clean_filename(name: &str) -> String {
-    name.chars()
+    let cleaned = name
+        .chars()
+        .filter(|c| !c.is_control())
         .map(|c| match c {
             '/' | '\\' | '?' | '*' | ':' | '|' | '<' | '>' | '"' => ' ',
             _ => c,
         })
-        .collect::<String>()
-        .trim()
-        .to_string()
+        .collect::<String>();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "untitled".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Calculate MD5 hash of a file
@@ -177,14 +183,15 @@ pub fn update_peak(counter: &std::sync::atomic::AtomicU32, value: u32) -> u32 {
 
 /// Check if an error is a timeout error
 pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
-    error.to_string().contains("timeout") || error.to_string().contains("deadline")
+    let message = error.to_string();
+    message.contains("timeout") || message.contains("deadline")
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::{ensure_dir, parse_music_id, throughput_mbps, update_peak};
+    use super::{clean_filename, ensure_dir, parse_music_id, throughput_mbps, update_peak};
 
     #[test]
     fn parse_music_id_fast_path_detects_direct_numeric() {
@@ -253,5 +260,11 @@ mod tests {
         ensure_dir(&temp_path_str).expect("create dir second time");
 
         std::fs::remove_dir_all(&temp_path).expect("cleanup dir");
+    }
+
+    #[test]
+    fn clean_filename_handles_all_invalid_chars() {
+        let cleaned = clean_filename("/\\?*:|<>\"\n\t\r");
+        assert_eq!(cleaned, "untitled");
     }
 }
