@@ -134,7 +134,6 @@ fn parse_bool_like(value: &str) -> Option<bool> {
 }
 
 /// Parse a string value into type T, returning `default` and logging a warning on failure.
-#[allow(dead_code)]
 fn parse_field<T: std::str::FromStr>(value: &str, default: T, key: &str) -> T {
     value.parse().unwrap_or_else(|_| {
         tracing::warn!("Invalid {key} '{value}', using default");
@@ -143,7 +142,6 @@ fn parse_field<T: std::str::FromStr>(value: &str, default: T, key: &str) -> T {
 }
 
 /// Parse a boolean config field, updating `target` on success and logging a warning on failure.
-#[allow(dead_code)]
 fn apply_bool_field(value: &str, target: &mut bool, key: &str) {
     if let Some(parsed) = parse_bool_like(value) {
         *target = parsed;
@@ -339,16 +337,8 @@ impl Config {
             tracing::info!("Loaded bot admins (from bot.admin): {:?}", config.bot_admin);
         }
 
-        if let Some(bot_debug_value) = config_map.get("botdebug") {
-            if let Some(parsed) = parse_bool_like(bot_debug_value) {
-                config.bot_debug = parsed;
-            } else {
-                tracing::warn!(
-                    "Invalid botdebug '{}', using default {}",
-                    bot_debug_value,
-                    config.bot_debug
-                );
-            }
+        if let Some(v) = config_map.get("botdebug") {
+            apply_bool_field(v, &mut config.bot_debug, "botdebug");
         }
 
         if let Some(db) = config_map.get("database") {
@@ -359,48 +349,24 @@ impl Config {
             config.log_level.clone_from(level);
         }
 
-        if let Some(auto_update) = config_map.get("autoupdate") {
-            if let Some(parsed) = parse_bool_like(auto_update) {
-                config.auto_update = parsed;
-            } else {
-                tracing::warn!(
-                    "Invalid autoupdate '{}', using default {}",
-                    auto_update,
-                    config.auto_update
-                );
-            }
+        if let Some(v) = config_map.get("autoupdate") {
+            apply_bool_field(v, &mut config.auto_update, "autoupdate");
         }
 
-        if let Some(auto_retry) = config_map.get("autoretry") {
-            if let Some(parsed) = parse_bool_like(auto_retry) {
-                config.auto_retry = parsed;
-            } else {
-                tracing::warn!(
-                    "Invalid autoretry '{}', using default {}",
-                    auto_retry,
-                    config.auto_retry
-                );
-            }
+        if let Some(v) = config_map.get("autoretry") {
+            apply_bool_field(v, &mut config.auto_retry, "autoretry");
         }
 
-        if let Some(max_retry) = config_map.get("maxretrytimes") {
-            config.max_retry_times = max_retry.parse().unwrap_or(3);
+        if let Some(v) = config_map.get("maxretrytimes") {
+            config.max_retry_times = parse_field(v, config.max_retry_times, "maxretrytimes");
         }
 
-        if let Some(timeout) = config_map.get("downloadtimeout") {
-            config.download_timeout = timeout.parse().unwrap_or(60);
+        if let Some(v) = config_map.get("downloadtimeout") {
+            config.download_timeout = parse_field(v, config.download_timeout, "downloadtimeout");
         }
 
-        if let Some(check_md5) = config_map.get("checkmd5") {
-            if let Some(parsed) = parse_bool_like(check_md5) {
-                config.check_md5 = parsed;
-            } else {
-                tracing::warn!(
-                    "Invalid checkmd5 '{}', using default {}",
-                    check_md5,
-                    config.check_md5
-                );
-            }
+        if let Some(v) = config_map.get("checkmd5") {
+            apply_bool_field(v, &mut config.check_md5, "checkmd5");
         }
 
         // Smart storage settings (v1.1.0+)
@@ -410,27 +376,42 @@ impl Config {
                 Err(e) => tracing::warn!("Invalid storage_mode '{}': {}, using default", mode, e),
             }
         }
-        if let Some(threshold) = config_map.get("download.memory_threshold") {
-            config.memory_threshold_mb = threshold.parse().unwrap_or(100);
+        if let Some(v) = config_map.get("download.memory_threshold") {
+            config.memory_threshold_mb =
+                parse_field(v, config.memory_threshold_mb, "download.memory_threshold");
         }
-        if let Some(buffer) = config_map.get("download.memory_buffer") {
-            config.memory_buffer_mb = buffer.parse().unwrap_or(100);
+        if let Some(v) = config_map.get("download.memory_buffer") {
+            config.memory_buffer_mb =
+                parse_field(v, config.memory_buffer_mb, "download.memory_buffer");
         }
-        if let Some(max_file) = config_map.get("download.memory_max_file_mb") {
-            config.memory_max_file_mb = max_file.parse().unwrap_or(config.memory_max_file_mb);
+        if let Some(v) = config_map.get("download.memory_max_file_mb") {
+            config.memory_max_file_mb =
+                parse_field(v, config.memory_max_file_mb, "download.memory_max_file_mb");
         }
-        if let Some(concurrent) = config_map.get("download.max_concurrent") {
-            config.max_concurrent_downloads = concurrent.parse().unwrap_or(3);
+        if let Some(v) = config_map.get("download.max_concurrent") {
+            config.max_concurrent_downloads = parse_field(
+                v,
+                config.max_concurrent_downloads,
+                "download.max_concurrent",
+            );
         }
-
-        if let Some(pool_size) = config_map.get("download.pool_max_idle_per_host") {
-            config.download_pool_max_idle_per_host = pool_size.parse().unwrap_or(2);
+        if let Some(v) = config_map.get("download.pool_max_idle_per_host") {
+            config.download_pool_max_idle_per_host = parse_field(
+                v,
+                config.download_pool_max_idle_per_host,
+                "download.pool_max_idle_per_host",
+            );
         }
-        if let Some(timeout) = config_map.get("download.connect_timeout_secs") {
-            config.download_connect_timeout_secs = timeout.parse().unwrap_or(10);
+        if let Some(v) = config_map.get("download.connect_timeout_secs") {
+            config.download_connect_timeout_secs = parse_field(
+                v,
+                config.download_connect_timeout_secs,
+                "download.connect_timeout_secs",
+            );
         }
-        if let Some(chunk_kb) = config_map.get("download.chunk_size_kb") {
-            config.download_chunk_size_kb = chunk_kb.parse().unwrap_or(256);
+        if let Some(v) = config_map.get("download.chunk_size_kb") {
+            config.download_chunk_size_kb =
+                parse_field(v, config.download_chunk_size_kb, "download.chunk_size_kb");
         }
         if let Some(mode) = config_map.get("download.cover_mode") {
             match mode.parse::<CoverMode>() {
@@ -439,21 +420,16 @@ impl Config {
             }
         }
 
-        if let Some(reuse_requests) = config_map.get("upload.client_reuse_requests") {
-            config.upload_client_reuse_requests = reuse_requests
-                .parse()
-                .unwrap_or(config.upload_client_reuse_requests);
+        if let Some(v) = config_map.get("upload.client_reuse_requests") {
+            config.upload_client_reuse_requests = parse_field(
+                v,
+                config.upload_client_reuse_requests,
+                "upload.client_reuse_requests",
+            );
         }
-        if let Some(max_concurrent) = config_map.get("upload.max_concurrent") {
-            match max_concurrent.parse() {
-                Ok(parsed) => config.upload_max_concurrent = parsed,
-                Err(e) => tracing::warn!(
-                    "Invalid upload.max_concurrent '{}': {}, using default {}",
-                    max_concurrent,
-                    e,
-                    config.upload_max_concurrent
-                ),
-            }
+        if let Some(v) = config_map.get("upload.max_concurrent") {
+            config.upload_max_concurrent =
+                parse_field(v, config.upload_max_concurrent, "upload.max_concurrent");
         }
         if let Some(level) = config_map.get("upload.log_level") {
             match level.parse::<UploadLogLevel>() {
@@ -463,40 +439,45 @@ impl Config {
                 }
             }
         }
-        if let Some(pool_size) = config_map.get("upload.pool_max_idle_per_host") {
-            config.upload_pool_max_idle_per_host = pool_size
-                .parse()
-                .unwrap_or(config.upload_pool_max_idle_per_host);
+        if let Some(v) = config_map.get("upload.pool_max_idle_per_host") {
+            config.upload_pool_max_idle_per_host = parse_field(
+                v,
+                config.upload_pool_max_idle_per_host,
+                "upload.pool_max_idle_per_host",
+            );
         }
-        if let Some(timeout) = config_map.get("upload.pool_idle_timeout_secs") {
-            config.upload_pool_idle_timeout_secs = timeout
-                .parse()
-                .unwrap_or(config.upload_pool_idle_timeout_secs);
+        if let Some(v) = config_map.get("upload.pool_idle_timeout_secs") {
+            config.upload_pool_idle_timeout_secs = parse_field(
+                v,
+                config.upload_pool_idle_timeout_secs,
+                "upload.pool_idle_timeout_secs",
+            );
         }
-        if let Some(timeout) = config_map.get("upload.timeout_secs") {
-            config.upload_timeout_secs = timeout.parse().unwrap_or(300);
+        if let Some(v) = config_map.get("upload.timeout_secs") {
+            config.upload_timeout_secs =
+                parse_field(v, config.upload_timeout_secs, "upload.timeout_secs");
         }
-        if let Some(local_file_uri) = config_map.get("upload.local_file_uri") {
-            if let Some(parsed) = parse_bool_like(local_file_uri) {
-                config.upload_local_file_uri = parsed;
-            } else {
-                tracing::warn!(
-                    "Invalid upload.local_file_uri '{}', using default {}",
-                    local_file_uri,
-                    config.upload_local_file_uri
-                );
-            }
+        if let Some(v) = config_map.get("upload.local_file_uri") {
+            apply_bool_field(
+                v,
+                &mut config.upload_local_file_uri,
+                "upload.local_file_uri",
+            );
         }
 
-        if let Some(interval) = config_map.get("maintenance.memory_release_interval_requests") {
-            config.memory_release_interval_requests = interval
-                .parse()
-                .unwrap_or(config.memory_release_interval_requests);
+        if let Some(v) = config_map.get("maintenance.memory_release_interval_requests") {
+            config.memory_release_interval_requests = parse_field(
+                v,
+                config.memory_release_interval_requests,
+                "maintenance.memory_release_interval_requests",
+            );
         }
-        if let Some(interval) = config_map.get("maintenance.db_analyze_interval_requests") {
-            config.db_analyze_interval_requests = interval
-                .parse()
-                .unwrap_or(config.db_analyze_interval_requests);
+        if let Some(v) = config_map.get("maintenance.db_analyze_interval_requests") {
+            config.db_analyze_interval_requests = parse_field(
+                v,
+                config.db_analyze_interval_requests,
+                "maintenance.db_analyze_interval_requests",
+            );
         }
 
         // Validate required fields
