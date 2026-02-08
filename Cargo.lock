@@ -1449,7 +1449,6 @@ dependencies = [
  "image",
  "md5",
  "metaflac",
- "once_cell",
  "regex",
  "reqwest",
  "serde",

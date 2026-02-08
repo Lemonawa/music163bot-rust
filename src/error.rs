@@ -2,9 +2,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum BotError {
-    #[error("Configuration error: {0}")]
-    Config(String),
-
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
@@ -22,12 +19,6 @@ pub enum BotError {
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
-
-    #[error("INI parsing error: {0}")]
-    Ini(String),
-
-    #[error("Parse error: {0}")]
-    Parse(String),
 
     #[error("Other error: {0}")]
     Other(#[from] anyhow::Error),

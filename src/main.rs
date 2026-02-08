@@ -43,14 +43,6 @@ struct Args {
     #[arg(short, long, default_value = "config.ini")]
     config: String,
 
-    /// Disable update checks
-    #[arg(long)]
-    no_update: bool,
-
-    /// Disable MD5 verification
-    #[arg(long)]
-    no_md5_check: bool,
-
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
