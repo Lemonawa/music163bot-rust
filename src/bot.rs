@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use anyhow::Context;
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use teloxide::RequestError;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{
@@ -1134,6 +1133,7 @@ async fn download_and_send_music(
     let upload_result = raw_send_file(
         &raw_client,
         &api_base_url,
+        &state.config,
         &audio_buffer,
         audio_bytes.as_ref(),
         file_size,
@@ -1283,6 +1283,55 @@ fn build_music_url(
 
 fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseError> {
     reqwest::Url::parse(api_url)
+}
+
+fn is_official_telegram_api(api_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(api_url) else {
+        return false;
+    };
+
+    url.host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("api.telegram.org"))
+}
+
+async fn local_file_uri_from_path(path: &std::path::Path) -> Option<String> {
+    let canonical = tokio::fs::canonicalize(path).await.ok()?;
+    url::Url::from_file_path(canonical)
+        .ok()
+        .map(|url| url.to_string())
+}
+
+async fn maybe_local_file_uri(
+    config: &Config,
+    api_url: &str,
+    path: &std::path::Path,
+) -> Option<String> {
+    if !config.upload_local_file_uri {
+        return None;
+    }
+
+    if is_official_telegram_api(api_url) {
+        return None;
+    }
+
+    local_file_uri_from_path(path).await
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UploadFileTarget {
+    LocalUri(String),
+    Multipart,
+}
+
+async fn select_local_upload_target(
+    config: &Config,
+    api_base_url: &str,
+    path: &std::path::Path,
+) -> UploadFileTarget {
+    maybe_local_file_uri(config, api_base_url, path)
+        .await
+        .map(UploadFileTarget::LocalUri)
+        .unwrap_or(UploadFileTarget::Multipart)
 }
 
 fn url_bitrate_candidates(has_music_u: bool) -> Vec<u64> {
@@ -1448,11 +1497,108 @@ struct RawUploadParams<'a> {
     thumbnail: Option<&'a ThumbnailBuffer>,
 }
 
+/// Parameters for raw Telegram document upload.
+struct RawDocumentParams<'a> {
+    chat_id: i64,
+    caption: Option<&'a str>,
+    reply_to_message_id: i32,
+    reply_markup_json: Option<String>,
+}
+
+/// Upload a document via raw reqwest multipart with pre-computed Content-Length
+/// and 256 KiB streaming chunks — bypasses teloxide's 8 KiB FramedRead + chunked encoding.
+async fn raw_send_document(
+    client: &reqwest::Client,
+    api_base_url: &str,
+    config: &Config,
+    path: &std::path::Path,
+    file_size: u64,
+    params: &RawDocumentParams<'_>,
+) -> Result<serde_json::Value> {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document")
+        .to_owned();
+    let mime_type = mime_for_filename(&filename);
+
+    let mut form = reqwest::multipart::Form::new().text("chat_id", params.chat_id.to_string());
+
+    if let Some(caption) = params.caption {
+        form = form.text("caption", caption.to_owned());
+    }
+
+    let document_target = select_local_upload_target(config, api_base_url, path).await;
+    match document_target {
+        UploadFileTarget::LocalUri(uri) => {
+            form = form.text("document", uri);
+        }
+        UploadFileTarget::Multipart => {
+            let file = tokio::fs::File::open(path).await.map_err(|e| {
+                BotError::Other(anyhow::anyhow!("Failed to open document for upload: {e}"))
+            })?;
+            let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+            let body = reqwest::Body::wrap_stream(stream);
+            let file_part = reqwest::multipart::Part::stream_with_length(body, file_size)
+                .file_name(filename)
+                .mime_str(mime_type)?;
+            form = form.part("document", file_part);
+        }
+    }
+
+    // reply_parameters as JSON
+    let reply_params = serde_json::json!({
+        "message_id": params.reply_to_message_id
+    });
+    form = form.text("reply_parameters", reply_params.to_string());
+
+    // reply_markup as JSON
+    if let Some(ref markup_json) = params.reply_markup_json {
+        form = form.text("reply_markup", markup_json.clone());
+    }
+
+    let url = format!("{api_base_url}sendDocument");
+    let resp = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| BotError::Other(anyhow::anyhow!("Raw upload request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to read upload response: {e}")))?;
+
+    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+        tracing::error!(
+            "Upload response parse error: {e}. Body: {}",
+            &body[..body.len().min(500)]
+        );
+        BotError::Other(anyhow::anyhow!("Failed to parse upload response: {e}"))
+    })?;
+
+    if !status.is_success() || json.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        let description = json
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown error");
+        tracing::error!("Telegram API error ({status}): {description} [method=sendDocument]",);
+        return Err(BotError::Other(anyhow::anyhow!(
+            "Telegram API error: {description} (HTTP {status})",
+        )));
+    }
+
+    Ok(json)
+}
+
 /// Upload a file via raw reqwest multipart with pre-computed Content-Length
 /// and 256 KiB streaming chunks — bypasses teloxide's 8 KiB FramedRead + chunked encoding.
 async fn raw_send_file(
     client: &reqwest::Client,
     api_base_url: &str,
+    config: &Config,
     audio_buffer: &AudioBuffer,
     audio_bytes: Option<&Bytes>,
     file_size: u64,
@@ -1461,31 +1607,45 @@ async fn raw_send_file(
     let filename = audio_buffer.filename().to_owned();
     let mime_type = mime_for_filename(&filename);
 
-    // Build the file part with known length for Content-Length header
-    let file_part = if let Some(bytes) = audio_bytes {
-        // Memory mode: Bytes::clone() is O(1) — atomic refcount, no memcpy
-        reqwest::multipart::Part::stream_with_length(bytes.clone(), file_size)
-            .file_name(filename.clone())
-            .mime_str(mime_type)?
-    } else if let AudioBuffer::Disk { path, .. } = audio_buffer {
-        let file = tokio::fs::File::open(path)
-            .await
-            .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to open file for upload: {e}")))?;
-        let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
-        let body = reqwest::Body::wrap_stream(stream);
-        reqwest::multipart::Part::stream_with_length(body, file_size)
-            .file_name(filename.clone())
-            .mime_str(mime_type)?
-    } else {
-        return Err(BotError::Other(anyhow::anyhow!(
-            "Memory buffer without pre-shared Bytes"
-        )));
-    };
-
     let mut form = reqwest::multipart::Form::new()
         .text("chat_id", params.chat_id.to_string())
-        .text("caption", params.caption.to_owned())
-        .part("audio", file_part);
+        .text("caption", params.caption.to_owned());
+
+    let audio_target = match audio_buffer {
+        AudioBuffer::Disk { path, .. } => {
+            select_local_upload_target(config, api_base_url, path).await
+        }
+        AudioBuffer::Memory { .. } => UploadFileTarget::Multipart,
+    };
+
+    match audio_target {
+        UploadFileTarget::LocalUri(uri) => {
+            form = form.text("audio", uri);
+        }
+        UploadFileTarget::Multipart => {
+            // Build the file part with known length for Content-Length header
+            let file_part = if let Some(bytes) = audio_bytes {
+                // Memory mode: Bytes::clone() is O(1) — atomic refcount, no memcpy
+                reqwest::multipart::Part::stream_with_length(bytes.clone(), file_size)
+                    .file_name(filename.clone())
+                    .mime_str(mime_type)?
+            } else if let AudioBuffer::Disk { path, .. } = audio_buffer {
+                let file = tokio::fs::File::open(path).await.map_err(|e| {
+                    BotError::Other(anyhow::anyhow!("Failed to open file for upload: {e}"))
+                })?;
+                let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+                let body = reqwest::Body::wrap_stream(stream);
+                reqwest::multipart::Part::stream_with_length(body, file_size)
+                    .file_name(filename.clone())
+                    .mime_str(mime_type)?
+            } else {
+                return Err(BotError::Other(anyhow::anyhow!(
+                    "Memory buffer without pre-shared Bytes"
+                )));
+            };
+            form = form.part("audio", file_part);
+        }
+    }
 
     // reply_parameters as JSON
     let reply_params = serde_json::json!({
@@ -1510,30 +1670,41 @@ async fn raw_send_file(
 
     // Attach thumbnail if available
     if let Some(thumb) = params.thumbnail {
-        let thumb_part = match thumb {
+        match thumb {
             ThumbnailBuffer::Memory { data } => {
                 let len = data.len() as u64;
-                reqwest::multipart::Part::stream_with_length(data.clone(), len)
+                let thumb_part = reqwest::multipart::Part::stream_with_length(data.clone(), len)
                     .file_name("thumb.jpg")
-                    .mime_str("image/jpeg")?
+                    .mime_str("image/jpeg")?;
+                form = form.part("thumbnail", thumb_part);
             }
-            ThumbnailBuffer::Disk { path } => {
-                let file = tokio::fs::File::open(path).await.map_err(|e| {
-                    BotError::Other(anyhow::anyhow!("Failed to open thumbnail: {e}"))
-                })?;
-                let len = file
-                    .metadata()
-                    .await
-                    .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}")))?
+            ThumbnailBuffer::Disk { path } => match select_local_upload_target(
+                config,
+                api_base_url,
+                path,
+            )
+            .await
+            {
+                UploadFileTarget::LocalUri(uri) => {
+                    form = form.text("thumbnail", uri);
+                }
+                UploadFileTarget::Multipart => {
+                    let file = tokio::fs::File::open(path).await.map_err(|e| {
+                        BotError::Other(anyhow::anyhow!("Failed to open thumbnail: {e}"))
+                    })?;
+                    let len = file.metadata().await.map_err(|e| {
+                        BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}"))
+                    })?
                     .len();
-                let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
-                let body = reqwest::Body::wrap_stream(stream);
-                reqwest::multipart::Part::stream_with_length(body, len)
-                    .file_name("thumb.jpg")
-                    .mime_str("image/jpeg")?
-            }
-        };
-        form = form.part("thumbnail", thumb_part);
+                    let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+                    let body = reqwest::Body::wrap_stream(stream);
+                    let thumb_part = reqwest::multipart::Part::stream_with_length(body, len)
+                        .file_name("thumb.jpg")
+                        .mime_str("image/jpeg")?;
+                    form = form.part("thumbnail", thumb_part);
+                }
+            },
+        }
     }
 
     let url = format!("{api_base_url}sendAudio");
@@ -1781,6 +1952,8 @@ async fn acquire_upload_permit(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1794,9 +1967,18 @@ mod tests {
     use super::parse_api_url;
     use super::resolve_cover_policy;
     use super::should_download_cover;
+    use crate::config::Config;
     use crate::config::CoverMode;
     use crate::config::UploadLogLevel;
     use teloxide::Bot;
+    use uuid::Uuid;
+
+    fn create_temp_file() -> PathBuf {
+        let filename = format!("music163bot_local_uri_{}", Uuid::new_v4());
+        let path = std::env::temp_dir().join(filename);
+        fs::write(&path, b"ok").expect("write temp file");
+        path
+    }
 
     fn cached_size(size: u64) -> u64 {
         size
@@ -1865,6 +2047,93 @@ mod tests {
     #[test]
     fn parse_api_url_rejects_invalid_base() {
         assert!(parse_api_url("not a url").is_err());
+    }
+
+    #[tokio::test]
+    async fn local_file_uri_disabled_by_default() {
+        let mut config = crate::config::Config::default();
+        config.bot_api = "http://localhost:8081".to_string();
+
+        let path = create_temp_file();
+        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        fs::remove_file(&path).expect("remove temp file");
+
+        assert!(uri.is_none());
+    }
+
+    #[tokio::test]
+    async fn local_file_uri_skips_official_api() {
+        let mut config = crate::config::Config::default();
+        config.upload_local_file_uri = true;
+        config.bot_api = "https://api.telegram.org".to_string();
+
+        let path = create_temp_file();
+        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        fs::remove_file(&path).expect("remove temp file");
+
+        assert!(uri.is_none());
+    }
+
+    #[tokio::test]
+    async fn local_file_uri_builds_from_existing_path() {
+        let mut config = crate::config::Config::default();
+        config.upload_local_file_uri = true;
+        config.bot_api = "http://localhost:8081".to_string();
+
+        let path = create_temp_file();
+        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        fs::remove_file(&path).expect("remove temp file");
+
+        let Some(uri) = uri else {
+            panic!("expected local file uri");
+        };
+        assert!(uri.starts_with("file://"));
+    }
+
+    #[tokio::test]
+    async fn local_file_uri_returns_none_for_missing_path() {
+        let mut config = crate::config::Config::default();
+        config.upload_local_file_uri = true;
+        config.bot_api = "http://localhost:8081".to_string();
+
+        let path = std::env::temp_dir().join(format!("missing_{}", Uuid::new_v4()));
+        if path.exists() {
+            fs::remove_file(&path).expect("remove temp file");
+        }
+
+        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        assert!(uri.is_none());
+    }
+
+    #[tokio::test]
+    async fn upload_target_defaults_to_multipart() {
+        let config = Config::default();
+        let path = std::path::Path::new("/tmp/test.mp3");
+        assert_eq!(
+            super::select_local_upload_target(&config, "http://127.0.0.1:8081/botTOKEN/", path)
+                .await,
+            super::UploadFileTarget::Multipart
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_target_uses_local_uri_when_enabled() {
+        let mut config = Config::default();
+        config.upload_local_file_uri = true;
+
+        let path = create_temp_file();
+        let target = super::select_local_upload_target(
+            &config,
+            "http://127.0.0.1:8081/botTOKEN/",
+            &path,
+        )
+        .await;
+        fs::remove_file(&path).expect("remove temp file");
+
+        match target {
+            super::UploadFileTarget::LocalUri(uri) => assert!(uri.starts_with("file://")),
+            super::UploadFileTarget::Multipart => panic!("expected local uri"),
+        }
     }
 
     #[test]
@@ -2408,21 +2677,91 @@ async fn handle_lyric_command(
 
             let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
             let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
-            let lrc_path = format!("{}/{}", state.config.cache_dir, lrc_filename);
+            let lrc_path = std::path::PathBuf::from(&state.config.cache_dir).join(&lrc_filename);
 
-            tokio::fs::write(&lrc_path, &lyric)
-                .await
-                .map_err(|e| RequestError::Io(Arc::new(e)))?;
+            if let Err(e) = tokio::fs::write(&lrc_path, &lyric).await {
+                bot.edit_message_text(
+                    msg.chat.id,
+                    status_msg.id,
+                    format!("写入歌词文件失败: {e}"),
+                )
+                .await?;
+                return Ok(());
+            }
 
-            bot.send_document(
-                msg.chat.id,
-                InputFile::file(std::path::Path::new(&lrc_path)),
+            let file_size = match tokio::fs::metadata(&lrc_path).await {
+                Ok(metadata) => metadata.len(),
+                Err(e) => {
+                    tokio::fs::remove_file(&lrc_path).await.ok();
+                    bot.edit_message_text(
+                        msg.chat.id,
+                        status_msg.id,
+                        format!("读取歌词文件失败: {e}"),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+
+            let (_upload_bot, raw_client, api_base_url) = match acquire_upload_client(state).await
+            {
+                Ok(bundle) => bundle,
+                Err(e) => {
+                    tokio::fs::remove_file(&lrc_path).await.ok();
+                    bot.edit_message_text(
+                        msg.chat.id,
+                        status_msg.id,
+                        format!("初始化上传客户端失败: {e}"),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+            let _upload_permit = match acquire_upload_permit(&state.upload_semaphore).await {
+                Ok(permit) => permit,
+                Err(e) => {
+                    tokio::fs::remove_file(&lrc_path).await.ok();
+                    bot.edit_message_text(
+                        msg.chat.id,
+                        status_msg.id,
+                        format!("等待上传通道失败: {e}"),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+            let params = RawDocumentParams {
+                chat_id: msg.chat.id.0,
+                caption: None,
+                reply_to_message_id: msg.id.0,
+                reply_markup_json: None,
+            };
+
+            let upload_result = raw_send_document(
+                &raw_client,
+                &api_base_url,
+                &state.config,
+                &lrc_path,
+                file_size,
+                &params,
             )
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+            .await;
 
             tokio::fs::remove_file(&lrc_path).await.ok();
-            bot.delete_message(msg.chat.id, status_msg.id).await.ok();
+
+            match upload_result {
+                Ok(_) => {
+                    bot.delete_message(msg.chat.id, status_msg.id).await.ok();
+                }
+                Err(e) => {
+                    bot.edit_message_text(
+                        msg.chat.id,
+                        status_msg.id,
+                        format!("发送歌词失败: {e}"),
+                    )
+                    .await?;
+                }
+            }
         }
         Err(e) => {
             bot.edit_message_text(msg.chat.id, status_msg.id, format!("获取歌词失败: {e}"))

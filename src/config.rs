@@ -184,6 +184,8 @@ pub struct Config {
     pub upload_pool_idle_timeout_secs: u64,
     /// Upload timeout (seconds)
     pub upload_timeout_secs: u64,
+    /// Use file:// URIs for local uploads (telegram-bot-api --local only)
+    pub upload_local_file_uri: bool,
     /// Memory release interval in handled requests
     pub memory_release_interval_requests: u32,
     /// Database analyze interval in handled requests
@@ -223,6 +225,7 @@ impl Default for Config {
             upload_pool_max_idle_per_host: 1,
             upload_pool_idle_timeout_secs: 300,
             upload_timeout_secs: 300,
+            upload_local_file_uri: false,
             memory_release_interval_requests: 10,
             db_analyze_interval_requests: 20,
         }
@@ -448,6 +451,17 @@ impl Config {
         if let Some(timeout) = config_map.get("upload.timeout_secs") {
             config.upload_timeout_secs = timeout.parse().unwrap_or(300);
         }
+        if let Some(local_file_uri) = config_map.get("upload.local_file_uri") {
+            if let Some(parsed) = parse_bool_like(local_file_uri) {
+                config.upload_local_file_uri = parsed;
+            } else {
+                tracing::warn!(
+                    "Invalid upload.local_file_uri '{}', using default {}",
+                    local_file_uri,
+                    config.upload_local_file_uri
+                );
+            }
+        }
 
         if let Some(interval) = config_map.get("maintenance.memory_release_interval_requests") {
             config.memory_release_interval_requests = interval
@@ -534,7 +548,7 @@ maintenance.db_analyze_interval_requests=bad\n";
 
         let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
 
-        let _ = std::fs::remove_file(&temp_path);
+        std::fs::remove_file(&temp_path).expect("remove temp config");
 
         assert_eq!(loaded.memory_max_file_mb, default_config.memory_max_file_mb);
         assert_eq!(
@@ -563,7 +577,7 @@ upload.pool_idle_timeout_secs=120\n";
 
         let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
 
-        let _ = std::fs::remove_file(&temp_path);
+        std::fs::remove_file(&temp_path).expect("remove temp config");
 
         assert_eq!(loaded.upload_pool_max_idle_per_host, 2);
         assert_eq!(loaded.upload_pool_idle_timeout_secs, 120);
@@ -633,6 +647,26 @@ upload.client_reuse_requests=0\n";
         let _ = std::fs::remove_file(&temp_path);
 
         assert_eq!(loaded.upload_client_reuse_requests, 0);
+    }
+
+    #[test]
+    fn upload_local_file_uri_defaults_false() {
+        let config = Config::default();
+        assert!(!config.upload_local_file_uri);
+    }
+
+    #[test]
+    fn upload_local_file_uri_parses_true() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path = std::env::temp_dir().join(format!("music163bot_local_uri_{temp_name}.ini"));
+        let content = "bot.token=token\nupload.local_file_uri=true\n";
+        std::fs::write(&temp_path, content).expect("write temp config");
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+        let _ = std::fs::remove_file(&temp_path);
+        assert!(loaded.upload_local_file_uri);
     }
 
     #[test]
