@@ -3,6 +3,8 @@ use std::io::Cursor;
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use dashmap::DashMap;
+
 use tokio::time::Duration;
 
 use aes::Aes128;
@@ -23,9 +25,9 @@ pub struct MusicApi {
     client: Client,
     pub music_u: Option<String>,
     base_url: String,
-    song_detail_cache: std::sync::Mutex<HashMap<u64, TimedCacheEntry<SongDetail>>>,
-    song_url_cache: std::sync::Mutex<HashMap<(u64, u64), TimedCacheEntry<SongUrl>>>,
-    song_lyric_cache: std::sync::Mutex<HashMap<u64, TimedCacheEntry<String>>>,
+    song_detail_cache: DashMap<u64, TimedCacheEntry<SongDetail>>,
+    song_url_cache: DashMap<(u64, u64), TimedCacheEntry<SongUrl>>,
+    song_lyric_cache: DashMap<u64, TimedCacheEntry<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -172,13 +174,6 @@ fn fallback_bitrate_candidates(
     }
 }
 
-fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
 impl MusicApi {
     #[must_use]
     pub fn new(music_u: Option<String>, base_url: String) -> Self {
@@ -228,9 +223,9 @@ impl MusicApi {
             client,
             music_u,
             base_url,
-            song_detail_cache: std::sync::Mutex::new(HashMap::new()),
-            song_url_cache: std::sync::Mutex::new(HashMap::new()),
-            song_lyric_cache: std::sync::Mutex::new(HashMap::new()),
+            song_detail_cache: DashMap::new(),
+            song_url_cache: DashMap::new(),
+            song_lyric_cache: DashMap::new(),
         }
     }
 
