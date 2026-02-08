@@ -87,6 +87,8 @@ storage_mode = disk
 
 `[upload]` 里的 `client_reuse_requests` 控制上传客户端刷新频率：
 
+另：`upload.local_file_uri` 开启后使用本地文件 URI 上传，需 telegram-bot-api --local（默认 false）。
+
 - `0`：不按请求次数刷新（默认，持续复用，除非进程重启）
 - `10`：每 10 次请求后刷新（需要定期重建客户端时可用）
 
