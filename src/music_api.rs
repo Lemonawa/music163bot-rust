@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use tokio::time::Duration;
 
 use aes::Aes128;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, block_padding::Pkcs7};
@@ -67,11 +69,14 @@ pub struct SongUrlResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SongUrl {
     pub id: u64,
+    #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub url: String,
     pub br: u64,
     pub size: u64,
+    #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub md5: String,
     #[serde(rename = "type")]
+    #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub format: String,
 }
 
@@ -95,8 +100,8 @@ pub struct SearchResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct EapiSearchResponse {
-    pub code: i32,
-    pub result: SearchResult,
+    code: i32,
+    result: SearchResult,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,6 +123,8 @@ pub struct SearchSong {
 const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+const SHORT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
 #[derive(Debug, Clone)]
 struct TimedCacheEntry<T> {
@@ -165,11 +172,6 @@ fn fallback_bitrate_candidates(
     }
 }
 
-#[must_use]
-fn should_retry_primary_after_fallback(primary_attempted_unavailable: bool) -> bool {
-    primary_attempted_unavailable
-}
-
 fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -211,12 +213,11 @@ impl MusicApi {
         client_builder = client_builder
             .tcp_nodelay(true)
             .pool_max_idle_per_host(pool_max_idle_per_host)
-            .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs))
-            .timeout(std::time::Duration::from_secs(request_timeout_secs.max(1)));
+            .connect_timeout(Duration::from_secs(connect_timeout_secs))
+            .timeout(Duration::from_secs(request_timeout_secs.max(1)));
 
         // Add user agent
-        client_builder = client_builder
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+        client_builder = client_builder.user_agent(BROWSER_USER_AGENT);
 
         let client = build_http_client(client_builder).unwrap_or_else(|e| {
             tracing::error!("Failed to build HTTP client: {e}");
@@ -562,7 +563,7 @@ impl MusicApi {
             tracing::info!("[fallback_url] {}ms", start.elapsed().as_millis());
         }
 
-        if should_retry_primary_after_fallback(primary_attempted_unavailable) {
+        if primary_attempted_unavailable {
             tracing::info!(
                 "Retrying primary bitrate {primary_bitrate} after fallback attempts for music_id {song_id}"
             );
@@ -674,7 +675,7 @@ impl MusicApi {
 
         // Add comprehensive headers to avoid 403 errors
         request = request
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            .header("User-Agent", BROWSER_USER_AGENT)
             .header("Referer", "https://music.163.com/")
             .header("Accept", "audio/mpeg, audio/*, */*")
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
@@ -693,10 +694,7 @@ impl MusicApi {
         let response = self
             .client
             .get(url)
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            )
+            .header("User-Agent", SHORT_USER_AGENT)
             .header("Accept", "*/*")
             .header(reqwest::header::RANGE, "bytes=0-0")
             .send()
@@ -725,10 +723,7 @@ impl MusicApi {
 
         // Add headers for image download
         request = request
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            )
+            .header("User-Agent", SHORT_USER_AGENT)
             .header("Referer", "https://music.163.com/")
             .header(
                 "Accept",
@@ -764,10 +759,7 @@ impl MusicApi {
 
         // Add headers for image download
         request = request
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            )
+            .header("User-Agent", SHORT_USER_AGENT)
             .header("Referer", "https://music.163.com/")
             .header(
                 "Accept",
@@ -816,9 +808,16 @@ pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(cursor.into_inner())
 }
 
+fn deserialize_string_or_null<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use tokio::time::Duration;
 
     use super::MusicApi;
     use super::build_http_client;
@@ -948,16 +947,6 @@ mod tests {
     }
 
     #[test]
-    fn should_retry_primary_after_fallback_when_primary_was_attempted_unavailable() {
-        assert!(super::should_retry_primary_after_fallback(true));
-    }
-
-    #[test]
-    fn should_not_retry_primary_after_fallback_when_primary_was_not_attempted() {
-        assert!(!super::should_retry_primary_after_fallback(false));
-    }
-
-    #[test]
     fn cache_entry_expires_after_ttl() {
         let created_at = std::time::Instant::now();
         let ttl = Duration::from_secs(1);
@@ -967,16 +956,28 @@ mod tests {
         assert!(super::cache_entry_is_fresh(created_at, ttl, before_expire));
         assert!(!super::cache_entry_is_fresh(created_at, ttl, after_expire));
     }
+
+    #[test]
+    fn song_url_deserializes_null_fields() {
+        let payload = r#"{"id":1,"url":null,"br":320000,"size":123,"md5":null,"type":null}"#;
+        let parsed: super::SongUrl = serde_json::from_str(payload).expect("deserialize song url");
+        assert_eq!(parsed.url, "");
+        assert_eq!(parsed.md5, "");
+        assert_eq!(parsed.format, "");
+    }
 }
 
 /// Parse artists into a formatted string
 #[must_use]
 pub fn format_artists(artists: &[Artist]) -> String {
-    artists
-        .iter()
-        .map(|a| a.name.as_str())
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut formatted = String::new();
+    for (index, artist) in artists.iter().enumerate() {
+        if index > 0 {
+            formatted.push('/');
+        }
+        formatted.push_str(&artist.name);
+    }
+    formatted
 }
 
 /// Resize image with black padding to maintain aspect ratio (like the original Go project)
@@ -985,7 +986,7 @@ fn resize_image_with_padding(
     target_width: u32,
     target_height: u32,
 ) -> DynamicImage {
-    use image::{Rgb, RgbImage};
+    use image::RgbImage;
 
     let (orig_width, orig_height) = img.dimensions();
     let aspect_ratio = orig_width as f32 / orig_height as f32;
@@ -1009,9 +1010,6 @@ fn resize_image_with_padding(
 
     // Create black background canvas
     let mut canvas = RgbImage::new(target_width, target_height);
-    for pixel in canvas.pixels_mut() {
-        *pixel = Rgb([0, 0, 0]); // Black background
-    }
 
     // Calculate position to center the resized image
     let offset_x = (target_width - new_width) / 2;
