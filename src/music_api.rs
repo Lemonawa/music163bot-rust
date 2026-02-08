@@ -957,6 +957,81 @@ mod tests {
         assert_eq!(parsed.md5, "");
         assert_eq!(parsed.format, "");
     }
+
+    #[test]
+    fn dashmap_cache_insert_and_retrieve() {
+        let api = MusicApi::new(None, "http://localhost".to_string());
+
+        let detail = super::SongDetail {
+            id: 12345,
+            name: "Test Song".to_string(),
+            dt: Some(240_000),
+            ar: Some(vec![super::Artist {
+                id: 1,
+                name: "Test Artist".to_string(),
+            }]),
+            al: Some(super::Album {
+                id: 10,
+                name: "Test Album".to_string(),
+                pic_url: None,
+            }),
+        };
+
+        api.cache_song_detail(12345, detail);
+
+        let cached = api.get_cached_song_detail(12345);
+        assert!(cached.is_some(), "cached entry should be present");
+        let cached = cached.unwrap();
+        assert_eq!(cached.id, 12345);
+        assert_eq!(cached.name, "Test Song");
+        assert_eq!(cached.dt, Some(240_000));
+
+        let missing = api.get_cached_song_detail(99999);
+        assert!(missing.is_none(), "non-existent key should return None");
+    }
+
+    #[test]
+    fn dashmap_cache_url_keyed_by_bitrate() {
+        let api = MusicApi::new(None, "http://localhost".to_string());
+
+        let url_low = super::SongUrl {
+            id: 42,
+            url: "https://example.com/low.mp3".to_string(),
+            br: 128_000,
+            size: 3_000_000,
+            md5: "abc123".to_string(),
+            format: "mp3".to_string(),
+        };
+
+        let url_high = super::SongUrl {
+            id: 42,
+            url: "https://example.com/high.flac".to_string(),
+            br: 320_000,
+            size: 10_000_000,
+            md5: "def456".to_string(),
+            format: "flac".to_string(),
+        };
+
+        api.cache_song_url(42, 128_000, url_low);
+        api.cache_song_url(42, 320_000, url_high);
+
+        let cached_low = api
+            .get_cached_song_url(42, 128_000)
+            .expect("low bitrate entry should be present");
+        assert_eq!(cached_low.br, 128_000);
+        assert_eq!(cached_low.url, "https://example.com/low.mp3");
+        assert_eq!(cached_low.format, "mp3");
+
+        let cached_high = api
+            .get_cached_song_url(42, 320_000)
+            .expect("high bitrate entry should be present");
+        assert_eq!(cached_high.br, 320_000);
+        assert_eq!(cached_high.url, "https://example.com/high.flac");
+        assert_eq!(cached_high.format, "flac");
+
+        let missing = api.get_cached_song_url(42, 192_000);
+        assert!(missing.is_none(), "uncached bitrate should return None");
+    }
 }
 
 /// Parse artists into a formatted string

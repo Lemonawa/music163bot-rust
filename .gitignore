@@ -3,6 +3,10 @@ config.ini
 data/
 downloads/
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
+sqlite::memory:*
 *.log
 music163bot-go-temp/
 

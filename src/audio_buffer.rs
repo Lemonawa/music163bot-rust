@@ -1116,14 +1116,21 @@ mod tests {
     }
 
     #[test]
-    fn get_available_memory_mb_returns_nonzero() {
-        // Note: This tests the public API by creating a buffer that triggers the check
-        let mb = AudioBuffer::get_available_memory_mb();
-        // On some macOS environments with sandboxing, sysinfo may return 0
-        // In production, this would trigger the fallback to 512MB
-        // The test simply ensures the function doesn't panic and returns a valid u64
-        // (u64 is always >= 0 by type constraints, so the function contract is satisfied)
-        let _ = mb; // Use the value to avoid unused variable warning
+    fn get_available_memory_mb_is_stable() {
+        let mb1 = AudioBuffer::get_available_memory_mb();
+        let mb2 = AudioBuffer::get_available_memory_mb();
+        if mb1 > 0 {
+            // Non-sandboxed: value should be plausible (under 16 TB)
+            assert!(
+                mb1 < 16 * 1024 * 1024,
+                "available memory looks implausibly large: {mb1} MB"
+            );
+            // Second call should also be positive
+            assert!(mb2 > 0, "second call returned 0 while first returned {mb1}");
+        } else {
+            // Sandboxed env where sysinfo returns 0 — both calls should agree
+            assert_eq!(mb2, 0, "first call returned 0 but second returned {mb2}");
+        }
     }
 
     #[test]
