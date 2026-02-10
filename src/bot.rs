@@ -951,10 +951,15 @@ async fn download_and_send_music(
         Ok::<(AudioBuffer, u64), anyhow::Error>((audio_buffer, downloaded))
     };
 
-    // Execute both downloads in parallel
-    let (downloaded_result, (cover_artwork_data, thumbnail_buffer)) =
-        tokio::join!(audio_future, artwork_future);
+    // Execute downloads and upload permit acquisition in parallel
+    // Acquire upload permit early to minimize delay before upload starts
+    let (downloaded_result, (cover_artwork_data, thumbnail_buffer), upload_permit_result) = tokio::join!(
+        audio_future,
+        artwork_future,
+        acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore))
+    );
     let (mut audio_buffer, downloaded) = downloaded_result?;
+    let _upload_permit = upload_permit_result?;
 
     tracing::info!(
         "Audio download completed: {} bytes (mode: {})",
@@ -1030,7 +1035,7 @@ async fn download_and_send_music(
     );
     audio_buffer = tag_result?;
     let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
-    let _upload_permit = acquire_upload_permit(&state.upload_semaphore).await?;
+    // upload_permit already acquired during download phase
 
     tracing::info!("{}", format_perf("process_tags", tags_start.elapsed()));
 
@@ -1977,6 +1982,15 @@ async fn acquire_upload_permit(
     semaphore: &tokio::sync::Semaphore,
 ) -> Result<tokio::sync::SemaphorePermit<'_>> {
     semaphore.acquire().await.map_err(|e| {
+        tracing::error!("Upload semaphore closed: {}", e);
+        BotError::Other(anyhow::anyhow!("upload semaphore closed"))
+    })
+}
+
+async fn acquire_upload_permit_owned(
+    semaphore: Arc<tokio::sync::Semaphore>,
+) -> Result<tokio::sync::OwnedSemaphorePermit> {
+    semaphore.acquire_owned().await.map_err(|e| {
         tracing::error!("Upload semaphore closed: {}", e);
         BotError::Other(anyhow::anyhow!("upload semaphore closed"))
     })
