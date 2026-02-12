@@ -315,6 +315,7 @@ fn status_stats_query_sql() -> &'static str {
 #[must_use]
 fn parse_sqlite_timestamp(value: &str) -> Option<DateTime<Utc>> {
     NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
         .ok()
         .map(|naive| naive.and_utc())
 }
@@ -325,7 +326,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{Database, SongInfo};
-    use chrono::{TimeZone, Utc};
+    use chrono::{TimeZone, Timelike, Utc};
 
     fn cleanup_db_files(path: &Path) {
         let _ = std::fs::remove_file(path);
@@ -494,5 +495,20 @@ mod tests {
 
         drop(db);
         cleanup_db_files(&temp_path);
+    }
+
+    #[test]
+    fn parse_sqlite_timestamp_handles_fractional_seconds() {
+        let without_frac = super::parse_sqlite_timestamp("2024-02-01 12:34:56");
+        let expected = Utc.with_ymd_and_hms(2024, 2, 1, 12, 34, 56).unwrap();
+        assert_eq!(without_frac, Some(expected));
+
+        let with_frac = super::parse_sqlite_timestamp("2024-02-01 12:34:56.123");
+        assert!(with_frac.is_some());
+        let parsed = with_frac.unwrap();
+        assert_eq!(parsed.date_naive(), expected.date_naive());
+        assert_eq!(parsed.time().hour(), 12);
+        assert_eq!(parsed.time().minute(), 34);
+        assert_eq!(parsed.time().second(), 56);
     }
 }

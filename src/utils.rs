@@ -123,7 +123,7 @@ pub fn verify_md5(file_path: &str, expected_md5: &str) -> anyhow::Result<bool> {
     let file = File::open(file_path)?;
     let mut reader = BufReader::new(file);
     let mut hasher = md5::Context::new();
-    let mut buffer = [0; 8192];
+    let mut buffer = vec![0; 65536];
 
     loop {
         let count = reader.read(&mut buffer)?;

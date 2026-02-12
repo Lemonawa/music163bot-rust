@@ -272,7 +272,7 @@ impl Config {
 
         let file = File::open(config_path)?;
         let reader = BufReader::new(file);
-        let mut config_map = HashMap::new();
+        let mut config_map = HashMap::with_capacity(32);
         let mut current_section = String::new();
 
         // Parse INI-like format with sections
