@@ -1450,6 +1450,17 @@ fn collect_maintenance_signals(
     signals
 }
 
+async fn join_futures<F1, F2, T1, T2, E>(
+    f1: F1,
+    f2: F2,
+) -> (std::result::Result<T1, E>, std::result::Result<T2, E>)
+where
+    F1: std::future::Future<Output = std::result::Result<T1, E>>,
+    F2: std::future::Future<Output = std::result::Result<T2, E>>,
+{
+    tokio::join!(f1, f2)
+}
+
 async fn acquire_download_leader(
     inflight: &Arc<InflightDownloads>,
     music_id: u64,
@@ -2053,6 +2064,26 @@ mod tests {
 
         let result = tokio::time::timeout(Duration::from_secs(1), entry.wait()).await;
         assert!(result.is_ok(), "wait should complete after finish");
+    }
+
+    #[tokio::test]
+    async fn lyric_parallel_fetch() {
+        let start = std::time::Instant::now();
+        let (res1, res2) = super::join_futures(
+            async { 
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok::<_, ()>("lyric") 
+            },
+            async { 
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok::<_, ()>("detail") 
+            }
+        ).await;
+        
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_millis(90), "Should run in parallel");
+        assert_eq!(res1, Ok("lyric"));
+        assert_eq!(res2, Ok("detail"));
     }
 
     #[test]
@@ -2716,8 +2747,13 @@ async fn handle_lyric_command(
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
-    match state.music_api.get_song_lyric(music_id).await {
-        Ok(lyric) => {
+    match join_futures(
+        state.music_api.get_song_lyric(music_id),
+        state.music_api.get_song_detail(music_id),
+    )
+    .await
+    {
+        (Ok(lyric), detail_result) => {
             if lyric.trim().is_empty() || lyric == "No lyrics available" {
                 bot.edit_message_text(msg.chat.id, status_msg.id, "该歌曲暂无歌词")
                     .await?;
@@ -2725,7 +2761,7 @@ async fn handle_lyric_command(
             }
 
             // Get song detail for filename
-            let song_detail = match state.music_api.get_song_detail(music_id).await {
+            let song_detail = match detail_result {
                 Ok(detail) => detail,
                 Err(e) => {
                     bot.edit_message_text(
@@ -2817,7 +2853,7 @@ async fn handle_lyric_command(
                 }
             }
         }
-        Err(e) => {
+        (Err(e), _) => {
             bot.edit_message_text(msg.chat.id, status_msg.id, format!("获取歌词失败: {e}"))
                 .await?;
         }
