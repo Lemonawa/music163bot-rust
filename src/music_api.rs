@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
@@ -26,6 +27,7 @@ pub struct MusicApi {
     pub music_u: Option<String>,
     base_url: String,
     eapi_cookie: String,
+    music_u_cookie: Option<String>,
     song_detail_cache: DashMap<u64, TimedCacheEntry<SongDetail>>,
     song_url_cache: DashMap<(u64, u64), TimedCacheEntry<SongUrl>>,
     song_lyric_cache: DashMap<u64, TimedCacheEntry<String>>,
@@ -221,12 +223,14 @@ impl MusicApi {
         });
 
         let eapi_cookie = Self::generate_eapi_cookie(music_u.as_deref());
+        let music_u_cookie = music_u.as_ref().map(|u| format!("MUSIC_U={u}"));
 
         Self {
             client,
             music_u,
             base_url,
             eapi_cookie,
+            music_u_cookie,
             song_detail_cache: DashMap::new(),
             song_url_cache: DashMap::new(),
             song_lyric_cache: DashMap::new(),
@@ -282,7 +286,7 @@ impl MusicApi {
     }
 
     fn cache_song_lyric(&self, song_id: u64, lyric: String) {
-            self.song_lyric_cache
+        self.song_lyric_cache
             .insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
     }
 
@@ -314,8 +318,41 @@ impl MusicApi {
         self.eapi_cookie.clone()
     }
 
-    fn eapi_splice(path: &str, json: &str) -> String {
+    /// Conditionally add the pre-computed MUSIC_U cookie header to a request.
+    fn apply_music_u_cookie(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(cookie) = &self.music_u_cookie {
+            request.header("Cookie", cookie)
+        } else {
+            request
+        }
+    }
 
+    /// Build common headers for image downloads (album art).
+    fn apply_image_download_headers(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        request
+            .header("User-Agent", SHORT_USER_AGENT)
+            .header("Referer", "https://music.163.com/")
+            .header(
+                "Accept",
+                "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            )
+    }
+
+    /// Build common headers for audio file downloads.
+    fn apply_audio_download_headers(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        request
+            .header("User-Agent", BROWSER_USER_AGENT)
+            .header("Referer", "https://music.163.com/")
+            .header("Accept", "audio/mpeg, audio/*, */*")
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            .header("Cache-Control", "no-cache")
+            .header("DNT", "1")
+            .header("Sec-Fetch-Dest", "audio")
+            .header("Sec-Fetch-Mode", "cors")
+            .header("Sec-Fetch-Site", "cross-site")
+    }
+
+    fn eapi_splice(path: &str, json: &str) -> String {
         let marker = "36cd479b6b5";
         let text = format!("nobody{path}use{json}md5forencrypt");
         let digest = format!("{:x}", md5_compute(text.as_bytes()));
@@ -376,9 +413,7 @@ impl MusicApi {
         let mut request = self.client.post(url).form(&params);
 
         // Add MUSIC_U cookie if available
-        if let Some(music_u) = &self.music_u {
-            request = request.header("Cookie", format!("MUSIC_U={music_u}"));
-        }
+        request = self.apply_music_u_cookie(request);
 
         let response = request.send().await?.error_for_status()?;
         let data: SongDetailResponse = response.json().await?;
@@ -413,9 +448,7 @@ impl MusicApi {
 
         let mut request = self.client.post(url).form(&params);
 
-        if let Some(music_u) = &self.music_u {
-            request = request.header("Cookie", format!("MUSIC_U={music_u}"));
-        }
+        request = self.apply_music_u_cookie(request);
 
         let response = request.send().await?.error_for_status()?;
         let data: SongUrlResponse = response.json().await?;
@@ -599,9 +632,7 @@ impl MusicApi {
 
         let mut request = self.client.get(&url);
 
-        if let Some(music_u) = &self.music_u {
-            request = request.header("Cookie", format!("MUSIC_U={music_u}"));
-        }
+        request = self.apply_music_u_cookie(request);
 
         let response = request.send().await?.error_for_status()?;
         let data: LyricResponse = response.json().await?;
@@ -667,24 +698,13 @@ impl MusicApi {
         // This helps avoid 403 errors from NetEase servers
         let processed_url = rewrite_media_url(url);
 
-        let mut request = self.client.get(&processed_url);
+        let request = self.client.get(processed_url.as_ref());
 
         // Add MUSIC_U cookie if available
-        if let Some(music_u) = &self.music_u {
-            request = request.header("Cookie", format!("MUSIC_U={music_u}"));
-        }
+        let request = self.apply_music_u_cookie(request);
 
         // Add comprehensive headers to avoid 403 errors
-        request = request
-            .header("User-Agent", BROWSER_USER_AGENT)
-            .header("Referer", "https://music.163.com/")
-            .header("Accept", "audio/mpeg, audio/*, */*")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .header("Cache-Control", "no-cache")
-            .header("DNT", "1")
-            .header("Sec-Fetch-Dest", "audio")
-            .header("Sec-Fetch-Mode", "cors")
-            .header("Sec-Fetch-Site", "cross-site");
+        let request = Self::apply_audio_download_headers(request);
 
         let response = request.send().await?;
         Ok(response)
@@ -719,17 +739,9 @@ impl MusicApi {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
         }
 
-        // Download the image
-        let mut request = self.client.get(pic_url);
-
-        // Add headers for image download
-        request = request
-            .header("User-Agent", SHORT_USER_AGENT)
-            .header("Referer", "https://music.163.com/")
-            .header(
-                "Accept",
-                "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            );
+        // Download the image with common headers
+        let request = self.client.get(pic_url);
+        let request = Self::apply_image_download_headers(request);
 
         let response = request.send().await?;
         if !response.status().is_success() {
@@ -755,17 +767,9 @@ impl MusicApi {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
         }
 
-        // Download the image
-        let mut request = self.client.get(pic_url);
-
-        // Add headers for image download
-        request = request
-            .header("User-Agent", SHORT_USER_AGENT)
-            .header("Referer", "https://music.163.com/")
-            .header(
-                "Accept",
-                "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            );
+        // Download the image with common headers
+        let request = self.client.get(pic_url);
+        let request = Self::apply_image_download_headers(request);
 
         let response = request.send().await?;
         if !response.status().is_success() {
@@ -788,11 +792,29 @@ fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client>
     })
 }
 
-fn rewrite_media_url(url: &str) -> String {
-    url.replace("m8.", "m7.")
-        .replace("m801.", "m701.")
-        .replace("m804.", "m701.")
-        .replace("m704.", "m701.")
+fn rewrite_media_url(url: &str) -> Cow<'_, str> {
+    // The host prefixes (m8., m801., m804., m704.) are mutually exclusive,
+    // so we check once and do a single replacement instead of chaining
+    // four .replace() calls that each allocate a new String.
+    if let Some(rest) = url.strip_prefix("https://m8.") {
+        Cow::Owned(format!("https://m7.{rest}"))
+    } else if let Some(rest) = url.strip_prefix("https://m801.") {
+        Cow::Owned(format!("https://m701.{rest}"))
+    } else if let Some(rest) = url.strip_prefix("https://m804.") {
+        Cow::Owned(format!("https://m701.{rest}"))
+    } else if let Some(rest) = url.strip_prefix("https://m704.") {
+        Cow::Owned(format!("https://m701.{rest}"))
+    } else if let Some(rest) = url.strip_prefix("http://m8.") {
+        Cow::Owned(format!("http://m7.{rest}"))
+    } else if let Some(rest) = url.strip_prefix("http://m801.") {
+        Cow::Owned(format!("http://m701.{rest}"))
+    } else if let Some(rest) = url.strip_prefix("http://m804.") {
+        Cow::Owned(format!("http://m701.{rest}"))
+    } else if let Some(rest) = url.strip_prefix("http://m704.") {
+        Cow::Owned(format!("http://m701.{rest}"))
+    } else {
+        Cow::Borrowed(url)
+    }
 }
 
 pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
@@ -1057,7 +1079,11 @@ mod tests {
                 .to_string()
         };
 
-        assert_eq!(get_device_id(&cookie1), get_device_id(&cookie2), "device_id should be stable");
+        assert_eq!(
+            get_device_id(&cookie1),
+            get_device_id(&cookie2),
+            "device_id should be stable"
+        );
     }
 
     #[test]
@@ -1065,19 +1091,140 @@ mod tests {
         let music_u = "test_cookie_value";
         let api = MusicApi::new(Some(music_u.to_string()), "http://localhost".to_string());
         let cookie = api.build_eapi_cookie();
-        
+
         assert!(cookie.contains(&format!("MUSIC_U={music_u}")));
+    }
+
+    // --- B.2: music_u_cookie helper tests ---
+
+    #[test]
+    fn music_u_cookie_precomputed_with_value() {
+        let api = MusicApi::new(Some("abc123".to_string()), "http://localhost".to_string());
+        assert_eq!(api.music_u_cookie.as_deref(), Some("MUSIC_U=abc123"));
+    }
+
+    #[test]
+    fn music_u_cookie_none_without_value() {
+        let api = MusicApi::new(None, "http://localhost".to_string());
+        assert!(api.music_u_cookie.is_none());
+    }
+
+    // --- B.3: rewrite_media_url Cow tests ---
+
+    #[test]
+    fn rewrite_media_url_returns_borrowed_when_unchanged() {
+        let url = "https://example.com/song.mp3";
+        let result = super::rewrite_media_url(url);
+        assert!(
+            matches!(result, std::borrow::Cow::Borrowed(_)),
+            "should return Cow::Borrowed for non-matching URL"
+        );
+        assert_eq!(result, url);
+    }
+
+    #[test]
+    fn rewrite_media_url_returns_owned_when_changed() {
+        let url = "https://m8.music.126.net/song.mp3";
+        let result = super::rewrite_media_url(url);
+        assert!(
+            matches!(result, std::borrow::Cow::Owned(_)),
+            "should return Cow::Owned for matching URL"
+        );
+        assert_eq!(result, "https://m7.music.126.net/song.mp3");
+    }
+
+    #[test]
+    fn rewrite_media_url_handles_http_scheme() {
+        assert_eq!(
+            super::rewrite_media_url("http://m8.music.126.net/song.mp3"),
+            "http://m7.music.126.net/song.mp3"
+        );
+        assert_eq!(
+            super::rewrite_media_url("http://m801.music.126.net/song.mp3"),
+            "http://m701.music.126.net/song.mp3"
+        );
+        assert_eq!(
+            super::rewrite_media_url("http://m804.music.126.net/song.mp3"),
+            "http://m701.music.126.net/song.mp3"
+        );
+        assert_eq!(
+            super::rewrite_media_url("http://m704.music.126.net/song.mp3"),
+            "http://m701.music.126.net/song.mp3"
+        );
+    }
+
+    #[test]
+    fn rewrite_media_url_empty_input() {
+        let result = super::rewrite_media_url("");
+        assert_eq!(result, "");
+        assert!(matches!(result, std::borrow::Cow::Borrowed(_)));
+    }
+
+    // --- B.3: format_artists tests ---
+
+    #[test]
+    fn format_artists_empty() {
+        assert_eq!(super::format_artists(&[]), "");
+    }
+
+    #[test]
+    fn format_artists_single() {
+        let artists = vec![super::Artist {
+            id: 1,
+            name: "Alice".to_string(),
+        }];
+        assert_eq!(super::format_artists(&artists), "Alice");
+    }
+
+    #[test]
+    fn format_artists_multiple() {
+        let artists = vec![
+            super::Artist {
+                id: 1,
+                name: "Alice".to_string(),
+            },
+            super::Artist {
+                id: 2,
+                name: "Bob".to_string(),
+            },
+            super::Artist {
+                id: 3,
+                name: "Charlie".to_string(),
+            },
+        ];
+        assert_eq!(super::format_artists(&artists), "Alice/Bob/Charlie");
+    }
+
+    #[test]
+    fn format_artists_unicode_names() {
+        let artists = vec![
+            super::Artist {
+                id: 1,
+                name: "周杰伦".to_string(),
+            },
+            super::Artist {
+                id: 2,
+                name: "林俊杰".to_string(),
+            },
+        ];
+        assert_eq!(super::format_artists(&artists), "周杰伦/林俊杰");
     }
 }
 
 /// Parse artists into a formatted string
 #[must_use]
 pub fn format_artists(artists: &[Artist]) -> String {
-    let mut formatted = String::new();
-    for (index, artist) in artists.iter().enumerate() {
-        if index > 0 {
-            formatted.push('/');
-        }
+    let mut iter = artists.iter();
+    let Some(first) = iter.next() else {
+        return String::new();
+    };
+    // Pre-allocate: sum of name lengths + separators
+    let capacity =
+        artists.iter().map(|a| a.name.len()).sum::<usize>() + artists.len().saturating_sub(1);
+    let mut formatted = String::with_capacity(capacity);
+    formatted.push_str(&first.name);
+    for artist in iter {
+        formatted.push('/');
         formatted.push_str(&artist.name);
     }
     formatted
