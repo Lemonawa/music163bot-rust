@@ -492,7 +492,8 @@ impl AudioBuffer {
         Self::build_flac_tag_updates(&mut tag, song_detail, artwork_data);
 
         // 5. Build new data with estimated pre-allocation
-        let estimated_capacity = audio_data.len() + 4096; // metadata overhead estimate
+        let artwork_overhead = artwork_data.map_or(0, <[u8]>::len);
+        let estimated_capacity = audio_data.len() + artwork_overhead + 4096; // metadata overhead estimate
         let mut new_data = Vec::with_capacity(estimated_capacity);
         tag.write_to(&mut new_data)
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
@@ -1069,6 +1070,68 @@ mod tests {
             AudioBuffer::find_flac_audio_start(&second_data).expect("second audio start");
         assert_eq!(&first_data[first_audio_start..], b"AUDIO_FRAMES");
         assert_eq!(&second_data[second_audio_start..], b"AUDIO_FRAMES");
+    }
+
+    #[test]
+    fn flac_memory_rebuild_does_not_reallocate_with_artwork() {
+        let detail = sample_song_detail();
+        let cover = sample_cover_jpeg();
+        let source = sample_flac_bytes();
+
+        // Build a large fake artwork (~200KB) to simulate real album covers
+        let large_artwork = vec![0xFFu8; 200 * 1024];
+
+        let mut buffer = AudioBuffer::Memory {
+            data: source,
+            filename: "capacity_test.flac".to_string(),
+        };
+
+        // This should succeed without panic and produce valid output
+        buffer
+            .add_flac_metadata(&detail, Some(&large_artwork))
+            .expect("flac tagging with large artwork should succeed");
+
+        let result_data = match buffer {
+            AudioBuffer::Memory { data, .. } => data,
+            AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
+        };
+
+        // The result should contain the audio frames at the end
+        let audio_start =
+            AudioBuffer::find_flac_audio_start(&result_data).expect("find audio start");
+        assert_eq!(
+            &result_data[audio_start..],
+            b"AUDIO_FRAMES",
+            "audio payload must be preserved after tagging with large artwork"
+        );
+
+        // Result should be at least as large as the artwork data
+        assert!(
+            result_data.len() >= large_artwork.len(),
+            "output ({}) should be at least artwork size ({})",
+            result_data.len(),
+            large_artwork.len()
+        );
+
+        // Also verify small artwork path works
+        let source2 = sample_flac_bytes();
+        let mut buffer2 = AudioBuffer::Memory {
+            data: source2,
+            filename: "small_art.flac".to_string(),
+        };
+        buffer2
+            .add_flac_metadata(&detail, Some(&cover))
+            .expect("flac tagging with small artwork");
+
+        // And no-artwork path
+        let source3 = sample_flac_bytes();
+        let mut buffer3 = AudioBuffer::Memory {
+            data: source3,
+            filename: "no_art.flac".to_string(),
+        };
+        buffer3
+            .add_flac_metadata(&detail, None)
+            .expect("flac tagging without artwork");
     }
 
     #[test]
