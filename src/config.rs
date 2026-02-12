@@ -35,11 +35,14 @@ impl std::str::FromStr for CoverMode {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "thumbnail" => Ok(Self::Thumbnail),
-            "original" => Ok(Self::Original),
-            "both" => Ok(Self::Both),
-            _ => Err(anyhow::anyhow!("Invalid cover mode: {s}")),
+        if s.eq_ignore_ascii_case("thumbnail") {
+            Ok(Self::Thumbnail)
+        } else if s.eq_ignore_ascii_case("original") {
+            Ok(Self::Original)
+        } else if s.eq_ignore_ascii_case("both") {
+            Ok(Self::Both)
+        } else {
+            Err(anyhow::anyhow!("Invalid cover mode: {s}"))
         }
     }
 }
@@ -48,11 +51,14 @@ impl std::str::FromStr for StorageMode {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "disk" => Ok(Self::Disk),
-            "memory" => Ok(Self::Memory),
-            "hybrid" => Ok(Self::Hybrid),
-            _ => Err(anyhow::anyhow!("Invalid storage mode: {s}")),
+        if s.eq_ignore_ascii_case("disk") {
+            Ok(Self::Disk)
+        } else if s.eq_ignore_ascii_case("memory") {
+            Ok(Self::Memory)
+        } else if s.eq_ignore_ascii_case("hybrid") {
+            Ok(Self::Hybrid)
+        } else {
+            Err(anyhow::anyhow!("Invalid storage mode: {s}"))
         }
     }
 }
@@ -81,13 +87,19 @@ impl std::str::FromStr for UploadLogLevel {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "none" => Ok(Self::None),
-            "error" => Ok(Self::Error),
-            "warn" | "warning" => Ok(Self::Warning),
-            "info" => Ok(Self::Info),
-            "debug" => Ok(Self::Debug),
-            _ => Err(anyhow::anyhow!("Invalid upload log level: {s}")),
+        let trimmed = s.trim();
+        if trimmed.eq_ignore_ascii_case("none") {
+            Ok(Self::None)
+        } else if trimmed.eq_ignore_ascii_case("error") {
+            Ok(Self::Error)
+        } else if trimmed.eq_ignore_ascii_case("warn") || trimmed.eq_ignore_ascii_case("warning") {
+            Ok(Self::Warning)
+        } else if trimmed.eq_ignore_ascii_case("info") {
+            Ok(Self::Info)
+        } else if trimmed.eq_ignore_ascii_case("debug") {
+            Ok(Self::Debug)
+        } else {
+            Err(anyhow::anyhow!("Invalid upload log level: {s}"))
         }
     }
 }
@@ -705,6 +717,57 @@ upload.pool_max_idle_per_host=not-a-number\n";
         assert_eq!(super::parse_bool_like("TRUE"), Some(true));
         assert_eq!(super::parse_bool_like(" false "), Some(false));
         assert_eq!(super::parse_bool_like("invalid"), None);
+    }
+
+    #[test]
+    fn cover_mode_parses_mixed_case() {
+        use super::CoverMode;
+        assert_eq!(
+            "ThUmBnAiL".parse::<CoverMode>().unwrap(),
+            CoverMode::Thumbnail
+        );
+        assert_eq!(
+            "ORIGINAL".parse::<CoverMode>().unwrap(),
+            CoverMode::Original
+        );
+        assert_eq!("BoTh".parse::<CoverMode>().unwrap(), CoverMode::Both);
+        assert!("invalid".parse::<CoverMode>().is_err());
+    }
+
+    #[test]
+    fn storage_mode_parses_mixed_case() {
+        use super::StorageMode;
+        assert_eq!(
+            "HyBrId".parse::<StorageMode>().unwrap(),
+            StorageMode::Hybrid
+        );
+        assert_eq!("DISK".parse::<StorageMode>().unwrap(), StorageMode::Disk);
+        assert_eq!(
+            "Memory".parse::<StorageMode>().unwrap(),
+            StorageMode::Memory
+        );
+        assert!("bogus".parse::<StorageMode>().is_err());
+    }
+
+    #[test]
+    fn upload_log_level_parses_mixed_case() {
+        assert_eq!(
+            "WaRn".parse::<UploadLogLevel>().unwrap(),
+            UploadLogLevel::Warning
+        );
+        assert_eq!(
+            "WARNING".parse::<UploadLogLevel>().unwrap(),
+            UploadLogLevel::Warning
+        );
+        assert_eq!(
+            "  Debug  ".parse::<UploadLogLevel>().unwrap(),
+            UploadLogLevel::Debug
+        );
+        assert_eq!(
+            "NONE".parse::<UploadLogLevel>().unwrap(),
+            UploadLogLevel::None
+        );
+        assert!("garbage".parse::<UploadLogLevel>().is_err());
     }
 
     #[test]
