@@ -1,7 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::io::Cursor;
-use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
@@ -314,8 +312,8 @@ impl MusicApi {
         cookie_parts.join("; ")
     }
 
-    fn build_eapi_cookie(&self) -> String {
-        self.eapi_cookie.clone()
+    fn build_eapi_cookie(&self) -> &str {
+        &self.eapi_cookie
     }
 
     /// Conditionally add the pre-computed MUSIC_U cookie header to a request.
@@ -353,10 +351,17 @@ impl MusicApi {
     }
 
     fn eapi_splice(path: &str, json: &str) -> String {
-        let marker = "36cd479b6b5";
         let text = format!("nobody{path}use{json}md5forencrypt");
-        let digest = format!("{:x}", md5_compute(text.as_bytes()));
-        format!("{path}-{marker}-{json}-{marker}-{digest}")
+        let digest = md5_compute(text.as_bytes());
+        let hex_digest = format!("{digest:x}");
+        // Pre-allocate: path + "-36cd479b6b5-" + json + "-36cd479b6b5-" + hex_digest
+        let mut result = String::with_capacity(path.len() + json.len() + hex_digest.len() + 26);
+        result.push_str(path);
+        result.push_str("-36cd479b6b5-");
+        result.push_str(json);
+        result.push_str("-36cd479b6b5-");
+        result.push_str(&hex_digest);
+        result
     }
 
     fn eapi_encrypt(data: &str) -> Result<String> {
@@ -406,11 +411,13 @@ impl MusicApi {
         }
 
         let url = format!("{}/api/song/detail", self.base_url);
-        let mut params = HashMap::new();
-        params.insert("id", song_id.to_string());
-        params.insert("ids", format!("[{song_id}]"));
+        let single_id = song_id.to_string();
+        let wrapped_ids = format!("[{song_id}]");
 
-        let mut request = self.client.post(url).form(&params);
+        let mut request = self
+            .client
+            .post(url)
+            .form(&[("id", &*single_id), ("ids", &*wrapped_ids)]);
 
         // Add MUSIC_U cookie if available
         request = self.apply_music_u_cookie(request);
@@ -442,11 +449,13 @@ impl MusicApi {
         }
 
         let url = format!("{}/api/song/enhance/player/url", self.base_url);
-        let mut params = HashMap::new();
-        params.insert("ids", format!("[{song_id}]"));
-        params.insert("br", br.to_string());
+        let ids_str = format!("[{song_id}]");
+        let br_str = br.to_string();
 
-        let mut request = self.client.post(url).form(&params);
+        let mut request = self
+            .client
+            .post(url)
+            .form(&[("ids", &*ids_str), ("br", &*br_str)]);
 
         request = self.apply_music_u_cookie(request);
 
@@ -483,12 +492,12 @@ impl MusicApi {
         };
 
         let mut cached_detail = self.get_cached_song_detail(song_id);
-        if let Some(detail) = cached_detail.clone() {
+        if let Some(ref detail) = cached_detail {
             for &bitrate in bitrate_candidates {
                 if let Some(song_url) = self.get_cached_song_url(song_id, bitrate)
                     && !song_url.url.is_empty()
                 {
-                    return Ok((detail, song_url));
+                    return Ok((detail.clone(), song_url));
                 }
             }
         }
@@ -655,14 +664,20 @@ impl MusicApi {
 
     /// Search songs
     pub async fn search_songs(&self, keyword: &str, limit: u32) -> Result<Vec<SearchSong>> {
+        #[derive(Serialize)]
+        struct SearchPayload<'a> {
+            s: &'a str,
+            offset: u32,
+            limit: u32,
+        }
+
         let path = "/api/v1/search/song/get";
         let url = format!("{}/eapi/v1/search/song/get", self.base_url);
-        let payload = serde_json::json!({
-            "s": keyword,
-            "offset": 0,
-            "limit": limit.max(1),
-        });
-        let payload_str = payload.to_string();
+        let payload_str = serde_json::to_string(&SearchPayload {
+            s: keyword,
+            offset: 0,
+            limit: limit.max(1),
+        })?;
         let body = Self::eapi_params(path, &payload_str)?;
         let request = self
             .client
@@ -673,12 +688,18 @@ impl MusicApi {
             .body(body);
 
         let response = request.send().await?.error_for_status()?;
-        let raw_body = response.text().await?;
-        let trimmed = raw_body.trim_start();
-        let data: EapiSearchResponse = if trimmed.starts_with('{') {
-            serde_json::from_str(trimmed)?
+        let raw_bytes = response.bytes().await?;
+        // Skip leading whitespace bytes
+        let trimmed_bytes = raw_bytes
+            .iter()
+            .position(|&b| !b.is_ascii_whitespace())
+            .map_or(&raw_bytes[..], |pos| &raw_bytes[pos..]);
+        let data: EapiSearchResponse = if trimmed_bytes.first() == Some(&b'{') {
+            serde_json::from_slice(trimmed_bytes)?
         } else {
-            let decrypted = Self::eapi_decrypt(trimmed)?;
+            let trimmed_str = std::str::from_utf8(trimmed_bytes)
+                .map_err(|e| BotError::MusicApi(format!("Invalid UTF-8 in response: {e}")))?;
+            let decrypted = Self::eapi_decrypt(trimmed_str)?;
             serde_json::from_str(&decrypted)?
         };
 
@@ -725,13 +746,6 @@ impl MusicApi {
         Ok(response.url().clone())
     }
 
-    /// Download and resize album art image
-    pub async fn download_album_art(&self, pic_url: &str, output_path: &Path) -> Result<()> {
-        let data = self.download_album_art_data(pic_url).await?;
-        tokio::fs::write(output_path, data).await?;
-        Ok(())
-    }
-
     /// Download and resize album art image into memory
     /// Uses spawn_blocking for CPU-intensive image processing to avoid blocking async runtime
     pub async fn download_album_art_data(&self, pic_url: &str) -> Result<Vec<u8>> {
@@ -759,29 +773,6 @@ impl MusicApi {
             .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
 
         Ok(processed)
-    }
-
-    /// Download original high-resolution album art without resizing (for embedding in audio files)
-    pub async fn download_album_art_original(&self, pic_url: &str) -> Result<Vec<u8>> {
-        if pic_url.is_empty() {
-            return Err(BotError::MusicApi("Empty album art URL".to_string()));
-        }
-
-        // Download the image with common headers
-        let request = self.client.get(pic_url);
-        let request = Self::apply_image_download_headers(request);
-
-        let response = request.send().await?;
-        if !response.status().is_success() {
-            return Err(BotError::MusicApi(format!(
-                "Failed to download album art: {}",
-                response.status()
-            )));
-        }
-
-        let bytes = response.bytes().await?;
-
-        Ok(bytes.to_vec())
     }
 }
 
@@ -823,7 +814,7 @@ pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
 
     let resized = resize_image_with_padding(img, 320, 320);
 
-    let mut cursor = Cursor::new(Vec::new());
+    let mut cursor = Cursor::new(Vec::with_capacity(32 * 1024));
     resized
         .write_to(&mut cursor, ImageFormat::Jpeg)
         .map_err(|e| BotError::MusicApi(format!("Failed to encode image: {e}")))?;
@@ -1265,13 +1256,13 @@ fn resize_image_with_padding(
     let offset_x = (target_width - new_width) / 2;
     let offset_y = (target_height - new_height) / 2;
 
-    // Convert resized image to RGB and overlay on canvas
-    let resized_rgb = resized.to_rgb8();
-    for (x, y, pixel) in resized_rgb.enumerate_pixels() {
-        if x + offset_x < target_width && y + offset_y < target_height {
-            canvas.put_pixel(x + offset_x, y + offset_y, *pixel);
-        }
-    }
+    // Overlay resized image onto canvas using imageops::overlay (avoids per-pixel loop)
+    image::imageops::overlay(
+        &mut canvas,
+        &resized.to_rgb8(),
+        i64::from(offset_x),
+        i64::from(offset_y),
+    );
 
     DynamicImage::ImageRgb8(canvas)
 }
