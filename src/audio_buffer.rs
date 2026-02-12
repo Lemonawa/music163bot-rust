@@ -37,13 +37,10 @@ pub enum AudioBuffer {
         path: PathBuf,
         file: Option<File>,
         filename: String,
+        written_bytes: u64,
     },
     /// Memory-based storage with byte vector
-    Memory {
-        data: Vec<u8>,
-        filename: String,
-        capacity: usize,
-    },
+    Memory { data: Vec<u8>, filename: String },
 }
 
 /// Thumbnail buffer for album art
@@ -86,7 +83,6 @@ impl AudioBuffer {
             Ok(Self::Memory {
                 data: Vec::with_capacity(capacity),
                 filename,
-                capacity,
             })
         } else {
             let file_path = PathBuf::from(cache_dir).join(&filename);
@@ -104,6 +100,7 @@ impl AudioBuffer {
                 path: file_path,
                 file: Some(file),
                 filename,
+                written_bytes: 0,
             })
         }
     }
@@ -125,6 +122,7 @@ impl AudioBuffer {
             path: file_path,
             file: Some(file),
             filename,
+            written_bytes: 0,
         })
     }
 
@@ -224,11 +222,16 @@ impl AudioBuffer {
     /// Write a chunk of data to the buffer
     pub async fn write_chunk(&mut self, chunk: &[u8]) -> Result<()> {
         match self {
-            Self::Disk { file, .. } => {
+            Self::Disk {
+                file,
+                written_bytes,
+                ..
+            } => {
                 let f = file.as_mut().context("Disk buffer missing file handle")?;
                 f.write_all(chunk)
                     .await
                     .context("Failed to write chunk to disk")?;
+                *written_bytes += chunk.len() as u64;
             }
             Self::Memory { data, .. } => {
                 data.extend_from_slice(chunk);
@@ -255,10 +258,20 @@ impl AudioBuffer {
     /// Get the current size of the buffer (async to avoid blocking)
     pub async fn size(&self) -> u64 {
         match self {
-            Self::Disk { path, .. } => tokio::fs::metadata(path)
-                .await
-                .map(|m| m.len())
-                .unwrap_or(0),
+            Self::Disk {
+                path,
+                written_bytes,
+                ..
+            } => {
+                if *written_bytes > 0 {
+                    *written_bytes
+                } else {
+                    tokio::fs::metadata(path)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                }
+            }
             Self::Memory { data, .. } => data.len() as u64,
         }
     }
@@ -269,7 +282,17 @@ impl AudioBuffer {
     /// `spawn_blocking` tag processing has just written the file).
     pub fn size_fast(&self) -> u64 {
         match self {
-            Self::Disk { path, .. } => std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+            Self::Disk {
+                path,
+                written_bytes,
+                ..
+            } => {
+                if *written_bytes > 0 {
+                    *written_bytes
+                } else {
+                    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+                }
+            }
             Self::Memory { data, .. } => data.len() as u64,
         }
     }
@@ -468,8 +491,9 @@ impl AudioBuffer {
 
         Self::build_flac_tag_updates(&mut tag, song_detail, artwork_data);
 
-        // 5. Build new data with single allocation
-        let mut new_data = Vec::new();
+        // 5. Build new data with estimated pre-allocation
+        let estimated_capacity = audio_data.len() + 4096; // metadata overhead estimate
+        let mut new_data = Vec::with_capacity(estimated_capacity);
         tag.write_to(&mut new_data)
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
         new_data.extend_from_slice(audio_data);
@@ -925,6 +949,7 @@ mod tests {
             path,
             file: None,
             filename: "missing.mp3".to_string(),
+            written_bytes: 0,
         };
 
         let result = buffer.write_chunk(b"abc").await;
@@ -945,12 +970,10 @@ mod tests {
         let mut first = AudioBuffer::Memory {
             data: vec![0xFF, 0xFB, 0x90, 0x64],
             filename: "a.mp3".to_string(),
-            capacity: 4,
         };
         let mut second = AudioBuffer::Memory {
             data: vec![0xFF, 0xFB, 0x90, 0x64],
             filename: "b.mp3".to_string(),
-            capacity: 4,
         };
 
         first
@@ -980,12 +1003,10 @@ mod tests {
         let mut first = AudioBuffer::Memory {
             data: source.clone(),
             filename: "a.flac".to_string(),
-            capacity: source.len(),
         };
         let mut second = AudioBuffer::Memory {
             data: source,
             filename: "b.flac".to_string(),
-            capacity: 0,
         };
 
         first
@@ -1062,6 +1083,7 @@ mod tests {
             path: path.clone(),
             file: None,
             filename: "bad.flac".to_string(),
+            written_bytes: 0,
         };
 
         let logs = capture_warn_logs(|| {
@@ -1079,7 +1101,6 @@ mod tests {
         let mut buffer = AudioBuffer::Memory {
             data,
             filename: "bad.flac".to_string(),
-            capacity: 0,
         };
 
         let logs = capture_warn_logs(|| {
@@ -1094,7 +1115,6 @@ mod tests {
         let mut buffer = AudioBuffer::Memory {
             data: vec![1, 2, 3, 4, 5],
             filename: "sample.mp3".to_string(),
-            capacity: 5,
         };
 
         let original_ptr = match &buffer {
@@ -1144,5 +1164,29 @@ mod tests {
             diff < 1024,
             "Two rapid calls should return similar values: {mb1} vs {mb2}"
         );
+    }
+
+    #[tokio::test]
+    async fn disk_written_bytes_tracks_sequential_writes() {
+        let temp_name = format!(
+            "music163bot_written_bytes_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let cache_dir = std::env::temp_dir();
+        let mut buffer = AudioBuffer::new_disk(temp_name, cache_dir.to_str().unwrap())
+            .await
+            .expect("create disk buffer");
+
+        assert_eq!(buffer.size().await, 0, "size should be 0 before any writes");
+
+        buffer.write_chunk(b"hello").await.expect("first write");
+        assert_eq!(buffer.size().await, 5, "size after first write");
+        assert_eq!(buffer.size_fast(), 5, "size_fast after first write");
+
+        buffer.write_chunk(b" world").await.expect("second write");
+        assert_eq!(buffer.size().await, 11, "size after second write");
+        assert_eq!(buffer.size_fast(), 11, "size_fast after second write");
+
+        buffer.cleanup().await.expect("cleanup disk buffer");
     }
 }

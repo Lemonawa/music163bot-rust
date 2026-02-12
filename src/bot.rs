@@ -2071,18 +2071,22 @@ mod tests {
     async fn lyric_parallel_fetch() {
         let start = std::time::Instant::now();
         let (res1, res2) = super::join_futures(
-            async { 
+            async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok::<_, ()>("lyric") 
+                Ok::<_, ()>("lyric")
             },
-            async { 
+            async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok::<_, ()>("detail") 
-            }
-        ).await;
-        
+                Ok::<_, ()>("detail")
+            },
+        )
+        .await;
+
         let elapsed = start.elapsed();
-        assert!(elapsed < Duration::from_millis(90), "Should run in parallel");
+        assert!(
+            elapsed < Duration::from_millis(90),
+            "Should run in parallel"
+        );
         assert_eq!(res1, Ok("lyric"));
         assert_eq!(res2, Ok("detail"));
     }
@@ -2091,18 +2095,22 @@ mod tests {
     async fn lyric_upload_resource_parallel() {
         let start = std::time::Instant::now();
         let (res1, res2) = super::join_futures(
-            async { 
+            async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok::<_, ()>("client") 
+                Ok::<_, ()>("client")
             },
-            async { 
+            async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok::<_, ()>("permit") 
-            }
-        ).await;
-        
+                Ok::<_, ()>("permit")
+            },
+        )
+        .await;
+
         let elapsed = start.elapsed();
-        assert!(elapsed < Duration::from_millis(90), "Should run in parallel");
+        assert!(
+            elapsed < Duration::from_millis(90),
+            "Should run in parallel"
+        );
         assert_eq!(res1, Ok("client"));
         assert_eq!(res2, Ok("permit"));
     }
@@ -2526,7 +2534,6 @@ mod tests {
         let buffer = crate::audio_buffer::AudioBuffer::Memory {
             data: vec![1, 2, 3],
             filename: "sample.bin".to_string(),
-            capacity: 3,
         };
         let detail = crate::music_api::SongDetail {
             id: 1,
@@ -2548,7 +2555,6 @@ mod tests {
         let buffer = crate::audio_buffer::AudioBuffer::Memory {
             data: vec![0xFF, 0xFB, 0x90, 0x64],
             filename: "sample.mp3".to_string(),
-            capacity: 4,
         };
         let detail = crate::music_api::SongDetail {
             id: 2,
