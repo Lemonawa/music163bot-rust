@@ -95,17 +95,21 @@ pub fn ensure_dir(path: &str) -> std::io::Result<()> {
 /// Clean filename for safe file operations
 #[must_use]
 pub fn clean_filename(name: &str) -> String {
-    let cleaned = name
-        .chars()
-        .filter(|c| !c.is_control())
-        .map(|c| match c {
-            '/' | '\\' | '?' | '*' | ':' | '|' | '<' | '>' | '"' => ' ',
-            _ => c,
-        })
-        .collect::<String>();
-    let trimmed = cleaned.trim();
+    let mut result = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_control() {
+            continue;
+        }
+        match c {
+            '/' | '\\' | '?' | '*' | ':' | '|' | '<' | '>' | '"' => result.push(' '),
+            _ => result.push(c),
+        }
+    }
+    let trimmed = result.trim();
     if trimmed.is_empty() {
         "untitled".to_string()
+    } else if trimmed.len() == result.len() {
+        result
     } else {
         trimmed.to_string()
     }
@@ -181,10 +185,17 @@ pub fn update_peak(counter: &std::sync::atomic::AtomicU32, value: u32) -> u32 {
     current
 }
 
-/// Check if an error is a timeout error
+/// Check if an error is a timeout error by walking the error chain
 pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
-    let message = error.to_string();
-    message.contains("timeout") || message.contains("deadline")
+    let mut current: Option<&dyn std::error::Error> = Some(error);
+    while let Some(err) = current {
+        let message = err.to_string();
+        if message.contains("timeout") || message.contains("deadline") {
+            return true;
+        }
+        current = err.source();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -266,5 +277,30 @@ mod tests {
     fn clean_filename_handles_all_invalid_chars() {
         let cleaned = clean_filename("/\\?*:|<>\"\n\t\r");
         assert_eq!(cleaned, "untitled");
+    }
+
+    #[test]
+    fn clean_filename_preserves_valid_names() {
+        assert_eq!(clean_filename("hello world.mp3"), "hello world.mp3");
+        assert_eq!(clean_filename("  spaced  "), "spaced");
+        assert_eq!(clean_filename("a/b"), "a b");
+    }
+
+    #[test]
+    fn clean_filename_handles_unicode() {
+        assert_eq!(clean_filename("你好世界.flac"), "你好世界.flac");
+        assert_eq!(clean_filename("café.mp3"), "café.mp3");
+    }
+
+    #[test]
+    fn is_timeout_error_detects_timeout_message() {
+        let err = std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timeout");
+        assert!(super::is_timeout_error(&err));
+    }
+
+    #[test]
+    fn is_timeout_error_rejects_non_timeout() {
+        let err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        assert!(!super::is_timeout_error(&err));
     }
 }
