@@ -2086,6 +2086,26 @@ mod tests {
         assert_eq!(res2, Ok("detail"));
     }
 
+    #[tokio::test]
+    async fn lyric_upload_resource_parallel() {
+        let start = std::time::Instant::now();
+        let (res1, res2) = super::join_futures(
+            async { 
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok::<_, ()>("client") 
+            },
+            async { 
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok::<_, ()>("permit") 
+            }
+        ).await;
+        
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_millis(90), "Should run in parallel");
+        assert_eq!(res1, Ok("client"));
+        assert_eq!(res2, Ok("permit"));
+    }
+
     #[test]
     fn cover_policy_embeds_for_thumbnail_mode() {
         let policy = resolve_cover_policy(CoverMode::Thumbnail);
@@ -2798,7 +2818,13 @@ async fn handle_lyric_command(
                 }
             };
 
-            let (_upload_bot, raw_client, api_base_url) = match acquire_upload_client(state).await {
+            let (client_result, permit_result) = join_futures(
+                acquire_upload_client(state),
+                acquire_upload_permit(&state.upload_semaphore),
+            )
+            .await;
+
+            let (_upload_bot, raw_client, api_base_url) = match client_result {
                 Ok(bundle) => bundle,
                 Err(e) => {
                     tokio::fs::remove_file(&lrc_path).await.ok();
@@ -2811,7 +2837,7 @@ async fn handle_lyric_command(
                     return Ok(());
                 }
             };
-            let _upload_permit = match acquire_upload_permit(&state.upload_semaphore).await {
+            let _upload_permit = match permit_result {
                 Ok(permit) => permit,
                 Err(e) => {
                     tokio::fs::remove_file(&lrc_path).await.ok();
