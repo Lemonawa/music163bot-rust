@@ -1,26 +1,10 @@
-# Performance Optimization Baseline
+# Parallel Optimization Baseline (2026-02-11)
 
-**Date:** 2026-02-12
-**Version:** 1.1.17
+Baseline captured before applying Workstreams A-F.
 
-## Baseline Metrics
+## Command Output (`python3 scripts/perf_compare.py`)
 
-### Upload Latency
-- `[pre_upload_path]`: (To be recorded)
-- `[upload_audio]`: (To be recorded)
-
-### Command Latency
-- Lyric Command: (To be recorded)
-
-### Throughput
-- Memory Mode: (To be recorded)
-- Disk Mode: (To be recorded)
-
-## Baseline Comparison Output
-
-(Generated from scripts/perf_compare.py)
-
-# v1.1.17 Baseline Performance Comparison
+# v1.1.16 Performance Comparison
 
 Synthetic local benchmark comparing before/after strategies.
 
@@ -28,26 +12,26 @@ Synthetic local benchmark comparing before/after strategies.
 
 | Metric | Before (3 queries) | After (1 query) |
 |---|---:|---:|
-| First latency (ms) | 0.63 | 0.21 |
-| Mean latency (ms) | 0.60 | 0.21 |
+| First latency (ms) | 0.59 | 0.21 |
+| Mean latency (ms) | 0.59 | 0.20 |
 | P95 latency (ms) | 0.60 | 0.21 |
-| Speedup | - | 2.87x |
+| Speedup | - | 2.89x |
 
 ## First Download Latency Model
 
 | Metric | Before (audio + cover + cover) | After (audio + cover) |
 |---|---:|---:|
-| First latency (ms) | 77.15 | 50.19 |
-| Mean latency (ms) | 78.33 | 52.20 |
-| P95 latency (ms) | 81.09 | 54.06 |
-| Speedup | - | 1.50x |
+| First latency (ms) | 72.42 | 56.94 |
+| Mean latency (ms) | 83.20 | 55.04 |
+| P95 latency (ms) | 86.95 | 58.87 |
+| Speedup | - | 1.51x |
 
 ## Peak Memory Model
 
 | Metric | Before | After |
 |---|---:|---:|
 | Peak allocated memory (MB) | 16.15 | 12.14 |
-| Reduction (%) | - | 24.79% |
+| Reduction (%) | - | 24.80% |
 
 ## Singleflight Fanout Model
 
@@ -55,8 +39,8 @@ Requests per round: 20, rounds: 40
 
 | Metric | Before | After |
 |---|---:|---:|
-| Mean latency (ms) | 45.07 | 43.87 |
-| P95 latency (ms) | 46.02 | 46.04 |
+| Mean latency (ms) | 45.37 | 44.10 |
+| P95 latency (ms) | 46.51 | 46.63 |
 | Upstream calls / round | 40.00 | 2.00 |
 | Call reduction (%) | - | 95.00% |
 
@@ -66,8 +50,7 @@ Rounds: 200
 
 | Metric | Before (always miss) | After (warm cache) |
 |---|---:|---:|
-| First latency (ms) | 19.68 | 22.54 |
-| Mean latency (ms) | 21.28 | 0.11 |
+| First latency (ms) | 22.54 | 19.34 |
+| Mean latency (ms) | 21.40 | 0.10 |
 | P95 latency (ms) | 22.54 | 0.00 |
-| Speedup | - | 188.61x |
-
+| Speedup | - | 221.08x |
