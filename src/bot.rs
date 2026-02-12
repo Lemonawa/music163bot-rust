@@ -667,7 +667,7 @@ async fn try_send_cached_song(
     {
         Ok(_) => Ok(true),
         Err(e) => {
-            let err_str = format!("{e}");
+            let err_str = e.to_string();
             if err_str.contains("invalid remote file identifier") {
                 tracing::warn!(
                     "Cached file_id invalid for music_id {}, deleting cache and re-downloading: {}",
@@ -778,6 +778,7 @@ async fn process_music(
         &song_url,
         &status_msg,
         pre_upload_path_start,
+        &artists,
     )
     .await
     {
@@ -799,6 +800,7 @@ async fn download_and_send_music(
     song_url: &crate::music_api::SongUrl,
     status_msg: &Message,
     pre_upload_path_start: std::time::Instant,
+    artists: &str,
 ) -> Result<()> {
     // Determine file extension
     let file_ext = if song_url.url.contains(".flac") {
@@ -807,7 +809,6 @@ async fn download_and_send_music(
         "mp3"
     };
 
-    let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
     let filename = clean_filename(&format!(
         "{} - {}.{}",
         artists.replace('/', ","),
@@ -1065,7 +1066,7 @@ async fn download_and_send_music(
     let mut song_info = SongInfo {
         music_id: song_detail.id as i64,
         song_name: song_detail.name.clone(),
-        song_artists: artists,
+        song_artists: artists.to_string(),
         song_album: song_detail
             .al
             .as_ref()
@@ -2804,19 +2805,7 @@ async fn handle_lyric_command(
                 return Ok(());
             }
 
-            let file_size = match tokio::fs::metadata(&lrc_path).await {
-                Ok(metadata) => metadata.len(),
-                Err(e) => {
-                    tokio::fs::remove_file(&lrc_path).await.ok();
-                    bot.edit_message_text(
-                        msg.chat.id,
-                        status_msg.id,
-                        format!("读取歌词文件失败: {e}"),
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            };
+            let file_size = lyric.len() as u64;
 
             let (client_result, permit_result) = join_futures(
                 acquire_upload_client(state),
