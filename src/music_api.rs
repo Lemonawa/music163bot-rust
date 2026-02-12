@@ -25,6 +25,7 @@ pub struct MusicApi {
     client: Client,
     pub music_u: Option<String>,
     base_url: String,
+    eapi_cookie: String,
     song_detail_cache: DashMap<u64, TimedCacheEntry<SongDetail>>,
     song_url_cache: DashMap<(u64, u64), TimedCacheEntry<SongUrl>>,
     song_lyric_cache: DashMap<u64, TimedCacheEntry<String>>,
@@ -219,10 +220,13 @@ impl MusicApi {
             Client::new()
         });
 
+        let eapi_cookie = Self::generate_eapi_cookie(music_u.as_deref());
+
         Self {
             client,
             music_u,
             base_url,
+            eapi_cookie,
             song_detail_cache: DashMap::new(),
             song_url_cache: DashMap::new(),
             song_lyric_cache: DashMap::new(),
@@ -278,11 +282,11 @@ impl MusicApi {
     }
 
     fn cache_song_lyric(&self, song_id: u64, lyric: String) {
-        self.song_lyric_cache
+            self.song_lyric_cache
             .insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
     }
 
-    fn build_eapi_cookie(&self) -> String {
+    fn generate_eapi_cookie(music_u: Option<&str>) -> String {
         let device_id = Uuid::new_v4().simple().to_string();
         let appver = "9.3.40";
         let buildver = SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
@@ -297,7 +301,7 @@ impl MusicApi {
             "os=Android".to_string(),
         ];
 
-        if let Some(music_u) = &self.music_u {
+        if let Some(music_u) = music_u {
             cookie_parts.push(format!("MUSIC_U={music_u}"));
         } else {
             cookie_parts.push("MUSIC_A=4ee5f776c9ed1e4d5f031b09e084c6cb333e43ee4a841afeebbef9bbf4b7e4152b51ff20ecb9e8ee9e89ab23044cf50d1609e4781e805e73a138419e5583bc7fd1e5933c52368d9127ba9ce4e2f233bf5a77ba40ea6045ae1fc612ead95d7b0e0edf70a74334194e1a190979f5fc12e9968c3666a981495b33a649814e309366".to_string());
@@ -306,7 +310,12 @@ impl MusicApi {
         cookie_parts.join("; ")
     }
 
+    fn build_eapi_cookie(&self) -> String {
+        self.eapi_cookie.clone()
+    }
+
     fn eapi_splice(path: &str, json: &str) -> String {
+
         let marker = "36cd479b6b5";
         let text = format!("nobody{path}use{json}md5forencrypt");
         let digest = format!("{:x}", md5_compute(text.as_bytes()));
@@ -1031,6 +1040,33 @@ mod tests {
 
         let missing = api.get_cached_song_url(42, 192_000);
         assert!(missing.is_none(), "uncached bitrate should return None");
+    }
+
+    #[test]
+    fn eapi_cookie_device_id_is_stable_per_instance() {
+        let api = MusicApi::new(None, "http://localhost".to_string());
+        let cookie1 = api.build_eapi_cookie();
+        let cookie2 = api.build_eapi_cookie();
+
+        // Extract deviceId from cookie string
+        // Format: deviceId=...; appver=...
+        let get_device_id = |c: &str| -> String {
+            c.split("; ")
+                .find(|p| p.starts_with("deviceId="))
+                .expect("cookie should have deviceId")
+                .to_string()
+        };
+
+        assert_eq!(get_device_id(&cookie1), get_device_id(&cookie2), "device_id should be stable");
+    }
+
+    #[test]
+    fn eapi_cookie_includes_music_u() {
+        let music_u = "test_cookie_value";
+        let api = MusicApi::new(Some(music_u.to_string()), "http://localhost".to_string());
+        let cookie = api.build_eapi_cookie();
+        
+        assert!(cookie.contains(&format!("MUSIC_U={music_u}")));
     }
 }
 
