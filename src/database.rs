@@ -1,7 +1,9 @@
+use std::time::Duration;
+
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
-use std::time::Duration;
 
 use crate::error::Result;
 
@@ -53,7 +55,11 @@ impl Database {
             .synchronous(sqlx::sqlite::SqliteSynchronous::Normal) // 平衡性能和耐久性
             .foreign_keys(true);
 
-        let pool = SqlitePool::connect_with(options).await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .min_connections(1)
+            .connect_with(options)
+            .await?;
 
         // Create tables if they don't exist
         sqlx::query(
@@ -385,6 +391,16 @@ mod tests {
 
         drop(db);
         cleanup_db_files(&temp_path);
+    }
+
+    #[tokio::test]
+    async fn pool_options_init_succeeds_with_explicit_bounds() {
+        // Verifies that SqlitePoolOptions with explicit max/min connections works
+        let db = Database::new("sqlite::memory:").await;
+        assert!(
+            db.is_ok(),
+            "DB init with explicit pool bounds should succeed"
+        );
     }
 
     #[tokio::test]
