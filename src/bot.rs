@@ -38,6 +38,7 @@ pub struct BotState {
     pub upload_client_state: Arc<Mutex<UploadClientState>>,
     pub maintenance_counters: MaintenanceCounters,
     pub upload_counters: UploadCounters,
+    pub is_official_api: bool,
 }
 
 #[derive(Debug)]
@@ -333,6 +334,7 @@ pub async fn run(config: Config) -> Result<()> {
     // Create bot state (needs bot username)
     let max_concurrent_downloads = config.max_concurrent_downloads;
     let upload_max_concurrent = config.upload_max_concurrent;
+    let is_official_api = is_official_telegram_api(&config.bot_api);
 
     let bot_state = Arc::new(BotState {
         config,
@@ -358,6 +360,7 @@ pub async fn run(config: Config) -> Result<()> {
         })),
         maintenance_counters: MaintenanceCounters::new(),
         upload_counters: UploadCounters::default(),
+        is_official_api,
     });
 
     let prewarm_state = Arc::clone(&bot_state);
@@ -390,10 +393,10 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
     if let MessageKind::Common(common) = &msg.kind
         && let teloxide::types::MediaKind::Text(text_content) = &common.media_kind
     {
-        let text = text_content.text.clone();
-        if !should_spawn_message_task(&text) {
+        if !should_spawn_message_task(&text_content.text) {
             return Ok(());
         }
+        let text = text_content.text.clone();
 
         let permit = match state.message_task_semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,
@@ -437,19 +440,19 @@ async fn handle_command(
     state: &Arc<BotState>,
     text: &str,
 ) -> ResponseResult<()> {
-    let parts: Vec<&str> = text.split_whitespace().collect();
-    let mut command = parts[0].trim_start_matches('/');
+    let (command_part, args) = if let Some((cmd, rest)) = text.split_once(char::is_whitespace) {
+        (cmd, Some(rest.trim_start().to_string()))
+    } else {
+        (text, None)
+    };
+    // Filter out empty args (whitespace-only after command)
+    let args = args.filter(|a| !a.is_empty());
+    let mut command = command_part.trim_start_matches('/');
 
     // Remove bot username if present (e.g., "/start@BotName" -> "start")
     if let Some(at_pos) = command.find('@') {
         command = &command[..at_pos];
     }
-
-    let args = if parts.len() > 1 {
-        Some(parts[1..].join(" "))
-    } else {
-        None
-    };
 
     // Only log music/search commands and admin commands
     match command {
@@ -719,15 +722,12 @@ async fn process_music(
         .send();
     let fetch_fut = state
         .music_api
-        .get_song_detail_and_best_url(music_id, &bitrate_candidates);
+        .get_song_detail_and_best_url(music_id, bitrate_candidates);
 
     let (status_result, detail_and_url_result) = tokio::join!(status_fut, fetch_fut);
     let status_msg = status_result?;
     let select_url_duration = status_init_start.elapsed();
-    tracing::info!(
-        "{}",
-        format_perf(PERF_STAGE_SELECT_URL, select_url_duration)
-    );
+    log_perf(PERF_STAGE_SELECT_URL, select_url_duration);
 
     let (song_detail, song_url) = match detail_and_url_result {
         Ok(result) => result,
@@ -774,7 +774,7 @@ async fn process_music(
         bot,
         msg,
         state,
-        &song_detail,
+        song_detail,
         &song_url,
         &status_msg,
         pre_upload_path_start,
@@ -796,7 +796,7 @@ async fn download_and_send_music(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
-    song_detail: &crate::music_api::SongDetail,
+    song_detail: crate::music_api::SongDetail,
     song_url: &crate::music_api::SongUrl,
     status_msg: &Message,
     pre_upload_path_start: std::time::Instant,
@@ -816,13 +816,19 @@ async fn download_and_send_music(
         file_ext
     ));
 
-    // Ensure cache directory exists
-    ensure_dir(&state.config.cache_dir)?;
-
     let cover_mode = state.config.cover_mode;
     let cover_policy = resolve_cover_policy(cover_mode);
     let download_thumbnail = cover_policy.download_thumbnail;
     let download_cover = should_download_cover(cover_policy);
+
+    // Extract fields needed for SongInfo before moving song_detail into blocking task
+    let song_id = song_detail.id;
+    let song_name = song_detail.name.clone();
+    let song_album = song_detail
+        .al
+        .as_ref()
+        .map_or_else(|| "Unknown Album".to_string(), |al| al.name.clone());
+    let duration_ms = song_detail.dt;
 
     // Start parallel downloads: audio file and album art
     let artwork_future = async {
@@ -830,12 +836,12 @@ async fn download_and_send_music(
             tracing::debug!("Album info found: id={}, name={}", al.id, al.name);
             if let Some(ref pic_url) = al.pic_url {
                 if pic_url.is_empty() {
-                    tracing::warn!("Album art URL is empty for music_id {}", song_detail.id);
+                    tracing::warn!("Album art URL is empty for music_id {}", song_id);
                     (None, None)
                 } else {
                     tracing::info!(
                         "Starting album art download for music_id {} (mode: {:?}), pic_url: {}",
-                        song_detail.id,
+                        song_id,
                         cover_mode,
                         pic_url
                     );
@@ -845,7 +851,7 @@ async fn download_and_send_music(
                             Ok(data) => {
                                 tracing::info!(
                                     "Downloaded 320px album art for music_id {} ({} bytes)",
-                                    song_detail.id,
+                                    song_id,
                                     data.len()
                                 );
 
@@ -853,7 +859,7 @@ async fn download_and_send_music(
                                 let thumbnail_buffer = if download_thumbnail {
                                     let thumb_filename = format!(
                                         "thumb_{}_{}.jpg",
-                                        song_detail.id,
+                                        song_id,
                                         chrono::Utc::now().timestamp()
                                     );
                                     ThumbnailBuffer::new(
@@ -873,7 +879,7 @@ async fn download_and_send_music(
                             Err(e) => {
                                 tracing::warn!(
                                     "Failed to download 320px album art for music_id {}: {}",
-                                    song_detail.id,
+                                    song_id,
                                     e
                                 );
                                 (None, None)
@@ -884,11 +890,11 @@ async fn download_and_send_music(
                     }
                 }
             } else {
-                tracing::warn!("No pic_url found in album for music_id {}", song_detail.id);
+                tracing::warn!("No pic_url found in album for music_id {}", song_id);
                 (None, None)
             }
         } else {
-            tracing::warn!("No album info found for music_id {}", song_detail.id);
+            tracing::warn!("No album info found for music_id {}", song_id);
             (None, None)
         }
     };
@@ -947,7 +953,7 @@ async fn download_and_send_music(
             download_duration.as_secs_f64(),
             download_mbps
         );
-        tracing::info!("{}", format_perf("download_audio", download_duration));
+        log_perf("download_audio", download_duration);
 
         Ok::<(AudioBuffer, u64), anyhow::Error>((audio_buffer, downloaded))
     };
@@ -1027,8 +1033,8 @@ async fn download_and_send_music(
     let (tag_result, upload_client_result) = tokio::join!(
         apply_tags_in_blocking(
             audio_buffer,
-            file_ext.to_string(),
-            song_detail.clone(),
+            file_ext,
+            song_detail,
             cover_artwork_data,
             cover_policy.embed_cover,
         ),
@@ -1038,12 +1044,12 @@ async fn download_and_send_music(
     let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
     // upload_permit already acquired during download phase
 
-    tracing::info!("{}", format_perf("process_tags", tags_start.elapsed()));
+    log_perf("process_tags", tags_start.elapsed());
 
     // Get file size for database and logging
     let file_size = audio_buffer.size().await;
     let audio_file_size = file_size as i64;
-    let duration_sec = (song_detail.dt.unwrap_or(0) / 1000) as i64;
+    let duration_sec = (duration_ms.unwrap_or(0) / 1000) as i64;
 
     // Calculate actual bitrate from file size and duration
     // API's song_url.br is often theoretical (e.g., 1411kbps for FLAC) but
@@ -1063,14 +1069,12 @@ async fn download_and_send_music(
     );
 
     // Create song info for database
+    let now = chrono::Utc::now();
     let mut song_info = SongInfo {
-        music_id: song_detail.id as i64,
-        song_name: song_detail.name.clone(),
+        music_id: song_id as i64,
+        song_name,
         song_artists: artists.to_string(),
-        song_album: song_detail
-            .al
-            .as_ref()
-            .map_or_else(|| "Unknown Album".to_string(), |al| al.name.clone()),
+        song_album,
         file_ext: file_ext.to_string(),
         music_size: audio_file_size,
         pic_size: 0,
@@ -1087,8 +1091,8 @@ async fn download_and_send_music(
             .unwrap_or_default(),
         from_chat_id: msg.chat.id.0,
         from_chat_name: msg.chat.username().unwrap_or("").to_string(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now,
+        updated_at: now,
         ..Default::default()
     };
 
@@ -1106,11 +1110,7 @@ async fn download_and_send_music(
         &state.bot_username,
     );
 
-    let keyboard = create_music_keyboard(
-        song_detail.id,
-        &song_info.song_name,
-        &song_info.song_artists,
-    );
+    let keyboard = create_music_keyboard(song_id, &song_info.song_name, &song_info.song_artists);
 
     if file_size == 0 {
         if let Err(e) = audio_buffer.cleanup().await {
@@ -1135,10 +1135,7 @@ async fn download_and_send_music(
         }
     );
 
-    tracing::info!(
-        "{}",
-        format_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_start.elapsed())
-    );
+    log_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_start.elapsed());
 
     // Send audio file with enhanced error handling and proper MIME type
     tracing::info!(
@@ -1181,6 +1178,7 @@ async fn download_and_send_music(
         &raw_client,
         &api_base_url,
         &state.config,
+        state.is_official_api,
         &audio_buffer,
         audio_bytes.as_ref(),
         file_size,
@@ -1194,7 +1192,7 @@ async fn download_and_send_music(
         .in_flight
         .fetch_sub(1, Ordering::Relaxed)
         - 1;
-    tracing::info!("{}", format_perf("upload_audio", upload_duration));
+    log_perf("upload_audio", upload_duration);
 
     if let Ok(ref resp_json) = upload_result {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
@@ -1262,11 +1260,12 @@ async fn download_and_send_music(
 
 async fn apply_tags_in_blocking(
     mut audio_buffer: AudioBuffer,
-    file_ext: String,
+    file_ext: &str,
     song_detail: crate::music_api::SongDetail,
     artwork_data: Option<Bytes>,
     embed_cover: bool,
 ) -> Result<AudioBuffer> {
+    let file_ext = file_ext.to_string(); // move into blocking task
     tokio::task::spawn_blocking(move || {
         let embed_artwork = if embed_cover {
             artwork_data.as_ref().map(std::convert::AsRef::as_ref)
@@ -1361,14 +1360,14 @@ async fn local_file_uri_from_path(path: &std::path::Path) -> Option<String> {
 
 async fn maybe_local_file_uri(
     config: &Config,
-    api_url: &str,
+    is_official_api: bool,
     path: &std::path::Path,
 ) -> Option<String> {
     if !config.upload_local_file_uri {
         return None;
     }
 
-    if is_official_telegram_api(api_url) {
+    if is_official_api {
         return None;
     }
 
@@ -1383,19 +1382,19 @@ enum UploadFileTarget {
 
 async fn select_local_upload_target(
     config: &Config,
-    api_base_url: &str,
+    is_official_api: bool,
     path: &std::path::Path,
 ) -> UploadFileTarget {
-    maybe_local_file_uri(config, api_base_url, path)
+    maybe_local_file_uri(config, is_official_api, path)
         .await
         .map_or(UploadFileTarget::Multipart, UploadFileTarget::LocalUri)
 }
 
-fn url_bitrate_candidates(has_music_u: bool) -> Vec<u64> {
+fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
     if has_music_u {
-        vec![999_000, 320_000, 128_000]
+        &[999_000, 320_000, 128_000]
     } else {
-        vec![320_000, 128_000]
+        &[320_000, 128_000]
     }
 }
 
@@ -1504,6 +1503,11 @@ fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Clie
 const PERF_STAGE_SELECT_URL: &str = "select_url";
 const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
 
+fn log_perf(label: &str, duration: std::time::Duration) {
+    tracing::info!("[{label}] {}ms", duration.as_millis());
+}
+
+#[cfg(test)]
 fn format_perf(label: &str, duration: std::time::Duration) -> String {
     format!("[{label}] {}ms", duration.as_millis())
 }
@@ -1574,6 +1578,7 @@ async fn raw_send_document(
     client: &reqwest::Client,
     api_base_url: &str,
     config: &Config,
+    is_official_api: bool,
     path: &std::path::Path,
     file_size: u64,
     params: &RawDocumentParams<'_>,
@@ -1591,7 +1596,7 @@ async fn raw_send_document(
         form = form.text("caption", caption.to_owned());
     }
 
-    let document_target = select_local_upload_target(config, api_base_url, path).await;
+    let document_target = select_local_upload_target(config, is_official_api, path).await;
     match document_target {
         UploadFileTarget::LocalUri(uri) => {
             form = form.text("document", uri);
@@ -1610,10 +1615,8 @@ async fn raw_send_document(
     }
 
     // reply_parameters as JSON
-    let reply_params = serde_json::json!({
-        "message_id": params.reply_to_message_id
-    });
-    form = form.text("reply_parameters", reply_params.to_string());
+    let reply_params = format!(r#"{{"message_id":{}}}"#, params.reply_to_message_id);
+    form = form.text("reply_parameters", reply_params);
 
     // reply_markup as JSON
     if let Some(ref markup_json) = params.reply_markup_json {
@@ -1642,6 +1645,7 @@ async fn raw_send_file(
     client: &reqwest::Client,
     api_base_url: &str,
     config: &Config,
+    is_official_api: bool,
     audio_buffer: &AudioBuffer,
     audio_bytes: Option<&Bytes>,
     file_size: u64,
@@ -1656,7 +1660,7 @@ async fn raw_send_file(
 
     let audio_target = match audio_buffer {
         AudioBuffer::Disk { path, .. } => {
-            select_local_upload_target(config, api_base_url, path).await
+            select_local_upload_target(config, is_official_api, path).await
         }
         AudioBuffer::Memory { .. } => UploadFileTarget::Multipart,
     };
@@ -1691,10 +1695,8 @@ async fn raw_send_file(
     }
 
     // reply_parameters as JSON
-    let reply_params = serde_json::json!({
-        "message_id": params.reply_to_message_id
-    });
-    form = form.text("reply_parameters", reply_params.to_string());
+    let reply_params = format!(r#"{{"message_id":{}}}"#, params.reply_to_message_id);
+    form = form.text("reply_parameters", reply_params);
 
     // reply_markup as JSON
     if let Some(ref markup_json) = params.reply_markup_json {
@@ -1722,7 +1724,7 @@ async fn raw_send_file(
                 form = form.part("thumbnail", thumb_part);
             }
             ThumbnailBuffer::Disk { path } => {
-                match select_local_upload_target(config, api_base_url, path).await {
+                match select_local_upload_target(config, is_official_api, path).await {
                     UploadFileTarget::LocalUri(uri) => {
                         form = form.text("thumbnail", uri);
                     }
@@ -2186,7 +2188,7 @@ mod tests {
         config.bot_api = "http://localhost:8081".to_string();
 
         let path = create_temp_file();
-        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        let uri = super::maybe_local_file_uri(&config, false, &path).await;
         fs::remove_file(&path).expect("remove temp file");
 
         assert!(uri.is_none());
@@ -2196,10 +2198,9 @@ mod tests {
     async fn local_file_uri_skips_official_api() {
         let mut config = crate::config::Config::default();
         config.upload_local_file_uri = true;
-        config.bot_api = "https://api.telegram.org".to_string();
 
         let path = create_temp_file();
-        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        let uri = super::maybe_local_file_uri(&config, true, &path).await;
         fs::remove_file(&path).expect("remove temp file");
 
         assert!(uri.is_none());
@@ -2209,10 +2210,9 @@ mod tests {
     async fn local_file_uri_builds_from_existing_path() {
         let mut config = crate::config::Config::default();
         config.upload_local_file_uri = true;
-        config.bot_api = "http://localhost:8081".to_string();
 
         let path = create_temp_file();
-        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        let uri = super::maybe_local_file_uri(&config, false, &path).await;
         fs::remove_file(&path).expect("remove temp file");
 
         let Some(uri) = uri else {
@@ -2225,14 +2225,13 @@ mod tests {
     async fn local_file_uri_returns_none_for_missing_path() {
         let mut config = crate::config::Config::default();
         config.upload_local_file_uri = true;
-        config.bot_api = "http://localhost:8081".to_string();
 
         let path = std::env::temp_dir().join(format!("missing_{}", Uuid::new_v4()));
         if path.exists() {
             fs::remove_file(&path).expect("remove temp file");
         }
 
-        let uri = super::maybe_local_file_uri(&config, &config.bot_api, &path).await;
+        let uri = super::maybe_local_file_uri(&config, false, &path).await;
         assert!(uri.is_none());
     }
 
@@ -2241,8 +2240,7 @@ mod tests {
         let config = Config::default();
         let path = std::path::Path::new("/tmp/test.mp3");
         assert_eq!(
-            super::select_local_upload_target(&config, "http://127.0.0.1:8081/botTOKEN/", path)
-                .await,
+            super::select_local_upload_target(&config, false, path).await,
             super::UploadFileTarget::Multipart
         );
     }
@@ -2253,9 +2251,7 @@ mod tests {
         config.upload_local_file_uri = true;
 
         let path = create_temp_file();
-        let target =
-            super::select_local_upload_target(&config, "http://127.0.0.1:8081/botTOKEN/", &path)
-                .await;
+        let target = super::select_local_upload_target(&config, false, &path).await;
         fs::remove_file(&path).expect("remove temp file");
 
         match target {
@@ -2339,13 +2335,13 @@ mod tests {
     fn url_bitrate_candidates_prefers_flac_with_music_u() {
         assert_eq!(
             super::url_bitrate_candidates(true),
-            vec![999_000, 320_000, 128_000]
+            &[999_000, 320_000, 128_000]
         );
     }
 
     #[test]
     fn url_bitrate_candidates_uses_mp3_without_music_u() {
-        assert_eq!(super::url_bitrate_candidates(false), vec![320_000, 128_000]);
+        assert_eq!(super::url_bitrate_candidates(false), &[320_000, 128_000]);
     }
 
     #[test]
@@ -2543,7 +2539,7 @@ mod tests {
             al: None,
         };
 
-        let tagged = super::apply_tags_in_blocking(buffer, "bin".to_string(), detail, None, false)
+        let tagged = super::apply_tags_in_blocking(buffer, "bin", detail, None, false)
             .await
             .expect("unknown format should keep buffer unchanged");
 
@@ -2571,7 +2567,7 @@ mod tests {
             }),
         };
 
-        let tagged = super::apply_tags_in_blocking(buffer, "mp3".to_string(), detail, None, false)
+        let tagged = super::apply_tags_in_blocking(buffer, "mp3", detail, None, false)
             .await
             .expect("mp3 tagging should succeed");
         let data = tagged.get_data().await.expect("read tagged data");
@@ -2856,6 +2852,7 @@ async fn handle_lyric_command(
                 &raw_client,
                 &api_base_url,
                 &state.config,
+                state.is_official_api,
                 &lrc_path,
                 file_size,
                 &params,
@@ -3078,28 +3075,26 @@ async fn handle_callback(
     query: CallbackQuery,
     state: Arc<BotState>,
 ) -> ResponseResult<()> {
-    if let Some(data) = query.data {
-        let parts: Vec<&str> = data.split_whitespace().collect();
-        if parts.len() >= 2
-            && parts[0] == "music"
-            && let Ok(music_id) = parts[1].parse::<u64>()
-            && let Some(MaybeInaccessibleMessage::Regular(msg)) = &query.message
-        {
-            match process_music(&bot, msg, &state, music_id).await {
-                Ok(()) => {
-                    bot.answer_callback_query(query.id)
-                        .text("✅ 开始下载")
-                        .await?;
-                }
-                Err(e) => {
-                    tracing::error!("Error processing music from callback: {}", e);
-                    bot.answer_callback_query(query.id)
-                        .text(format!("❌ 失败: {e}"))
-                        .await?;
-                }
+    if let Some(data) = query.data
+        && let Some((cmd, rest)) = data.split_once(' ')
+        && cmd == "music"
+        && let Ok(music_id) = rest.trim_start().parse::<u64>()
+        && let Some(MaybeInaccessibleMessage::Regular(msg)) = &query.message
+    {
+        match process_music(&bot, msg, &state, music_id).await {
+            Ok(()) => {
+                bot.answer_callback_query(query.id)
+                    .text("✅ 开始下载")
+                    .await?;
             }
-            return Ok(());
+            Err(e) => {
+                tracing::error!("Error processing music from callback: {}", e);
+                bot.answer_callback_query(query.id)
+                    .text(format!("❌ 失败: {e}"))
+                    .await?;
+            }
         }
+        return Ok(());
     }
 
     bot.answer_callback_query(query.id)
@@ -3205,8 +3200,7 @@ fn build_caption(
     let size_mb = (size_bytes as f64) / 1024.0 / 1024.0;
     // bitrate_bps may already be bps, convert to kbps with 2 decimals
     let kbps = (bitrate_bps as f64) / 1000.0;
-    let ext = file_ext.to_lowercase();
     format!(
-        "「{title}」- {artists}\n专辑: {album}\n#网易云音乐 #{ext} {size_mb:.2}MB {kbps:.2}kbps\nvia @{bot_username}",
+        "「{title}」- {artists}\n专辑: {album}\n#网易云音乐 #{file_ext} {size_mb:.2}MB {kbps:.2}kbps\nvia @{bot_username}",
     )
 }
