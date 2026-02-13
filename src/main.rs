@@ -44,35 +44,92 @@ struct Args {
     #[arg(short, long, default_value = "config.ini")]
     config: String,
 
-    /// Log level
-    #[arg(long, default_value = "info")]
-    log_level: String,
+    /// Override global log level (trace/debug/info/warn/error)
+    #[arg(long)]
+    log_level: Option<String>,
+}
+
+#[must_use]
+fn resolve_log_level_spec(
+    cli_log_level: Option<&str>,
+    env_log_level: Option<&str>,
+    config_log_level: &str,
+) -> String {
+    for (source, candidate) in [
+        ("--log-level", cli_log_level),
+        ("config.loglevel", Some(config_log_level)),
+        ("RUST_LOG", env_log_level),
+        ("default", Some("info")),
+    ] {
+        let Some(raw) = candidate else {
+            continue;
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if EnvFilter::try_new(trimmed).is_ok() {
+            return trimmed.to_owned();
+        }
+        if source != "default" {
+            eprintln!("Invalid {source} value '{trimmed}', trying next source");
+        }
+    }
+    "info".to_string()
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-
-    // Setup logging
-    let filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(&args.log_level))
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let config = Config::load(&args.config)?;
+    let env_log_level = std::env::var("RUST_LOG").ok();
+    let log_level_spec = resolve_log_level_spec(
+        args.log_level.as_deref(),
+        env_log_level.as_deref(),
+        &config.log_level,
+    );
 
     let subscriber = FmtSubscriber::builder()
-        .with_env_filter(filter)
+        .with_env_filter(EnvFilter::new(log_level_spec))
         .with_target(false)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)?;
 
     info!("Music163bot-Rust starting...");
-
-    // Load configuration
-    let config = Config::load(&args.config)?;
     info!("Configuration loaded from {}", args.config);
 
     // Start the bot
     bot::run(config).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_log_level_spec;
+
+    #[test]
+    fn resolve_log_level_prefers_cli() {
+        let resolved = resolve_log_level_spec(Some("warn"), Some("info"), "debug");
+        assert_eq!(resolved, "warn");
+    }
+
+    #[test]
+    fn resolve_log_level_falls_back_to_env() {
+        let resolved = resolve_log_level_spec(None, Some("error"), "");
+        assert_eq!(resolved, "error");
+    }
+
+    #[test]
+    fn resolve_log_level_prefers_config_over_env() {
+        let resolved = resolve_log_level_spec(None, Some("error"), "warn");
+        assert_eq!(resolved, "warn");
+    }
+
+    #[test]
+    fn resolve_log_level_skips_empty_values() {
+        let resolved = resolve_log_level_spec(Some("   "), Some(""), "warn");
+        assert_eq!(resolved, "warn");
+    }
 }
