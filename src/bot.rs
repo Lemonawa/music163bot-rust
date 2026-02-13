@@ -8,7 +8,7 @@ use anyhow::Context;
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures_util::{StreamExt, TryStreamExt};
-use sysinfo::System;
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{
@@ -104,9 +104,9 @@ struct SpeedSnapshot {
 #[derive(Debug, Clone, Copy, Default)]
 struct ResourceSnapshot {
     cpu_percent: f32,
-    used_memory_mb: u64,
-    total_memory_mb: u64,
-    available_memory_mb: u64,
+    system_used_memory_mb: u64,
+    system_total_memory_mb: u64,
+    bot_memory_mb: Option<u64>,
 }
 
 static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, ResourceSnapshot)>> =
@@ -114,11 +114,12 @@ static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, Resour
         let mut system = System::new();
         system.refresh_cpu_usage();
         system.refresh_memory();
+        let bot_memory_mb = sample_current_process_memory_mb(&mut system);
         let snapshot = ResourceSnapshot {
             cpu_percent: system.global_cpu_usage(),
-            used_memory_mb: system.used_memory() / (1024 * 1024),
-            total_memory_mb: system.total_memory() / (1024 * 1024),
-            available_memory_mb: system.available_memory() / (1024 * 1024),
+            system_used_memory_mb: system.used_memory() / (1024 * 1024),
+            system_total_memory_mb: system.total_memory() / (1024 * 1024),
+            bot_memory_mb,
         };
         std::sync::Mutex::new((system, Instant::now(), snapshot))
     });
@@ -388,15 +389,73 @@ fn sample_resource_snapshot() -> ResourceSnapshot {
     if last_refresh.elapsed() >= STATUS_RESOURCE_REFRESH_INTERVAL {
         system.refresh_cpu_usage();
         system.refresh_memory();
+        let bot_memory_mb = sample_current_process_memory_mb(system);
         *snapshot = ResourceSnapshot {
             cpu_percent: system.global_cpu_usage(),
-            used_memory_mb: system.used_memory() / (1024 * 1024),
-            total_memory_mb: system.total_memory() / (1024 * 1024),
-            available_memory_mb: system.available_memory() / (1024 * 1024),
+            system_used_memory_mb: system.used_memory() / (1024 * 1024),
+            system_total_memory_mb: system.total_memory() / (1024 * 1024),
+            bot_memory_mb,
         };
         *last_refresh = Instant::now();
     }
     *snapshot
+}
+
+fn sample_current_process_memory_mb(system: &mut System) -> Option<u64> {
+    let current_pid = get_current_pid().ok()?;
+    let pids = [current_pid];
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&pids),
+        false,
+        ProcessRefreshKind::nothing().with_memory(),
+    );
+    system
+        .process(current_pid)
+        .map(|process| process.memory() / (1024 * 1024))
+}
+
+fn format_bot_memory(bot_memory_mb: Option<u64>) -> String {
+    bot_memory_mb
+        .map(|mb| format!("{mb} MB"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn build_status_text(
+    total_count: i64,
+    user_count: i64,
+    chat_count: i64,
+    cache_snapshot: CacheSnapshot,
+    resource_snapshot: ResourceSnapshot,
+    uptime: &str,
+    download_line: &str,
+    upload_line: &str,
+) -> String {
+    format!(
+        "Status\n\n\
+Cache:\n\
+Total: {total_count}\n\
+User: {user_count}\n\
+Chat: {chat_count}\n\n\
+Runtime Cache:\n\
+Hits: {hits}\n\
+Misses: {misses}\n\
+Hit Rate: {hit_rate:.2}%\n\n\
+Resources:\n\
+CPU: {cpu:.1}%\n\
+System Memory: {system_used} / {system_total} MB\n\
+Bot Memory: {bot_memory}\n\
+Uptime: {uptime}\n\n\
+Transfer:\n\
+{download_line}\n\
+{upload_line}",
+        hits = cache_snapshot.hits,
+        misses = cache_snapshot.misses,
+        hit_rate = cache_snapshot.hit_rate_percent,
+        cpu = resource_snapshot.cpu_percent,
+        system_used = resource_snapshot.system_used_memory_mb,
+        system_total = resource_snapshot.system_total_memory_mb,
+        bot_memory = format_bot_memory(resource_snapshot.bot_memory_mb),
+    )
 }
 
 fn format_uptime(duration: std::time::Duration) -> String {
@@ -2674,6 +2733,68 @@ mod tests {
     }
 
     #[test]
+    fn parse_telegram_api_response_returns_error_when_http_200_ok_false() {
+        let body = r#"{"ok": false, "description": "chat not found"}"#;
+        let err = super::parse_telegram_api_response(body, reqwest::StatusCode::OK, "sendAudio")
+            .expect_err("ok=false should be treated as Telegram API error");
+        let err_msg = err.to_string();
+
+        assert!(err_msg.contains("chat not found"));
+        assert!(err_msg.contains("HTTP 200"));
+    }
+
+    #[test]
+    fn parse_telegram_api_response_returns_error_when_http_500_for_any_ok_flag() {
+        let cases = [
+            (r#"{"ok": true, "result": {}}"#, "unknown error"),
+            (
+                r#"{"ok": false, "description": "server failed"}"#,
+                "server failed",
+            ),
+        ];
+
+        for (body, expected_desc) in cases {
+            let err = super::parse_telegram_api_response(
+                body,
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                "sendAudio",
+            )
+            .expect_err("non-2xx status should always be treated as error");
+            let err_msg = err.to_string();
+
+            assert!(err_msg.contains(expected_desc));
+            assert!(err_msg.contains("HTTP 500"));
+        }
+    }
+
+    #[test]
+    fn parse_telegram_api_response_returns_parse_error_for_non_json_body() {
+        let err = super::parse_telegram_api_response(
+            "<html>502 bad gateway</html>",
+            reqwest::StatusCode::OK,
+            "sendAudio",
+        )
+        .expect_err("non-JSON body should fail response parsing");
+        let err_msg = err.to_string();
+
+        assert!(err_msg.contains("Failed to parse upload response"));
+    }
+
+    #[test]
+    fn parse_telegram_api_response_uses_unknown_error_when_description_missing() {
+        let err = super::parse_telegram_api_response(
+            r#"{"ok": false}"#,
+            reqwest::StatusCode::OK,
+            "sendAudio",
+        )
+        .expect_err("missing description should still return a Telegram API error");
+        let err_msg = err.to_string();
+
+        assert!(err_msg.contains("unknown error"));
+        assert!(err_msg.contains("HTTP 200"));
+    }
+
+    #[test]
     fn extract_file_id_reads_audio_field() {
         let payload = serde_json::json!({
             "ok": true,
@@ -2851,6 +2972,34 @@ mod tests {
     fn speed_line_reports_cache_hit_when_no_samples() {
         let line = super::format_speed_line("Download", None);
         assert!(line.contains("no non-cache samples"));
+    }
+
+    #[test]
+    fn status_text_uses_section_layout_and_split_memory_fields() {
+        let cache_snapshot = super::CacheSnapshot {
+            hits: 9,
+            misses: 3,
+            hit_rate_percent: 75.0,
+        };
+        let resource_snapshot = super::ResourceSnapshot {
+            cpu_percent: 12.5,
+            system_used_memory_mb: 512,
+            system_total_memory_mb: 1024,
+            bot_memory_mb: Some(12),
+        };
+        let text = super::build_status_text(
+            100,
+            20,
+            8,
+            cache_snapshot,
+            resource_snapshot,
+            "00:10:00",
+            "Download speed: 6.00 MB/s",
+            "Upload speed: 2.00 MB/s",
+        );
+        assert!(text.contains("Cache:\nTotal: 100\nUser: 20\nChat: 8"));
+        assert!(text.contains("System Memory: 512 / 1024 MB"));
+        assert!(text.contains("Bot Memory: 12 MB"));
     }
 }
 
@@ -3141,27 +3290,15 @@ async fn handle_status_command(
     let uptime = format_uptime(state.runtime_metrics.uptime());
     let download_line = format_speed_line("Download", download_speed);
     let upload_line = format_speed_line("Upload", upload_speed);
-
-    let status_text = format!(
-        "Status\n\n\
-Cache total: {total_count}\n\
-Cache user: {user_count}\n\
-Cache chat: {chat_count}\n\n\
-Runtime cache hits: {hits}\n\
-Runtime cache misses: {misses}\n\
-Runtime hit rate: {hit_rate:.2}%\n\n\
-CPU usage: {cpu:.1}%\n\
-Memory: {used} / {total} MB (available {available} MB)\n\
-Uptime: {uptime}\n\n\
-{download_line}\n\
-{upload_line}",
-        hits = cache_snapshot.hits,
-        misses = cache_snapshot.misses,
-        hit_rate = cache_snapshot.hit_rate_percent,
-        cpu = resource_snapshot.cpu_percent,
-        used = resource_snapshot.used_memory_mb,
-        total = resource_snapshot.total_memory_mb,
-        available = resource_snapshot.available_memory_mb
+    let status_text = build_status_text(
+        total_count,
+        user_count,
+        chat_count,
+        cache_snapshot,
+        resource_snapshot,
+        &uptime,
+        &download_line,
+        &upload_line,
     );
 
     bot.send_message(msg.chat.id, status_text)
