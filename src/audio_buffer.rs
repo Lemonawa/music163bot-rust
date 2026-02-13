@@ -491,14 +491,21 @@ impl AudioBuffer {
 
         Self::build_flac_tag_updates(&mut tag, song_detail, artwork_data);
 
-        // 5. Build new data with estimated pre-allocation
+        // 5. Encode metadata only.
         let artwork_overhead = artwork_data.map_or(0, <[u8]>::len);
-        let estimated_capacity = audio_data.len() + artwork_overhead + 4096; // metadata overhead estimate
-        let mut new_data = Vec::with_capacity(estimated_capacity);
-        tag.write_to(&mut new_data)
+        let mut metadata_bytes = Vec::with_capacity(artwork_overhead + 4096); // metadata overhead estimate
+        tag.write_to(&mut metadata_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to write FLAC metadata to memory: {e}"))?;
-        new_data.extend_from_slice(audio_data);
-        *data = new_data;
+
+        // 6. Keep audio in-place and prepend metadata without building a full second audio copy.
+        let audio_len = audio_data.len();
+        data.copy_within(audio_start.., 0);
+        data.truncate(audio_len);
+
+        let metadata_len = metadata_bytes.len();
+        data.resize(audio_len + metadata_len, 0);
+        data.copy_within(0..audio_len, metadata_len);
+        data[..metadata_len].copy_from_slice(&metadata_bytes);
 
         Ok(())
     }

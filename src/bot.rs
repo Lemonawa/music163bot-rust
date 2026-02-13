@@ -1,10 +1,14 @@
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::time::Instant;
 
 use anyhow::Context;
 use bytes::Bytes;
+use dashmap::DashMap;
 use futures_util::{StreamExt, TryStreamExt};
+use sysinfo::System;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{
@@ -38,6 +42,7 @@ pub struct BotState {
     pub upload_client_state: Arc<Mutex<UploadClientState>>,
     pub maintenance_counters: MaintenanceCounters,
     pub upload_counters: UploadCounters,
+    pub runtime_metrics: RuntimeMetrics,
     pub is_official_api: bool,
 }
 
@@ -55,6 +60,69 @@ pub struct UploadCounters {
     pub peak_in_flight: AtomicU32,
 }
 
+const SPEED_SAMPLE_WINDOW: usize = 20;
+const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Debug)]
+pub struct RuntimeMetrics {
+    started_at: Instant,
+    cache_hits: AtomicU64,
+    cache_misses: AtomicU64,
+    speed_metrics: std::sync::Mutex<SpeedMetrics>,
+}
+
+#[derive(Debug, Default)]
+struct SpeedMetrics {
+    download: DirectionSpeedMetrics,
+    upload: DirectionSpeedMetrics,
+}
+
+#[derive(Debug, Default)]
+struct DirectionSpeedMetrics {
+    recent_mbps: VecDeque<f64>,
+    total_bytes: u128,
+    total_nanos: u128,
+    samples: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CacheSnapshot {
+    hits: u64,
+    misses: u64,
+    hit_rate_percent: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpeedSnapshot {
+    last_mbps: f64,
+    avg_mbps: f64,
+    p95_mbps: f64,
+    samples: u64,
+    recent_samples: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ResourceSnapshot {
+    cpu_percent: f32,
+    used_memory_mb: u64,
+    total_memory_mb: u64,
+    available_memory_mb: u64,
+}
+
+static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, ResourceSnapshot)>> =
+    LazyLock::new(|| {
+        let mut system = System::new();
+        system.refresh_cpu_usage();
+        system.refresh_memory();
+        let snapshot = ResourceSnapshot {
+            cpu_percent: system.global_cpu_usage(),
+            used_memory_mb: system.used_memory() / (1024 * 1024),
+            total_memory_mb: system.total_memory() / (1024 * 1024),
+            available_memory_mb: system.available_memory() / (1024 * 1024),
+        };
+        std::sync::Mutex::new((system, Instant::now(), snapshot))
+    });
+
 #[derive(Debug)]
 pub struct MaintenanceCounters {
     pub memory_release_requests: AtomicU32,
@@ -69,7 +137,7 @@ pub enum MaintenanceSignal {
 
 #[derive(Debug, Default)]
 struct InflightDownloads {
-    entries: std::sync::Mutex<HashMap<u64, Arc<InflightEntry>>>,
+    entries: DashMap<u64, Arc<InflightEntry>>,
 }
 
 #[derive(Debug)]
@@ -92,28 +160,23 @@ struct InflightLeaderGuard {
 
 impl InflightDownloads {
     fn begin(self: &Arc<Self>, music_id: u64) -> InflightClaim {
-        let mut entries = self.lock_entries();
-        if let Some(existing) = entries.get(&music_id) {
-            return InflightClaim::Follower(Arc::clone(existing));
+        match self.entries.entry(music_id) {
+            dashmap::mapref::entry::Entry::Occupied(existing) => {
+                InflightClaim::Follower(Arc::clone(existing.get()))
+            }
+            dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                vacant.insert(Arc::new(InflightEntry::new()));
+                InflightClaim::Leader(InflightLeaderGuard {
+                    music_id,
+                    inflight: Arc::clone(self),
+                })
+            }
         }
-
-        entries.insert(music_id, Arc::new(InflightEntry::new()));
-        InflightClaim::Leader(InflightLeaderGuard {
-            music_id,
-            inflight: Arc::clone(self),
-        })
     }
 
     fn finish(&self, music_id: u64) {
-        if let Some(entry) = self.lock_entries().remove(&music_id) {
+        if let Some((_, entry)) = self.entries.remove(&music_id) {
             entry.finish();
-        }
-    }
-
-    fn lock_entries(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<InflightEntry>>> {
-        match self.entries.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
         }
     }
 }
@@ -192,6 +255,170 @@ impl MaintenanceCounters {
         }
         let next = counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         next.is_multiple_of(interval)
+    }
+}
+
+impl RuntimeMetrics {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            speed_metrics: std::sync::Mutex::new(SpeedMetrics::default()),
+        }
+    }
+
+    fn record_cache_hit(&self) {
+        self.cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_cache_miss(&self) {
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn cache_snapshot(&self) -> CacheSnapshot {
+        let hits = self.cache_hits.load(Ordering::Relaxed);
+        let misses = self.cache_misses.load(Ordering::Relaxed);
+        let total = hits.saturating_add(misses);
+        let hit_rate_percent = if total == 0 {
+            0.0
+        } else {
+            hits as f64 * 100.0 / total as f64
+        };
+
+        CacheSnapshot {
+            hits,
+            misses,
+            hit_rate_percent,
+        }
+    }
+
+    fn record_download_speed(&self, bytes: u64, duration: std::time::Duration) {
+        self.record_speed(Direction::Download, bytes, duration);
+    }
+
+    fn record_upload_speed(&self, bytes: u64, duration: std::time::Duration) {
+        self.record_speed(Direction::Upload, bytes, duration);
+    }
+
+    fn record_speed(&self, direction: Direction, bytes: u64, duration: std::time::Duration) {
+        let mut guard = match self.speed_metrics.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match direction {
+            Direction::Download => guard.download.record(bytes, duration),
+            Direction::Upload => guard.upload.record(bytes, duration),
+        }
+    }
+
+    fn speed_snapshots(&self) -> (Option<SpeedSnapshot>, Option<SpeedSnapshot>) {
+        let guard = match self.speed_metrics.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        (guard.download.snapshot(), guard.upload.snapshot())
+    }
+
+    fn uptime(&self) -> std::time::Duration {
+        self.started_at.elapsed()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Download,
+    Upload,
+}
+
+impl DirectionSpeedMetrics {
+    fn record(&mut self, bytes: u64, duration: std::time::Duration) {
+        let duration_nanos = duration.as_nanos();
+        if bytes == 0 || duration_nanos == 0 {
+            return;
+        }
+
+        let mbps = throughput_mbps(bytes, duration);
+        if !mbps.is_finite() || mbps <= 0.0 {
+            return;
+        }
+
+        self.total_bytes = self.total_bytes.saturating_add(u128::from(bytes));
+        self.total_nanos = self.total_nanos.saturating_add(duration_nanos);
+        self.samples = self.samples.saturating_add(1);
+        self.recent_mbps.push_back(mbps);
+        if self.recent_mbps.len() > SPEED_SAMPLE_WINDOW {
+            self.recent_mbps.pop_front();
+        }
+    }
+
+    fn snapshot(&self) -> Option<SpeedSnapshot> {
+        if self.samples == 0 || self.total_nanos == 0 || self.recent_mbps.is_empty() {
+            return None;
+        }
+
+        let last_mbps = self.recent_mbps.back().copied()?;
+        let avg_mbps =
+            (self.total_bytes as f64 / (1024.0 * 1024.0)) / (self.total_nanos as f64 / 1e9);
+        let p95_mbps = percentile_95(&self.recent_mbps);
+        Some(SpeedSnapshot {
+            last_mbps,
+            avg_mbps,
+            p95_mbps,
+            samples: self.samples,
+            recent_samples: self.recent_mbps.len(),
+        })
+    }
+}
+
+fn percentile_95(samples: &VecDeque<f64>) -> f64 {
+    let mut values: Vec<f64> = samples.iter().copied().collect();
+    values.sort_by(f64::total_cmp);
+    let len = values.len();
+    let idx = ((len * 95).div_ceil(100)).saturating_sub(1);
+    values[idx.min(len.saturating_sub(1))]
+}
+
+fn sample_resource_snapshot() -> ResourceSnapshot {
+    let mut guard = match STATUS_RESOURCE_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let (system, last_refresh, snapshot) = &mut *guard;
+    if last_refresh.elapsed() >= STATUS_RESOURCE_REFRESH_INTERVAL {
+        system.refresh_cpu_usage();
+        system.refresh_memory();
+        *snapshot = ResourceSnapshot {
+            cpu_percent: system.global_cpu_usage(),
+            used_memory_mb: system.used_memory() / (1024 * 1024),
+            total_memory_mb: system.total_memory() / (1024 * 1024),
+            available_memory_mb: system.available_memory() / (1024 * 1024),
+        };
+        *last_refresh = Instant::now();
+    }
+    *snapshot
+}
+
+fn format_uptime(duration: std::time::Duration) -> String {
+    let secs = duration.as_secs();
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) -> String {
+    if let Some(snapshot) = snapshot {
+        format!(
+            "{label} speed: last {last:.2} MB/s | avg {avg:.2} MB/s | p95 {p95:.2} MB/s | samples {total} (window {window})",
+            last = snapshot.last_mbps,
+            avg = snapshot.avg_mbps,
+            p95 = snapshot.p95_mbps,
+            total = snapshot.samples,
+            window = snapshot.recent_samples
+        )
+    } else {
+        format!("{label} speed: no non-cache samples yet")
     }
 }
 
@@ -360,6 +587,7 @@ pub async fn run(config: Config) -> Result<()> {
         })),
         maintenance_counters: MaintenanceCounters::new(),
         upload_counters: UploadCounters::default(),
+        runtime_metrics: RuntimeMetrics::new(),
         is_official_api,
     });
 
@@ -693,6 +921,7 @@ async fn process_music(
     music_id: u64,
 ) -> ResponseResult<()> {
     if try_send_cached_song(bot, msg, state, music_id).await? {
+        state.runtime_metrics.record_cache_hit();
         return Ok(());
     }
 
@@ -704,13 +933,17 @@ async fn process_music(
         }
 
         if try_send_cached_song(bot, msg, state, music_id).await? {
+            state.runtime_metrics.record_cache_hit();
             return Ok(());
         }
     };
 
     if try_send_cached_song(bot, msg, state, music_id).await? {
+        state.runtime_metrics.record_cache_hit();
         return Ok(());
     }
+
+    state.runtime_metrics.record_cache_miss();
 
     // Send status message and fetch song detail+URL in parallel
     let status_init_start = std::time::Instant::now();
@@ -796,7 +1029,7 @@ async fn download_and_send_music(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
-    song_detail: crate::music_api::SongDetail,
+    song_detail: Arc<crate::music_api::SongDetail>,
     song_url: &crate::music_api::SongUrl,
     status_msg: &Message,
     pre_upload_path_start: std::time::Instant,
@@ -839,7 +1072,7 @@ async fn download_and_send_music(
                     tracing::warn!("Album art URL is empty for music_id {}", song_id);
                     (None, None)
                 } else {
-                    tracing::info!(
+                    tracing::debug!(
                         "Starting album art download for music_id {} (mode: {:?}), pic_url: {}",
                         song_id,
                         cover_mode,
@@ -849,7 +1082,7 @@ async fn download_and_send_music(
                     if download_cover {
                         match state.music_api.download_album_art_data(pic_url).await {
                             Ok(data) => {
-                                tracing::info!(
+                                tracing::debug!(
                                     "Downloaded 320px album art for music_id {} ({} bytes)",
                                     song_id,
                                     data.len()
@@ -948,6 +1181,9 @@ async fn download_and_send_music(
         audio_buffer.finish().await?;
         let download_duration = download_start.elapsed();
         let download_mbps = throughput_mbps(downloaded, download_duration);
+        state
+            .runtime_metrics
+            .record_download_speed(downloaded, download_duration);
         tracing::info!(
             "Audio download completed in {:.2}s ({:.2} MB/s)",
             download_duration.as_secs_f64(),
@@ -968,7 +1204,7 @@ async fn download_and_send_music(
     let (mut audio_buffer, downloaded) = downloaded_result?;
     let _upload_permit = upload_permit_result?;
 
-    tracing::info!(
+    tracing::debug!(
         "Audio download completed: {} bytes (mode: {})",
         downloaded,
         if audio_buffer.is_memory() {
@@ -995,7 +1231,7 @@ async fn download_and_send_music(
     } else {
         "Skipped"
     };
-    tracing::info!(
+    tracing::debug!(
         "Cover download result - Cover: {}, Thumbnail: {}",
         cover_status,
         thumbnail_status
@@ -1024,12 +1260,12 @@ async fn download_and_send_music(
         return Ok(());
     }
 
-    tracing::info!("File validation passed: {} bytes", downloaded);
+    tracing::debug!("File validation passed: {} bytes", downloaded);
 
     // 封面处理：使用320x320图片嵌入文件，缩略图用于Telegram显示
     // Overlap tag processing with upload client/permit acquisition — they are independent.
     let tags_start = std::time::Instant::now();
-    tracing::info!("Processing tags for {} format", file_ext);
+    tracing::debug!("Processing tags for {} format", file_ext);
     let (tag_result, upload_client_result) = tokio::join!(
         apply_tags_in_blocking(
             audio_buffer,
@@ -1061,7 +1297,7 @@ async fn download_and_send_music(
         song_url.br as i64
     };
 
-    tracing::info!(
+    tracing::debug!(
         "Bitrate - API: {} bps, Calculated from file: {} bps (duration: {}s)",
         song_url.br,
         actual_bitrate_bps,
@@ -1097,7 +1333,7 @@ async fn download_and_send_music(
     };
 
     // Log final thumbnail status
-    tracing::info!("Final thumbnail status: {}", thumbnail_status);
+    tracing::debug!("Final thumbnail status: {}", thumbnail_status);
 
     // Send the audio file
     let caption = build_caption(
@@ -1124,7 +1360,7 @@ async fn download_and_send_music(
         return Err(anyhow::anyhow!("Audio file is empty after processing").into());
     }
 
-    tracing::info!(
+    tracing::debug!(
         "Prepared audio: {} ({:.2} MB, mode: {})",
         audio_buffer.filename(),
         file_size as f64 / 1024.0 / 1024.0,
@@ -1138,7 +1374,7 @@ async fn download_and_send_music(
     log_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_start.elapsed());
 
     // Send audio file with enhanced error handling and proper MIME type
-    tracing::info!(
+    tracing::debug!(
         "Sending audio file: {} ({:.2} MB)",
         audio_buffer.filename(),
         file_size as f64 / 1024.0 / 1024.0
@@ -1147,7 +1383,7 @@ async fn download_and_send_music(
     // Simple approach: send as audio only
     let is_flac = file_ext == "flac";
 
-    tracing::info!("File format: {}", if is_flac { "FLAC" } else { "MP3" });
+    tracing::debug!("File format: {}", if is_flac { "FLAC" } else { "MP3" });
 
     // Serialize reply_markup once for reuse across attempts
     let reply_markup_json = serde_json::to_string(&keyboard).ok();
@@ -1196,6 +1432,9 @@ async fn download_and_send_music(
 
     if let Ok(ref resp_json) = upload_result {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
+        state
+            .runtime_metrics
+            .record_upload_speed(file_size, upload_duration);
         tracing::info!(
             "Upload completed in {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
             upload_duration.as_secs_f64(),
@@ -1261,7 +1500,7 @@ async fn download_and_send_music(
 async fn apply_tags_in_blocking(
     mut audio_buffer: AudioBuffer,
     file_ext: &str,
-    song_detail: crate::music_api::SongDetail,
+    song_detail: Arc<crate::music_api::SongDetail>,
     artwork_data: Option<Bytes>,
     embed_cover: bool,
 ) -> Result<AudioBuffer> {
@@ -1276,22 +1515,22 @@ async fn apply_tags_in_blocking(
         match file_ext.as_str() {
             "mp3" => {
                 let cover_label = if embed_cover { "320" } else { "none" };
-                tracing::info!("Adding ID3 tags to MP3 (cover: {})", cover_label);
+                tracing::debug!("Adding ID3 tags to MP3 (cover: {})", cover_label);
                 match audio_buffer.add_id3_tags(&song_detail, embed_artwork) {
-                    Ok(()) => tracing::info!("MP3 tags added successfully"),
+                    Ok(()) => tracing::debug!("MP3 tags added successfully"),
                     Err(e) => tracing::warn!("Failed to add MP3 tags: {}", e),
                 }
             }
             "flac" => {
                 let cover_label = if embed_cover { "320" } else { "none" };
-                tracing::info!("Adding FLAC metadata (cover: {})", cover_label);
+                tracing::debug!("Adding FLAC metadata (cover: {})", cover_label);
                 match audio_buffer.add_flac_metadata(&song_detail, embed_artwork) {
-                    Ok(()) => tracing::info!("FLAC metadata added successfully"),
+                    Ok(()) => tracing::debug!("FLAC metadata added successfully"),
                     Err(e) => tracing::warn!("Failed to add FLAC metadata: {}", e),
                 }
             }
             _ => {
-                tracing::info!("Unknown format {}, skipping tag embedding", file_ext);
+                tracing::debug!("Unknown format {}, skipping tag embedding", file_ext);
             }
         }
 
@@ -1486,8 +1725,14 @@ async fn maintenance_worker(
                 }
             }
             MaintenanceSignal::ReleaseMemory => {
-                crate::memory::force_memory_release();
-                crate::memory::log_memory_stats();
+                if let Err(e) = tokio::task::spawn_blocking(|| {
+                    crate::memory::force_memory_release();
+                    crate::memory::log_memory_stats();
+                })
+                .await
+                {
+                    tracing::warn!("Memory release background task failed: {}", e);
+                }
             }
         }
     }
@@ -1504,7 +1749,7 @@ const PERF_STAGE_SELECT_URL: &str = "select_url";
 const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
 
 fn log_perf(label: &str, duration: std::time::Duration) {
-    tracing::info!("[{label}] {}ms", duration.as_millis());
+    tracing::debug!("[{label}] {}ms", duration.as_millis());
 }
 
 #[cfg(test)]
@@ -1572,53 +1817,29 @@ struct RawDocumentParams<'a> {
     reply_markup_json: Option<String>,
 }
 
-/// Upload a document via raw reqwest multipart with pre-computed Content-Length
-/// and 256 KiB streaming chunks — bypasses teloxide's 8 KiB FramedRead + chunked encoding.
-async fn raw_send_document(
+/// Upload an in-memory document via raw reqwest multipart.
+async fn raw_send_document_bytes(
     client: &reqwest::Client,
     api_base_url: &str,
-    config: &Config,
-    is_official_api: bool,
-    path: &std::path::Path,
-    file_size: u64,
+    filename: &str,
+    content: Bytes,
     params: &RawDocumentParams<'_>,
 ) -> Result<serde_json::Value> {
-    let filename = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("document")
-        .to_owned();
-    let mime_type = mime_for_filename(&filename);
-
+    let len = content.len() as u64;
     let mut form = reqwest::multipart::Form::new().text("chat_id", params.chat_id.to_string());
 
     if let Some(caption) = params.caption {
         form = form.text("caption", caption.to_owned());
     }
 
-    let document_target = select_local_upload_target(config, is_official_api, path).await;
-    match document_target {
-        UploadFileTarget::LocalUri(uri) => {
-            form = form.text("document", uri);
-        }
-        UploadFileTarget::Multipart => {
-            let file = tokio::fs::File::open(path).await.map_err(|e| {
-                BotError::Other(anyhow::anyhow!("Failed to open document for upload: {e}"))
-            })?;
-            let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
-            let body = reqwest::Body::wrap_stream(stream);
-            let file_part = reqwest::multipart::Part::stream_with_length(body, file_size)
-                .file_name(filename)
-                .mime_str(mime_type)?;
-            form = form.part("document", file_part);
-        }
-    }
+    let file_part = reqwest::multipart::Part::stream_with_length(content, len)
+        .file_name(filename.to_owned())
+        .mime_str("text/plain; charset=utf-8")?;
+    form = form.part("document", file_part);
 
-    // reply_parameters as JSON
     let reply_params = format!(r#"{{"message_id":{}}}"#, params.reply_to_message_id);
     form = form.text("reply_parameters", reply_params);
 
-    // reply_markup as JSON
     if let Some(ref markup_json) = params.reply_markup_json {
         form = form.text("reply_markup", markup_json.clone());
     }
@@ -2539,7 +2760,7 @@ mod tests {
             al: None,
         };
 
-        let tagged = super::apply_tags_in_blocking(buffer, "bin", detail, None, false)
+        let tagged = super::apply_tags_in_blocking(buffer, "bin", Arc::new(detail), None, false)
             .await
             .expect("unknown format should keep buffer unchanged");
 
@@ -2567,7 +2788,7 @@ mod tests {
             }),
         };
 
-        let tagged = super::apply_tags_in_blocking(buffer, "mp3", detail, None, false)
+        let tagged = super::apply_tags_in_blocking(buffer, "mp3", Arc::new(detail), None, false)
             .await
             .expect("mp3 tagging should succeed");
         let data = tagged.get_data().await.expect("read tagged data");
@@ -2595,6 +2816,41 @@ mod tests {
         assert_eq!(super::parse_start_music_id(Some("  456  ")), Some(456));
         assert_eq!(super::parse_start_music_id(Some("invalid")), None);
         assert_eq!(super::parse_start_music_id(None), None);
+    }
+
+    #[test]
+    fn runtime_metrics_cache_hit_rate_tracks_counts() {
+        let metrics = super::RuntimeMetrics::new();
+        metrics.record_cache_hit();
+        metrics.record_cache_hit();
+        metrics.record_cache_miss();
+
+        let snapshot = metrics.cache_snapshot();
+        assert_eq!(snapshot.hits, 2);
+        assert_eq!(snapshot.misses, 1);
+        assert!((snapshot.hit_rate_percent - 66.67).abs() < 0.1);
+    }
+
+    #[test]
+    fn runtime_metrics_speed_window_keeps_recent_samples() {
+        let metrics = super::RuntimeMetrics::new();
+        for mb in 1..=25u64 {
+            metrics.record_download_speed(mb * 1024 * 1024, Duration::from_secs(1));
+        }
+
+        let (download, upload) = metrics.speed_snapshots();
+        let download = download.expect("download snapshot should exist");
+        assert!(upload.is_none(), "upload should have no samples");
+        assert_eq!(download.samples, 25);
+        assert_eq!(download.recent_samples, 20);
+        assert!((download.last_mbps - 25.0).abs() < 0.01);
+        assert!(download.p95_mbps >= 24.0);
+    }
+
+    #[test]
+    fn speed_line_reports_cache_hit_when_no_samples() {
+        let line = super::format_speed_line("Download", None);
+        assert!(line.contains("no non-cache samples"));
     }
 }
 
@@ -2799,15 +3055,7 @@ async fn handle_lyric_command(
 
             let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
             let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
-            let lrc_path = std::path::PathBuf::from(&state.config.cache_dir).join(&lrc_filename);
-
-            if let Err(e) = tokio::fs::write(&lrc_path, &lyric).await {
-                bot.edit_message_text(msg.chat.id, status_msg.id, format!("写入歌词文件失败: {e}"))
-                    .await?;
-                return Ok(());
-            }
-
-            let file_size = lyric.len() as u64;
+            let lyric_bytes = Bytes::from(lyric.into_bytes());
 
             let (client_result, permit_result) = join_futures(
                 acquire_upload_client(state),
@@ -2818,7 +3066,6 @@ async fn handle_lyric_command(
             let (_upload_bot, raw_client, api_base_url) = match client_result {
                 Ok(bundle) => bundle,
                 Err(e) => {
-                    tokio::fs::remove_file(&lrc_path).await.ok();
                     bot.edit_message_text(
                         msg.chat.id,
                         status_msg.id,
@@ -2831,7 +3078,6 @@ async fn handle_lyric_command(
             let _upload_permit = match permit_result {
                 Ok(permit) => permit,
                 Err(e) => {
-                    tokio::fs::remove_file(&lrc_path).await.ok();
                     bot.edit_message_text(
                         msg.chat.id,
                         status_msg.id,
@@ -2848,18 +3094,14 @@ async fn handle_lyric_command(
                 reply_markup_json: None,
             };
 
-            let upload_result = raw_send_document(
+            let upload_result = raw_send_document_bytes(
                 &raw_client,
                 &api_base_url,
-                &state.config,
-                state.is_official_api,
-                &lrc_path,
-                file_size,
+                &lrc_filename,
+                lyric_bytes,
                 &params,
             )
             .await;
-
-            tokio::fs::remove_file(&lrc_path).await.ok();
 
             match upload_result {
                 Ok(_) => {
@@ -2893,22 +3135,36 @@ async fn handle_status_command(
         .count_status_stats(user_id, chat_id)
         .await
         .unwrap_or((0, 0, 0));
+    let cache_snapshot = state.runtime_metrics.cache_snapshot();
+    let resource_snapshot = sample_resource_snapshot();
+    let (download_speed, upload_speed) = state.runtime_metrics.speed_snapshots();
+    let uptime = format_uptime(state.runtime_metrics.uptime());
+    let download_line = format_speed_line("Download", download_speed);
+    let upload_line = format_speed_line("Upload", upload_speed);
 
     let status_text = format!(
-        r"📊 *统计信息*
-
-🎵 数据库中总缓存歌曲数量: {total_count}
-👤 当前用户缓存歌曲数量: {user_count}
-💬 当前对话缓存歌曲数量: {chat_count}
-
-🤖 Bot 运行状态: 正常
-🦀 语言: Rust
-⚡ 框架: Teloxide
-"
+        "Status\n\n\
+Cache total: {total_count}\n\
+Cache user: {user_count}\n\
+Cache chat: {chat_count}\n\n\
+Runtime cache hits: {hits}\n\
+Runtime cache misses: {misses}\n\
+Runtime hit rate: {hit_rate:.2}%\n\n\
+CPU usage: {cpu:.1}%\n\
+Memory: {used} / {total} MB (available {available} MB)\n\
+Uptime: {uptime}\n\n\
+{download_line}\n\
+{upload_line}",
+        hits = cache_snapshot.hits,
+        misses = cache_snapshot.misses,
+        hit_rate = cache_snapshot.hit_rate_percent,
+        cpu = resource_snapshot.cpu_percent,
+        used = resource_snapshot.used_memory_mb,
+        total = resource_snapshot.total_memory_mb,
+        available = resource_snapshot.available_memory_mb
     );
 
     bot.send_message(msg.chat.id, status_text)
-        .parse_mode(ParseMode::MarkdownV2)
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 

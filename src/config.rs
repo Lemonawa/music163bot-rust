@@ -243,7 +243,8 @@ impl Default for Config {
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
             memory_max_file_mb: 100,
-            max_concurrent_downloads: 3, // 从 10 减少到 3，减少内存峰值
+            // Balanced default: slightly higher throughput than 3 with moderate memory growth.
+            max_concurrent_downloads: 4,
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,

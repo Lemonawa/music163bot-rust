@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Synthetic performance comparison for v1.1.16 changes.
+"""Synthetic performance comparison for v1.1.17 optimizations.
 
-This script benchmarks three areas with local, reproducible workloads:
-1) /status query path (old 3-query strategy vs optimized single-query strategy)
-2) First-download latency model (old double-cover fetch vs optimized single-cover fetch)
-3) Peak memory model (old buffers vs optimized buffers)
-
-It outputs machine-readable JSON and a markdown report.
+This script benchmarks reproducible local workload models for:
+1) /status SQL path (3 queries vs 1 subquery statement)
+2) /status render path (always-refresh resource sampling vs cached sampling + concise text)
+3) first-download latency (audio + cover + cover vs audio + cover)
+4) lyric upload path (temp-file roundtrip vs in-memory bytes upload)
+5) peak memory model for download flow
+6) singleflight fanout collapse
+7) API cache hit model
+8) shared API cache object model (clone-heavy cache values vs shared objects)
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import gc
 import json
 import os
@@ -44,7 +48,26 @@ class StatusBench:
 
 
 @dataclass
+class StatusRenderBench:
+    rounds: int
+    sample_cost_ms: float
+    refresh_interval_ms: int
+    before: Stats
+    after: Stats
+    speedup_x: float
+
+
+@dataclass
 class DownloadBench:
+    before: Stats
+    after: Stats
+    speedup_x: float
+
+
+@dataclass
+class LyricUploadBench:
+    rounds: int
+    lyric_size_kb: int
     before: Stats
     after: Stats
     speedup_x: float
@@ -77,12 +100,61 @@ class ApiCacheBench:
 
 
 @dataclass
+class SharedCacheBench:
+    rounds: int
+    payload_kb: int
+    before: Stats
+    after: Stats
+    speedup_x: float
+
+
+@dataclass
 class Report:
     status: StatusBench
+    status_render: StatusRenderBench
     first_download: DownloadBench
+    lyric_upload: LyricUploadBench
     peak_memory: MemoryBench
     singleflight: SingleflightBench
     api_cache: ApiCacheBench
+    shared_api_cache: SharedCacheBench
+
+
+@dataclass
+class ResourceSnapshot:
+    cpu_percent: float
+    used_memory_mb: int
+    total_memory_mb: int
+    available_memory_mb: int
+
+
+class SyntheticResourceSampler:
+    def __init__(self, refresh_interval_ms: int, sample_cost_ms: float):
+        self._refresh_interval_sec = max(refresh_interval_ms, 0) / 1000.0
+        self._sample_cost_sec = max(sample_cost_ms, 0.0) / 1000.0
+        self._last_refresh = -1e9
+        self._snapshot = ResourceSnapshot(
+            cpu_percent=0.0,
+            used_memory_mb=0,
+            total_memory_mb=0,
+            available_memory_mb=0,
+        )
+
+    def snapshot(self, now: float, *, force_refresh: bool) -> ResourceSnapshot:
+        should_refresh = force_refresh or (
+            now - self._last_refresh >= self._refresh_interval_sec
+        )
+        if should_refresh:
+            if self._sample_cost_sec > 0:
+                time.sleep(self._sample_cost_sec)
+            self._snapshot = ResourceSnapshot(
+                cpu_percent=31.2,
+                used_memory_mb=1220,
+                total_memory_mb=8192,
+                available_memory_mb=6740,
+            )
+            self._last_refresh = now
+        return self._snapshot
 
 
 class SilentLatencyHandler(SimpleHTTPRequestHandler):
@@ -98,6 +170,10 @@ class SilentLatencyHandler(SimpleHTTPRequestHandler):
         _ = (format, args)
 
 
+def nonzero_rounds(rounds: int) -> int:
+    return max(rounds, 1)
+
+
 def percentile(values: list[float], ratio: float) -> float:
     if not values:
         return 0.0
@@ -107,6 +183,8 @@ def percentile(values: list[float], ratio: float) -> float:
 
 
 def to_stats(samples_ms: list[float]) -> Stats:
+    if not samples_ms:
+        return Stats(first_ms=0.0, mean_ms=0.0, p95_ms=0.0)
     return Stats(
         first_ms=samples_ms[0],
         mean_ms=mean(samples_ms),
@@ -116,7 +194,7 @@ def to_stats(samples_ms: list[float]) -> Stats:
 
 def time_loop(rounds: int, fn: Callable[[], None]) -> list[float]:
     samples: list[float] = []
-    for _ in range(rounds):
+    for _ in range(nonzero_rounds(rounds)):
         start = time.perf_counter()
         fn()
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -136,7 +214,7 @@ def bench_status(rows: int, rounds: int, roundtrip_overhead_us: int) -> StatusBe
         )
         """
     )
-    data = [(idx + 1, (idx % 500) + 1, (idx % 80) + 1) for idx in range(rows)]
+    data = [(idx + 1, (idx % 500) + 1, (idx % 80) + 1) for idx in range(max(rows, 1))]
     cur.executemany(
         "INSERT INTO song_infos (music_id, from_user_id, from_chat_id) VALUES (?, ?, ?)",
         data,
@@ -177,7 +255,85 @@ def bench_status(rows: int, rounds: int, roundtrip_overhead_us: int) -> StatusBe
         )
         cur.fetchone()
 
-    # Warm-up
+    old_status()
+    new_status()
+
+    old_samples = time_loop(rounds, old_status)
+    new_samples = time_loop(rounds, new_status)
+    conn.close()
+
+    before = to_stats(old_samples)
+    after = to_stats(new_samples)
+    speedup = before.mean_ms / after.mean_ms if after.mean_ms else 0.0
+    return StatusBench(before=before, after=after, speedup_x=speedup)
+
+
+def build_old_status_text(snapshot: ResourceSnapshot) -> str:
+    return (
+        "Status\n\n"
+        "Cache total: 24120\n"
+        "Cache user: 62\n"
+        "Cache chat: 18\n\n"
+        "CPU usage: {:.1f}%\n"
+        "Memory: {} / {} MB (available {} MB)\n"
+        "Uptime: 03:42:15\n\n"
+        "Download speed: n/a\n"
+        "Upload speed: n/a\n\n"
+        "Stack: Rust + Tokio + Teloxide + SQLx + Reqwest + SQLite\n"
+    ).format(
+        snapshot.cpu_percent,
+        snapshot.used_memory_mb,
+        snapshot.total_memory_mb,
+        snapshot.available_memory_mb,
+    )
+
+
+def build_new_status_text(snapshot: ResourceSnapshot) -> str:
+    return (
+        "Status\n\n"
+        "Cache total: 24120\n"
+        "Cache user: 62\n"
+        "Cache chat: 18\n\n"
+        "Runtime cache hits: 232\n"
+        "Runtime cache misses: 17\n"
+        "Runtime hit rate: 93.17%\n\n"
+        "CPU usage: {:.1f}%\n"
+        "Memory: {} / {} MB (available {} MB)\n"
+        "Uptime: 03:42:15\n\n"
+        "Download speed: no non-cache samples yet\n"
+        "Upload speed: no non-cache samples yet"
+    ).format(
+        snapshot.cpu_percent,
+        snapshot.used_memory_mb,
+        snapshot.total_memory_mb,
+        snapshot.available_memory_mb,
+    )
+
+
+def bench_status_render(
+    rounds: int,
+    sample_cost_ms: float,
+    refresh_interval_ms: int,
+) -> StatusRenderBench:
+    old_sampler = SyntheticResourceSampler(
+        refresh_interval_ms=0,
+        sample_cost_ms=sample_cost_ms,
+    )
+    new_sampler = SyntheticResourceSampler(
+        refresh_interval_ms=refresh_interval_ms,
+        sample_cost_ms=sample_cost_ms,
+    )
+
+    def old_status():
+        snapshot = old_sampler.snapshot(time.perf_counter(), force_refresh=True)
+        text = build_old_status_text(snapshot)
+        _ = len(text)
+
+    def new_status():
+        snapshot = new_sampler.snapshot(time.perf_counter(), force_refresh=False)
+        text = build_new_status_text(snapshot)
+        _ = len(text)
+
     old_status()
     new_status()
 
@@ -187,7 +343,15 @@ def bench_status(rows: int, rounds: int, roundtrip_overhead_us: int) -> StatusBe
     before = to_stats(old_samples)
     after = to_stats(new_samples)
     speedup = before.mean_ms / after.mean_ms if after.mean_ms else 0.0
-    return StatusBench(before=before, after=after, speedup_x=speedup)
+
+    return StatusRenderBench(
+        rounds=nonzero_rounds(rounds),
+        sample_cost_ms=max(sample_cost_ms, 0.0),
+        refresh_interval_ms=max(refresh_interval_ms, 0),
+        before=before,
+        after=after,
+        speedup_x=speedup,
+    )
 
 
 def fetch_bytes(url: str) -> bytes:
@@ -209,7 +373,6 @@ def new_download_flow(base_url: str) -> None:
 
 
 def bench_first_download(base_url: str, rounds: int) -> DownloadBench:
-    # Warm-up one request for server side
     fetch_bytes(f"{base_url}/cover.bin")
 
     old_samples = time_loop(rounds, lambda: old_download_flow(base_url))
@@ -221,10 +384,56 @@ def bench_first_download(base_url: str, rounds: int) -> DownloadBench:
     return DownloadBench(before=before, after=after, speedup_x=speedup)
 
 
+def make_lyric_payload(size_kb: int) -> bytes:
+    size_bytes = max(size_kb, 1) * 1024
+    line = "[00:01.00] synthetic lyric benchmark line\n".encode("utf-8")
+    chunks = (size_bytes // len(line)) + 2
+    payload = line * chunks
+    return payload[:size_bytes]
+
+
+def bench_lyric_upload(rounds: int, lyric_size_kb: int) -> LyricUploadBench:
+    lyric_bytes = make_lyric_payload(lyric_size_kb)
+
+    with tempfile.TemporaryDirectory(prefix="music163bot_lyric_") as temp_dir:
+        root = Path(temp_dir)
+
+        def old_flow() -> None:
+            file_path = root / f"lyric_{time.perf_counter_ns()}.lrc"
+            file_path.write_bytes(lyric_bytes)
+            upload_payload = file_path.read_bytes()
+            file_path.unlink()
+            _ = len(upload_payload)
+
+        def new_flow() -> None:
+            upload_payload = lyric_bytes
+            _ = len(upload_payload)
+
+        old_flow()
+        new_flow()
+
+        old_samples = time_loop(rounds, old_flow)
+        new_samples = time_loop(rounds, new_flow)
+
+    before = to_stats(old_samples)
+    after = to_stats(new_samples)
+    speedup = before.mean_ms / after.mean_ms if after.mean_ms else 0.0
+
+    return LyricUploadBench(
+        rounds=nonzero_rounds(rounds),
+        lyric_size_kb=max(lyric_size_kb, 1),
+        before=before,
+        after=after,
+        speedup_x=speedup,
+    )
+
+
 def bench_peak_memory(base_url: str, rounds: int) -> MemoryBench:
+    loop_rounds = nonzero_rounds(rounds)
+
     def measure_peak(flow: Callable[[str], None]) -> float:
         tracemalloc.start()
-        for _ in range(rounds):
+        for _ in range(loop_rounds):
             flow(base_url)
             gc.collect()
         _, peak = tracemalloc.get_traced_memory()
@@ -246,6 +455,8 @@ def bench_peak_memory(base_url: str, rounds: int) -> MemoryBench:
 def bench_singleflight(
     requests: int, rounds: int, upstream_latency_ms: float
 ) -> SingleflightBench:
+    fanout = max(requests, 1)
+    loop_rounds = nonzero_rounds(rounds)
     upstream_sec = max(upstream_latency_ms, 0.0) / 1000.0
 
     def before_round() -> tuple[float, int]:
@@ -259,7 +470,7 @@ def bench_singleflight(
                 with counter_lock:
                     call_count += 1
 
-        threads = [threading.Thread(target=worker) for _ in range(requests)]
+        threads = [threading.Thread(target=worker) for _ in range(fanout)]
         start = time.perf_counter()
         for thread in threads:
             thread.start()
@@ -290,7 +501,7 @@ def bench_singleflight(
             else:
                 leader_ready.wait()
 
-        threads = [threading.Thread(target=worker) for _ in range(requests)]
+        threads = [threading.Thread(target=worker) for _ in range(fanout)]
         start = time.perf_counter()
         for thread in threads:
             thread.start()
@@ -304,7 +515,7 @@ def bench_singleflight(
     before_calls_total = 0
     after_calls_total = 0
 
-    for _ in range(rounds):
+    for _ in range(loop_rounds):
         elapsed_before, calls_before = before_round()
         elapsed_after, calls_after = after_round()
         before_samples.append(elapsed_before)
@@ -312,8 +523,8 @@ def bench_singleflight(
         before_calls_total += calls_before
         after_calls_total += calls_after
 
-    before_calls_per_round = before_calls_total / rounds if rounds else 0.0
-    after_calls_per_round = after_calls_total / rounds if rounds else 0.0
+    before_calls_per_round = before_calls_total / loop_rounds
+    after_calls_per_round = after_calls_total / loop_rounds
     reduction = (
         (
             (before_calls_per_round - after_calls_per_round)
@@ -325,8 +536,8 @@ def bench_singleflight(
     )
 
     return SingleflightBench(
-        requests=requests,
-        rounds=rounds,
+        requests=fanout,
+        rounds=loop_rounds,
         before=to_stats(before_samples),
         after=to_stats(after_samples),
         before_upstream_calls_per_round=before_calls_per_round,
@@ -336,17 +547,18 @@ def bench_singleflight(
 
 
 def bench_api_cache(rounds: int, upstream_latency_ms: float) -> ApiCacheBench:
+    loop_rounds = nonzero_rounds(rounds)
     upstream_sec = max(upstream_latency_ms, 0.0) / 1000.0
     before_samples: list[float] = []
     after_samples: list[float] = []
 
-    for _ in range(rounds):
+    for _ in range(loop_rounds):
         start = time.perf_counter()
         time.sleep(upstream_sec)
         before_samples.append((time.perf_counter() - start) * 1000.0)
 
     cache_ready = False
-    for _ in range(rounds):
+    for _ in range(loop_rounds):
         start = time.perf_counter()
         if cache_ready:
             pass
@@ -359,7 +571,59 @@ def bench_api_cache(rounds: int, upstream_latency_ms: float) -> ApiCacheBench:
     after = to_stats(after_samples)
     speedup = before.mean_ms / after.mean_ms if after.mean_ms else 0.0
 
-    return ApiCacheBench(rounds=rounds, before=before, after=after, speedup_x=speedup)
+    return ApiCacheBench(rounds=loop_rounds, before=before, after=after, speedup_x=speedup)
+
+
+def make_cache_payload(payload_kb: int) -> tuple[dict, dict]:
+    size_bytes = max(payload_kb, 1) * 1024
+    cover_blob = bytearray(os.urandom(size_bytes))
+    signature_blob = bytearray(os.urandom(size_bytes))
+    detail = {
+        "id": 284031,
+        "name": "Synthetic Song",
+        "artists": [{"name": "A"}, {"name": "B"}],
+        "duration_ms": 289_000,
+        "cover_blob": cover_blob,
+    }
+    url = {
+        "id": 284031,
+        "br": 320_000,
+        "format": "flac",
+        "url": "https://example.com/song.flac",
+        "signature_blob": signature_blob,
+    }
+    return detail, url
+
+
+def bench_shared_api_cache(rounds: int, payload_kb: int) -> SharedCacheBench:
+    loop_rounds = nonzero_rounds(rounds)
+    cached_detail, cached_url = make_cache_payload(payload_kb)
+
+    def old_flow() -> None:
+        detail = copy.deepcopy(cached_detail)
+        song_url = copy.deepcopy(cached_url)
+        _ = detail["id"] + song_url["br"]
+
+    def new_flow() -> None:
+        detail = cached_detail
+        song_url = cached_url
+        _ = detail["id"] + song_url["br"]
+
+    old_flow()
+    new_flow()
+    old_samples = time_loop(loop_rounds, old_flow)
+    new_samples = time_loop(loop_rounds, new_flow)
+
+    before = to_stats(old_samples)
+    after = to_stats(new_samples)
+    speedup = before.mean_ms / after.mean_ms if after.mean_ms else 0.0
+    return SharedCacheBench(
+        rounds=loop_rounds,
+        payload_kb=max(payload_kb, 1),
+        before=before,
+        after=after,
+        speedup_x=speedup,
+    )
 
 
 def create_fixtures(root: Path, cover_mb: int, audio_mb: int) -> None:
@@ -380,15 +644,23 @@ def start_server(root: Path, latency_sec: float) -> tuple[ThreadingHTTPServer, s
 
 def to_markdown(report: Report) -> str:
     return (
-        "# v1.1.16 Performance Comparison\n\n"
+        "# v1.1.17 Performance Comparison\n\n"
         "Synthetic local benchmark comparing before/after strategies.\n\n"
-        "## /status Query Path\n\n"
-        "| Metric | Before (3 queries) | After (1 query) |\n"
+        "## /status SQL Query Path\n\n"
+        "| Metric | Before (3 queries) | After (1 subquery statement) |\n"
         "|---|---:|---:|\n"
         f"| First latency (ms) | {report.status.before.first_ms:.2f} | {report.status.after.first_ms:.2f} |\n"
         f"| Mean latency (ms) | {report.status.before.mean_ms:.2f} | {report.status.after.mean_ms:.2f} |\n"
         f"| P95 latency (ms) | {report.status.before.p95_ms:.2f} | {report.status.after.p95_ms:.2f} |\n"
         f"| Speedup | - | {report.status.speedup_x:.2f}x |\n\n"
+        "## /status Render + Resource Sampling Model\n\n"
+        f"Rounds: {report.status_render.rounds}, sample cost: {report.status_render.sample_cost_ms:.2f} ms, refresh interval: {report.status_render.refresh_interval_ms} ms\n\n"
+        "| Metric | Before (refresh every request) | After (cached sample + concise text) |\n"
+        "|---|---:|---:|\n"
+        f"| First latency (ms) | {report.status_render.before.first_ms:.2f} | {report.status_render.after.first_ms:.2f} |\n"
+        f"| Mean latency (ms) | {report.status_render.before.mean_ms:.2f} | {report.status_render.after.mean_ms:.2f} |\n"
+        f"| P95 latency (ms) | {report.status_render.before.p95_ms:.2f} | {report.status_render.after.p95_ms:.2f} |\n"
+        f"| Speedup | - | {report.status_render.speedup_x:.2f}x |\n\n"
         "## First Download Latency Model\n\n"
         "| Metric | Before (audio + cover + cover) | After (audio + cover) |\n"
         "|---|---:|---:|\n"
@@ -396,6 +668,14 @@ def to_markdown(report: Report) -> str:
         f"| Mean latency (ms) | {report.first_download.before.mean_ms:.2f} | {report.first_download.after.mean_ms:.2f} |\n"
         f"| P95 latency (ms) | {report.first_download.before.p95_ms:.2f} | {report.first_download.after.p95_ms:.2f} |\n"
         f"| Speedup | - | {report.first_download.speedup_x:.2f}x |\n\n"
+        "## Lyric Upload Path Model\n\n"
+        f"Rounds: {report.lyric_upload.rounds}, lyric payload: {report.lyric_upload.lyric_size_kb} KB\n\n"
+        "| Metric | Before (temp file write+read) | After (in-memory bytes) |\n"
+        "|---|---:|---:|\n"
+        f"| First latency (ms) | {report.lyric_upload.before.first_ms:.3f} | {report.lyric_upload.after.first_ms:.3f} |\n"
+        f"| Mean latency (ms) | {report.lyric_upload.before.mean_ms:.3f} | {report.lyric_upload.after.mean_ms:.3f} |\n"
+        f"| P95 latency (ms) | {report.lyric_upload.before.p95_ms:.3f} | {report.lyric_upload.after.p95_ms:.3f} |\n"
+        f"| Speedup | - | {report.lyric_upload.speedup_x:.2f}x |\n\n"
         "## Peak Memory Model\n\n"
         "| Metric | Before | After |\n"
         "|---|---:|---:|\n"
@@ -416,7 +696,15 @@ def to_markdown(report: Report) -> str:
         f"| First latency (ms) | {report.api_cache.before.first_ms:.2f} | {report.api_cache.after.first_ms:.2f} |\n"
         f"| Mean latency (ms) | {report.api_cache.before.mean_ms:.2f} | {report.api_cache.after.mean_ms:.2f} |\n"
         f"| P95 latency (ms) | {report.api_cache.before.p95_ms:.2f} | {report.api_cache.after.p95_ms:.2f} |\n"
-        f"| Speedup | - | {report.api_cache.speedup_x:.2f}x |\n"
+        f"| Speedup | - | {report.api_cache.speedup_x:.2f}x |\n\n"
+        "## Shared API Cache Object Model\n\n"
+        f"Rounds: {report.shared_api_cache.rounds}, payload per object: {report.shared_api_cache.payload_kb} KB\n\n"
+        "| Metric | Before (clone-heavy cached values) | After (shared cached objects) |\n"
+        "|---|---:|---:|\n"
+        f"| First latency (ms) | {report.shared_api_cache.before.first_ms:.3f} | {report.shared_api_cache.after.first_ms:.3f} |\n"
+        f"| Mean latency (ms) | {report.shared_api_cache.before.mean_ms:.3f} | {report.shared_api_cache.after.mean_ms:.3f} |\n"
+        f"| P95 latency (ms) | {report.shared_api_cache.before.p95_ms:.3f} | {report.shared_api_cache.after.p95_ms:.3f} |\n"
+        f"| Speedup | - | {report.shared_api_cache.speedup_x:.2f}x |\n"
     )
 
 
@@ -424,7 +712,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run synthetic performance comparison")
     parser.add_argument("--status-rows", type=int, default=50_000)
     parser.add_argument("--status-rounds", type=int, default=300)
+    parser.add_argument("--status-render-rounds", type=int, default=450)
+    parser.add_argument("--resource-sample-ms", type=float, default=2.5)
+    parser.add_argument("--resource-refresh-ms", type=int, default=2_000)
     parser.add_argument("--download-rounds", type=int, default=30)
+    parser.add_argument("--lyric-rounds", type=int, default=500)
+    parser.add_argument("--lyric-size-kb", type=int, default=32)
     parser.add_argument("--memory-rounds", type=int, default=12)
     parser.add_argument("--latency-ms", type=float, default=18.0)
     parser.add_argument("--query-roundtrip-us", type=int, default=150)
@@ -433,6 +726,8 @@ def main() -> int:
     parser.add_argument("--singleflight-rounds", type=int, default=40)
     parser.add_argument("--singleflight-fanout", type=int, default=20)
     parser.add_argument("--api-cache-rounds", type=int, default=200)
+    parser.add_argument("--shared-cache-rounds", type=int, default=800)
+    parser.add_argument("--shared-cache-payload-kb", type=int, default=256)
     parser.add_argument("--json-output", type=Path, required=False)
     parser.add_argument("--markdown-output", type=Path, required=False)
     args = parser.parse_args()
@@ -447,7 +742,16 @@ def main() -> int:
                 rounds=args.status_rounds,
                 roundtrip_overhead_us=args.query_roundtrip_us,
             )
+            status_render = bench_status_render(
+                rounds=args.status_render_rounds,
+                sample_cost_ms=args.resource_sample_ms,
+                refresh_interval_ms=args.resource_refresh_ms,
+            )
             first_download = bench_first_download(base_url, rounds=args.download_rounds)
+            lyric_upload = bench_lyric_upload(
+                rounds=args.lyric_rounds,
+                lyric_size_kb=args.lyric_size_kb,
+            )
             peak_memory = bench_peak_memory(base_url, rounds=args.memory_rounds)
             singleflight = bench_singleflight(
                 requests=args.singleflight_fanout,
@@ -458,16 +762,23 @@ def main() -> int:
                 rounds=args.api_cache_rounds,
                 upstream_latency_ms=args.latency_ms,
             )
+            shared_api_cache = bench_shared_api_cache(
+                rounds=args.shared_cache_rounds,
+                payload_kb=args.shared_cache_payload_kb,
+            )
         finally:
             server.shutdown()
             server.server_close()
 
     report = Report(
         status=status,
+        status_render=status_render,
         first_download=first_download,
+        lyric_upload=lyric_upload,
         peak_memory=peak_memory,
         singleflight=singleflight,
         api_cache=api_cache,
+        shared_api_cache=shared_api_cache,
     )
     payload = asdict(report)
 

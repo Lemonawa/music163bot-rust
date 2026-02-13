@@ -28,7 +28,7 @@ import urllib.parse
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 
 class RateLimitError(RuntimeError):
@@ -101,6 +101,103 @@ def print_stat(name: str, stat: Stat, unit: str = "ms") -> None:
     )
 
 
+def stat_to_payload(stat: Stat, *, unit: str = "ms") -> dict[str, float | str]:
+    return {
+        "avg": stat.avg,
+        "p50": stat.p50,
+        "p95": stat.p95,
+        "min": stat.min_v,
+        "max": stat.max_v,
+        "unit": unit,
+    }
+
+
+def render_markdown_report(payload: dict[str, Any]) -> str:
+    meta = payload["meta"]
+    local_clone = payload["local_clone"]
+    modes = payload["modes"]
+    comparisons = payload["comparisons"]
+
+    lines: list[str] = [
+        "# Telegram Upload Benchmark Report",
+        "",
+        "## Run Config",
+        "",
+        "| Key | Value |",
+        "|---|---|",
+        f"| api_base | `{meta['api_base']}` |",
+        f"| method | `{meta['method']}` |",
+        f"| file | `{meta['file']}` |",
+        f"| file_size_mb | {meta['file_size_mb']:.2f} |",
+        f"| runs_per_mode | {meta['runs_per_mode']} |",
+        f"| modes | {', '.join(meta['modes'])} |",
+        f"| reuse_connection | {meta['reuse_connection']} |",
+        f"| between_runs_ms | {meta['between_runs_ms']} |",
+        f"| max_rate_retries | {meta['max_rate_retries']} |",
+        f"| retry_after_padding_ms | {meta['retry_after_padding_ms']} |",
+        f"| delete_after_send | {meta['delete_after_send']} |",
+        "",
+        "## Local Clone Benchmark",
+        "",
+        "| Metric | Value (ms) |",
+        "|---|---:|",
+        f"| avg | {local_clone['avg']:.3f} |",
+        f"| p50 | {local_clone['p50']:.3f} |",
+        f"| p95 | {local_clone['p95']:.3f} |",
+        f"| min | {local_clone['min']:.3f} |",
+        f"| max | {local_clone['max']:.3f} |",
+        "",
+        "## Mode Upload Results",
+        "",
+        "| Mode | avg (ms) | p50 (ms) | p95 (ms) | min (ms) | max (ms) | Throughput (MB/s) |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for mode_name, mode_payload in modes.items():
+        upload = mode_payload["upload"]
+        lines.append(
+            f"| {mode_name} | {upload['avg']:.2f} | {upload['p50']:.2f} | "
+            f"{upload['p95']:.2f} | {upload['min']:.2f} | {upload['max']:.2f} | "
+            f"{mode_payload['throughput_mb_s_avg']:.2f} |"
+        )
+
+    clone_mode_rows = [
+        (mode_name, mode_payload)
+        for mode_name, mode_payload in modes.items()
+        if "clone" in mode_payload
+    ]
+    if clone_mode_rows:
+        lines.extend(
+            [
+                "",
+                "## Clone Cost In Upload Modes",
+                "",
+                "| Mode | clone avg (ms) | clone p95 (ms) | clone share of upload avg (%) |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for mode_name, mode_payload in clone_mode_rows:
+            clone_stats = mode_payload["clone"]
+            lines.append(
+                f"| {mode_name} | {clone_stats['avg']:.3f} | {clone_stats['p95']:.3f} | "
+                f"{mode_payload['clone_share_percent_avg']:.4f} |"
+            )
+
+    delta_ms = comparisons.get("memory_clone_vs_file_avg_ms_delta")
+    relative_pct = comparisons.get("memory_clone_vs_file_relative_percent")
+    if delta_ms is not None and relative_pct is not None:
+        lines.extend(
+            [
+                "",
+                "## file vs memory-clone",
+                "",
+                f"- avg delta (memory-clone - file): {delta_ms:+.2f} ms",
+                f"- relative delta: {relative_pct:+.2f}%",
+            ]
+        )
+
+    return "\n".join(lines) + "\n"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark Telegram upload path")
     parser.add_argument(
@@ -162,6 +259,21 @@ def parse_args() -> argparse.Namespace:
         help="Delete sent message after each run to avoid chat spam",
     )
     parser.add_argument("--caption", default="race-bench", help="Caption text")
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help="Optional JSON report output path",
+    )
+    parser.add_argument(
+        "--markdown-output",
+        type=Path,
+        help="Optional markdown report output path",
+    )
+    parser.add_argument(
+        "--print-json",
+        action="store_true",
+        help="Print the final JSON payload to stdout",
+    )
     return parser.parse_args()
 
 
@@ -508,6 +620,7 @@ def main() -> int:
         print()
 
     mode_results: dict[str, tuple[Stat, Stat | None]] = {}
+    mode_payloads: dict[str, dict[str, Any]] = {}
 
     for mode in requested_modes:
         print(f"[Mode: {mode}]")
@@ -534,6 +647,10 @@ def main() -> int:
         print_stat("upload", upload_stat)
         mbps_avg = file_mb / (upload_stat.avg / 1000.0) if upload_stat.avg > 0 else 0.0
         print(f"{'throughput':>14}: avg={mbps_avg:.2f} MB/s")
+        mode_entry: dict[str, Any] = {
+            "upload": stat_to_payload(upload_stat),
+            "throughput_mb_s_avg": mbps_avg,
+        }
         if clone_in_mode is not None:
             print_stat("clone", clone_in_mode)
             ratio = (
@@ -542,16 +659,56 @@ def main() -> int:
                 else 0.0
             )
             print(f"{'clone/share':>14}: avg={ratio:.3f}% of upload time")
+            mode_entry["clone"] = stat_to_payload(clone_in_mode)
+            mode_entry["clone_share_percent_avg"] = ratio
+        mode_payloads[mode] = mode_entry
         print()
 
+    comparisons: dict[str, float] = {}
     if "file" in mode_results and "memory-clone" in mode_results:
         file_avg = mode_results["file"][0].avg
         memc_avg = mode_results["memory-clone"][0].avg
         delta = memc_avg - file_avg
         print("[Comparison]")
         print(f"memory-clone - file (avg): {delta:+.2f} ms")
+        comparisons["memory_clone_vs_file_avg_ms_delta"] = delta
         if file_avg > 0:
-            print(f"relative delta           : {delta / file_avg * 100.0:+.2f}%")
+            relative = delta / file_avg * 100.0
+            print(f"relative delta           : {relative:+.2f}%")
+            comparisons["memory_clone_vs_file_relative_percent"] = relative
+
+    payload: dict[str, Any] = {
+        "meta": {
+            "api_base": args.api_base,
+            "method": args.method,
+            "file": str(file_path),
+            "file_size_mb": file_mb,
+            "runs_per_mode": args.runs,
+            "modes": requested_modes,
+            "reuse_connection": not args.new_conn_per_run,
+            "between_runs_ms": max(0, args.between_runs_ms),
+            "max_rate_retries": max(0, args.max_rate_retries),
+            "retry_after_padding_ms": max(0, args.retry_after_padding_ms),
+            "delete_after_send": bool(args.delete_after_send),
+        },
+        "local_clone": stat_to_payload(clone_stat),
+        "modes": mode_payloads,
+        "comparisons": comparisons,
+    }
+
+    if args.json_output:
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"\nSaved JSON report: {args.json_output}")
+
+    if args.markdown_output:
+        args.markdown_output.parent.mkdir(parents=True, exist_ok=True)
+        markdown = render_markdown_report(payload)
+        args.markdown_output.write_text(markdown, encoding="utf-8")
+        print(f"Saved markdown report: {args.markdown_output}")
+
+    if args.print_json:
+        print(json.dumps(payload, indent=2))
 
     return 0
 

@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::io::Cursor;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
@@ -26,8 +27,8 @@ pub struct MusicApi {
     base_url: String,
     eapi_cookie: String,
     music_u_cookie: Option<String>,
-    song_detail_cache: DashMap<u64, TimedCacheEntry<SongDetail>>,
-    song_url_cache: DashMap<(u64, u64), TimedCacheEntry<SongUrl>>,
+    song_detail_cache: DashMap<u64, TimedCacheEntry<Arc<SongDetail>>>,
+    song_url_cache: DashMap<(u64, u64), TimedCacheEntry<Arc<SongUrl>>>,
     song_lyric_cache: DashMap<u64, TimedCacheEntry<String>>,
 }
 
@@ -235,11 +236,11 @@ impl MusicApi {
         }
     }
 
-    fn get_cached_song_detail(&self, song_id: u64) -> Option<SongDetail> {
+    fn get_cached_song_detail(&self, song_id: u64) -> Option<Arc<SongDetail>> {
         let now = Instant::now();
         let entry = self.song_detail_cache.get(&song_id)?;
         if entry.is_fresh_at(now) {
-            Some(entry.value.clone())
+            Some(Arc::clone(&entry.value))
         } else {
             drop(entry);
             self.song_detail_cache.remove(&song_id);
@@ -247,17 +248,22 @@ impl MusicApi {
         }
     }
 
+    #[cfg(test)]
     fn cache_song_detail(&self, song_id: u64, detail: SongDetail) {
+        self.cache_song_detail_shared(song_id, Arc::new(detail));
+    }
+
+    fn cache_song_detail_shared(&self, song_id: u64, detail: Arc<SongDetail>) {
         self.song_detail_cache
             .insert(song_id, TimedCacheEntry::new(detail, SONG_DETAIL_CACHE_TTL));
     }
 
-    fn get_cached_song_url(&self, song_id: u64, br: u64) -> Option<SongUrl> {
+    fn get_cached_song_url(&self, song_id: u64, br: u64) -> Option<Arc<SongUrl>> {
         let key = song_url_cache_key(song_id, br);
         let now = Instant::now();
         let entry = self.song_url_cache.get(&key)?;
         if entry.is_fresh_at(now) {
-            Some(entry.value.clone())
+            Some(Arc::clone(&entry.value))
         } else {
             drop(entry);
             self.song_url_cache.remove(&key);
@@ -265,7 +271,12 @@ impl MusicApi {
         }
     }
 
+    #[cfg(test)]
     fn cache_song_url(&self, song_id: u64, br: u64, song_url: SongUrl) {
+        self.cache_song_url_shared(song_id, br, Arc::new(song_url));
+    }
+
+    fn cache_song_url_shared(&self, song_id: u64, br: u64, song_url: Arc<SongUrl>) {
         let key = song_url_cache_key(song_id, br);
         self.song_url_cache
             .insert(key, TimedCacheEntry::new(song_url, SONG_URL_CACHE_TTL));
@@ -404,8 +415,7 @@ impl MusicApi {
         "NeteaseMusic/9.3.40.1753206443(164);Dalvik/2.1.0 (Linux; U; Android 9; MIX 2 MIUI/V12.0.1.0.PDECNXM)"
     }
 
-    /// Get song details
-    pub async fn get_song_detail(&self, song_id: u64) -> Result<SongDetail> {
+    async fn get_song_detail_shared(&self, song_id: u64) -> Result<Arc<SongDetail>> {
         if let Some(cached) = self.get_cached_song_detail(song_id) {
             return Ok(cached);
         }
@@ -419,7 +429,6 @@ impl MusicApi {
             .post(url)
             .form(&[("id", &*single_id), ("ids", &*wrapped_ids)]);
 
-        // Add MUSIC_U cookie if available
         request = self.apply_music_u_cookie(request);
 
         let response = request.send().await?.error_for_status()?;
@@ -437,13 +446,12 @@ impl MusicApi {
             .into_iter()
             .next()
             .ok_or_else(|| BotError::MusicApi("No song found".to_string()))?;
-
-        self.cache_song_detail(song_id, detail.clone());
+        let detail = Arc::new(detail);
+        self.cache_song_detail_shared(song_id, Arc::clone(&detail));
         Ok(detail)
     }
 
-    /// Get song download URL
-    pub async fn get_song_url(&self, song_id: u64, br: u64) -> Result<SongUrl> {
+    async fn get_song_url_shared(&self, song_id: u64, br: u64) -> Result<Arc<SongUrl>> {
         if let Some(cached) = self.get_cached_song_url(song_id, br) {
             return Ok(cached);
         }
@@ -474,9 +482,23 @@ impl MusicApi {
             .into_iter()
             .next()
             .ok_or_else(|| BotError::MusicApi("No download URL found".to_string()))?;
-
-        self.cache_song_url(song_id, br, song_url.clone());
+        let song_url = Arc::new(song_url);
+        self.cache_song_url_shared(song_id, br, Arc::clone(&song_url));
         Ok(song_url)
+    }
+
+    /// Get song details
+    pub async fn get_song_detail(&self, song_id: u64) -> Result<SongDetail> {
+        self.get_song_detail_shared(song_id)
+            .await
+            .map(|detail| detail.as_ref().clone())
+    }
+
+    /// Get song download URL
+    pub async fn get_song_url(&self, song_id: u64, br: u64) -> Result<SongUrl> {
+        self.get_song_url_shared(song_id, br)
+            .await
+            .map(|song_url| song_url.as_ref().clone())
     }
 
     /// Get song details and best available URL using a batch-first strategy with safe fallback.
@@ -484,7 +506,7 @@ impl MusicApi {
         &self,
         song_id: u64,
         bitrate_candidates: &[u64],
-    ) -> Result<(SongDetail, SongUrl)> {
+    ) -> Result<(Arc<SongDetail>, Arc<SongUrl>)> {
         let Some((&primary_bitrate, _)) = bitrate_candidates.split_first() else {
             return Err(BotError::MusicApi(
                 "No bitrate candidates provided".to_string(),
@@ -497,7 +519,7 @@ impl MusicApi {
                 if let Some(song_url) = self.get_cached_song_url(song_id, bitrate)
                     && !song_url.url.is_empty()
                 {
-                    return Ok((detail.clone(), song_url));
+                    return Ok((Arc::clone(detail), song_url));
                 }
             }
         }
@@ -513,14 +535,14 @@ impl MusicApi {
 
             let detail_fut = async {
                 if need_detail {
-                    Some(self.get_song_detail(song_id).await)
+                    Some(self.get_song_detail_shared(song_id).await)
                 } else {
                     None
                 }
             };
             let url_fut = async {
                 if need_url {
-                    Some(self.get_song_url(song_id, primary_bitrate).await)
+                    Some(self.get_song_url_shared(song_id, primary_bitrate).await)
                 } else {
                     None
                 }
@@ -536,7 +558,7 @@ impl MusicApi {
                     Ok(song_url) if !song_url.url.is_empty() => primary_url = Some(song_url),
                     Ok(_) => {
                         primary_attempted_unavailable = true;
-                        tracing::info!(
+                        tracing::debug!(
                             "Primary bitrate {primary_bitrate} returned empty URL for music_id {song_id}"
                         );
                     }
@@ -549,7 +571,7 @@ impl MusicApi {
                 }
             }
 
-            tracing::info!(
+            tracing::debug!(
                 "[parallel_fetch] {}ms (detail={need_detail}, url={need_url})",
                 parallel_start.elapsed().as_millis()
             );
@@ -569,22 +591,22 @@ impl MusicApi {
                     Ok(song_url)
                 } else {
                     fallback_url_start.get_or_insert_with(Instant::now);
-                    self.get_song_url(song_id, bitrate).await
+                    self.get_song_url_shared(song_id, bitrate).await
                 }
             } else {
                 fallback_url_start.get_or_insert_with(Instant::now);
-                self.get_song_url(song_id, bitrate).await
+                self.get_song_url_shared(song_id, bitrate).await
             };
 
             match fetched_url {
                 Ok(song_url) if !song_url.url.is_empty() => {
                     if let Some(start) = fallback_url_start {
-                        tracing::info!("[fallback_url] {}ms", start.elapsed().as_millis());
+                        tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
                     }
-                    return Ok((detail.clone(), song_url));
+                    return Ok((Arc::clone(&detail), song_url));
                 }
                 Ok(_) => {
-                    tracing::info!(
+                    tracing::debug!(
                         "Bitrate {} returned empty URL for music_id {}, trying next fallback",
                         bitrate,
                         song_id
@@ -603,16 +625,16 @@ impl MusicApi {
         }
 
         if let Some(start) = fallback_url_start {
-            tracing::info!("[fallback_url] {}ms", start.elapsed().as_millis());
+            tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
         }
 
         if primary_attempted_unavailable {
-            tracing::info!(
+            tracing::debug!(
                 "Retrying primary bitrate {primary_bitrate} after fallback attempts for music_id {song_id}"
             );
-            match self.get_song_url(song_id, primary_bitrate).await {
+            match self.get_song_url_shared(song_id, primary_bitrate).await {
                 Ok(song_url) if !song_url.url.is_empty() => return Ok((detail, song_url)),
-                Ok(_) => tracing::info!(
+                Ok(_) => tracing::debug!(
                     "Primary bitrate {primary_bitrate} retry returned empty URL for music_id {song_id}"
                 ),
                 Err(e) => {

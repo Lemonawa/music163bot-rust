@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 
 use crate::error::Result;
@@ -138,10 +138,8 @@ impl Database {
                     from_user_name: row.get("from_user_name"),
                     from_chat_id: row.get("from_chat_id"),
                     from_chat_name: row.get("from_chat_name"),
-                    created_at: parse_sqlite_timestamp(&row.get::<String, _>("created_at"))
-                        .unwrap_or_else(Utc::now),
-                    updated_at: parse_sqlite_timestamp(&row.get::<String, _>("updated_at"))
-                        .unwrap_or_else(Utc::now),
+                    created_at: decode_sqlite_datetime(&row, "created_at"),
+                    updated_at: decode_sqlite_datetime(&row, "updated_at"),
                 };
                 Ok(Some(song_info))
             }
@@ -305,10 +303,9 @@ impl Database {
 fn status_stats_query_sql() -> &'static str {
     r"
     SELECT
-        COUNT(*) AS total_count,
-        COALESCE(SUM(CASE WHEN from_user_id = ? THEN 1 ELSE 0 END), 0) AS user_count,
-        COALESCE(SUM(CASE WHEN from_chat_id = ? THEN 1 ELSE 0 END), 0) AS chat_count
-    FROM song_infos
+        (SELECT COUNT(*) FROM song_infos) AS total_count,
+        (SELECT COUNT(*) FROM song_infos WHERE from_user_id = ?) AS user_count,
+        (SELECT COUNT(*) FROM song_infos WHERE from_chat_id = ?) AS chat_count
     "
 }
 
@@ -318,6 +315,17 @@ fn parse_sqlite_timestamp(value: &str) -> Option<DateTime<Utc>> {
         .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
         .ok()
         .map(|naive| naive.and_utc())
+}
+
+fn decode_sqlite_datetime(row: &SqliteRow, column: &'static str) -> DateTime<Utc> {
+    if let Ok(dt) = row.try_get::<DateTime<Utc>, _>(column) {
+        return dt;
+    }
+
+    row.try_get::<String, _>(column)
+        .ok()
+        .and_then(|value| parse_sqlite_timestamp(&value))
+        .unwrap_or_else(Utc::now)
 }
 
 #[cfg(test)]
@@ -335,10 +343,11 @@ mod tests {
     }
 
     #[test]
-    fn status_stats_query_uses_single_scan_aggregation() {
+    fn status_stats_query_uses_index_friendly_subqueries() {
         let sql = super::status_stats_query_sql();
-        assert!(!sql.contains("(SELECT COUNT(*)"));
-        assert!(sql.contains("SUM(CASE"));
+        assert!(sql.contains("(SELECT COUNT(*) FROM song_infos)"));
+        assert!(sql.contains("WHERE from_user_id = ?"));
+        assert!(sql.contains("WHERE from_chat_id = ?"));
     }
 
     #[tokio::test]

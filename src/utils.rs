@@ -11,9 +11,6 @@ static SHARE_LINK_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|
         .unwrap()
 });
 
-static NUMBER_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"\d+").unwrap());
-
 fn parse_direct_numeric_id(text: &str) -> Option<u64> {
     text.trim().parse::<u64>().ok()
 }
@@ -50,6 +47,19 @@ fn extract_music_id_from_canonical_song_url(text: &str) -> Option<u64> {
     None
 }
 
+fn extract_first_number(text: &str) -> Option<u64> {
+    let bytes = text.as_bytes();
+    let start = bytes.iter().position(u8::is_ascii_digit)?;
+    let len = bytes[start..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .count();
+    if len == 0 {
+        return None;
+    }
+    text[start..start + len].parse::<u64>().ok()
+}
+
 /// Extract music ID from text
 pub fn parse_music_id(text: &str) -> Option<u64> {
     if let Some(id) = parse_direct_numeric_id(text) {
@@ -68,11 +78,16 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
     }
 
     // Try to extract from share link
-    if let Some(url_match) = SHARE_LINK_REGEX.find(text)
-        && url_match.as_str().contains("song")
-        && let Some(id_match) = NUMBER_REGEX.find(url_match.as_str())
-    {
-        return id_match.as_str().parse().ok();
+    if let Some(url_match) = SHARE_LINK_REGEX.find(text) {
+        let url = url_match.as_str();
+        if url.contains("song") {
+            if let Some(id) = extract_music_id_from_canonical_song_url(url) {
+                return Some(id);
+            }
+            if let Some(id) = extract_first_number(url) {
+                return Some(id);
+            }
+        }
     }
 
     None
