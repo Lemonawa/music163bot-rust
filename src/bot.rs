@@ -430,23 +430,23 @@ fn build_status_text(
 ) -> String {
     format!(
         "📊 <b>系统状态</b>\n\
-<blockquote>实时运行指标</blockquote>\n\n\
+<b>实时运行指标</b>\n\n\
 <b>💾 缓存</b>\n\
-• 总缓存: <b>{total_count}</b>\n\
+• 总缓存: <code>{total_count}</code>\n\
 • 用户缓存: <code>{user_count}</code>\n\
 • 群组缓存: <code>{chat_count}</code>\n\n\
 <b>⚡ 运行缓存</b>\n\
-• 命中: <b>{hits}</b>\n\
+• 命中: <code>{hits}</code>\n\
 • 未命中: <code>{misses}</code>\n\
-• 命中率: <b>{hit_rate:.2}%</b>\n\n\
+• 命中率: <code>{hit_rate:.2}%</code>\n\n\
 <b>🖥️ 资源</b>\n\
-• CPU: <b>{cpu:.1}%</b>\n\
+• CPU: <code>{cpu:.1}%</code>\n\
 • 系统内存: <code>{system_used} / {system_total} MB</code>\n\
 • Bot 内存: <code>{bot_memory}</code>\n\
-• 运行时长: <b>{uptime}</b>\n\n\
+• 运行时长: <code>{uptime}</code>\n\n\
 <b>🚀 传输</b>\n\
-<code>{download_line}</code>\n\
-<code>{upload_line}</code>",
+• {download_line}\n\
+• {upload_line}",
         hits = cache_snapshot.hits,
         misses = cache_snapshot.misses,
         hit_rate = cache_snapshot.hit_rate_percent,
@@ -468,7 +468,7 @@ fn format_uptime(duration: std::time::Duration) -> String {
 fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) -> String {
     if let Some(snapshot) = snapshot {
         format!(
-            "{label} speed: last {last:.2} MB/s | avg {avg:.2} MB/s | p95 {p95:.2} MB/s | samples {total} (window {window})",
+            "{label}: 实时 <code>{last:.2}</code> MB/s | 平均 <code>{avg:.2}</code> MB/s | P95 <code>{p95:.2}</code> MB/s | 样本 <code>{total}</code> (窗口 <code>{window}</code>)",
             last = snapshot.last_mbps,
             avg = snapshot.avg_mbps,
             p95 = snapshot.p95_mbps,
@@ -476,7 +476,7 @@ fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) -> String {
             window = snapshot.recent_samples
         )
     } else {
-        format!("{label} speed: no non-cache samples yet")
+        format!("{label}: 暂无非缓存测速样本")
     }
 }
 
@@ -3086,8 +3086,26 @@ mod tests {
 
     #[test]
     fn speed_line_reports_cache_hit_when_no_samples() {
-        let line = super::format_speed_line("Download", None);
-        assert!(line.contains("no non-cache samples"));
+        let line = super::format_speed_line("下载", None);
+        assert!(line.contains("暂无非缓存测速样本"));
+    }
+
+    #[test]
+    fn speed_line_uses_monospace_for_numeric_values() {
+        let line = super::format_speed_line(
+            "下载",
+            Some(super::SpeedSnapshot {
+                last_mbps: 6.0,
+                avg_mbps: 4.5,
+                p95_mbps: 5.2,
+                samples: 12,
+                recent_samples: 12,
+            }),
+        );
+        assert!(line.contains("<code>6.00</code>"));
+        assert!(line.contains("<code>4.50</code>"));
+        assert!(line.contains("<code>5.20</code>"));
+        assert!(line.contains("<code>12</code>"));
     }
 
     #[test]
@@ -3110,17 +3128,18 @@ mod tests {
             cache_snapshot,
             resource_snapshot,
             "00:10:00",
-            "Download speed: 6.00 MB/s",
-            "Upload speed: 2.00 MB/s",
+            "下载: 实时 <code>6.00</code> MB/s | 平均 <code>4.00</code> MB/s | P95 <code>5.00</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
+            "上传: 实时 <code>2.00</code> MB/s | 平均 <code>1.50</code> MB/s | P95 <code>1.80</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
         );
         assert!(text.contains("<b>系统状态</b>"));
+        assert!(text.contains("<b>实时运行指标</b>"));
         assert!(text.contains("<b>💾 缓存</b>"));
-        assert!(text.contains("• 总缓存: <b>100</b>"));
+        assert!(text.contains("• 总缓存: <code>100</code>"));
         assert!(text.contains("• 用户缓存: <code>20</code>"));
         assert!(text.contains("• 群组缓存: <code>8</code>"));
         assert!(text.contains("• 系统内存: <code>512 / 1024 MB</code>"));
         assert!(text.contains("• Bot 内存: <code>12 MB</code>"));
-        assert!(text.contains("<code>Download speed: 6.00 MB/s</code>"));
+        assert!(text.contains("• 下载: 实时 <code>6.00</code> MB/s"));
     }
 }
 
@@ -3409,8 +3428,8 @@ async fn handle_status_command(
     let resource_snapshot = sample_resource_snapshot();
     let (download_speed, upload_speed) = state.runtime_metrics.speed_snapshots();
     let uptime = format_uptime(state.runtime_metrics.uptime());
-    let download_line = format_speed_line("Download", download_speed);
-    let upload_line = format_speed_line("Upload", upload_speed);
+    let download_line = format_speed_line("下载", download_speed);
+    let upload_line = format_speed_line("上传", upload_speed);
     let status_text = build_status_text(
         total_count,
         user_count,
