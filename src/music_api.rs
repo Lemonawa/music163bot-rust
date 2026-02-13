@@ -25,6 +25,8 @@ pub struct MusicApi {
     client: Client,
     pub music_u: Option<String>,
     base_url: String,
+    auto_retry: bool,
+    max_retry_times: u32,
     eapi_cookie: String,
     music_u_cookie: Option<String>,
     song_detail_cache: DashMap<u64, TimedCacheEntry<Arc<SongDetail>>>,
@@ -127,6 +129,8 @@ pub struct SearchSong {
 const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
+const DEFAULT_AUTO_RETRY: bool = true;
+const DEFAULT_MAX_RETRY_TIMES: u32 = 3;
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 const SHORT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
@@ -179,7 +183,15 @@ fn fallback_bitrate_candidates(
 impl MusicApi {
     #[must_use]
     pub fn new(music_u: Option<String>, base_url: String) -> Self {
-        Self::new_with_options(music_u, base_url, 0, 10, 60)
+        Self::new_with_options(
+            music_u,
+            base_url,
+            0,
+            10,
+            60,
+            DEFAULT_AUTO_RETRY,
+            DEFAULT_MAX_RETRY_TIMES,
+        )
     }
 
     #[must_use]
@@ -190,6 +202,8 @@ impl MusicApi {
             config.download_pool_max_idle_per_host,
             config.download_connect_timeout_secs,
             config.download_timeout,
+            config.auto_retry,
+            config.max_retry_times,
         )
     }
 
@@ -199,6 +213,8 @@ impl MusicApi {
         pool_max_idle_per_host: usize,
         connect_timeout_secs: u64,
         request_timeout_secs: u64,
+        auto_retry: bool,
+        max_retry_times: u32,
     ) -> Self {
         let mut client_builder = Client::builder();
 
@@ -228,12 +244,91 @@ impl MusicApi {
             client,
             music_u,
             base_url,
+            auto_retry,
+            max_retry_times,
             eapi_cookie,
             music_u_cookie,
             song_detail_cache: DashMap::new(),
             song_url_cache: DashMap::new(),
             song_lyric_cache: DashMap::new(),
         }
+    }
+
+    fn retry_attempts_for_primary_unavailable(&self) -> u32 {
+        if self.auto_retry {
+            self.max_retry_times.max(1)
+        } else {
+            1
+        }
+    }
+
+    fn should_retry_primary_after_quality_downgrade(
+        &self,
+        primary_bitrate: u64,
+        returned_bitrate: u64,
+    ) -> bool {
+        self.auto_retry
+            && self.max_retry_times > 0
+            && self.music_u.is_some()
+            && returned_bitrate < primary_bitrate
+    }
+
+    async fn retry_primary_bitrate_url(
+        &self,
+        song_id: u64,
+        primary_bitrate: u64,
+        retry_times: u32,
+    ) -> Option<Arc<SongUrl>> {
+        if retry_times == 0 {
+            return None;
+        }
+
+        for attempt in 1..=retry_times {
+            self.song_url_cache
+                .remove(&song_url_cache_key(song_id, primary_bitrate));
+
+            match self.get_song_url_shared(song_id, primary_bitrate).await {
+                Ok(song_url) if song_url.url.is_empty() => {
+                    tracing::warn!(
+                        "Primary bitrate retry {}/{} returned empty URL for music_id {}",
+                        attempt,
+                        retry_times,
+                        song_id
+                    );
+                }
+                Ok(song_url) if song_url.br >= primary_bitrate => {
+                    tracing::info!(
+                        "Primary bitrate recovered on retry {}/{} for music_id {} (br={})",
+                        attempt,
+                        retry_times,
+                        song_id,
+                        song_url.br
+                    );
+                    return Some(song_url);
+                }
+                Ok(song_url) => {
+                    tracing::warn!(
+                        "Primary bitrate retry {}/{} still downgraded for music_id {} (requested {}, got {})",
+                        attempt,
+                        retry_times,
+                        song_id,
+                        primary_bitrate,
+                        song_url.br
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Primary bitrate retry {}/{} failed for music_id {}: {}",
+                        attempt,
+                        retry_times,
+                        song_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        None
     }
 
     fn get_cached_song_detail(&self, song_id: u64) -> Option<Arc<SongDetail>> {
@@ -582,6 +677,7 @@ impl MusicApi {
         })?;
 
         let mut last_error = None;
+        let mut downgraded_url_after_fallback: Option<Arc<SongUrl>> = None;
         let mut fallback_url_start = None;
         for &bitrate in
             fallback_bitrate_candidates(bitrate_candidates, primary_attempted_unavailable)
@@ -600,6 +696,18 @@ impl MusicApi {
 
             match fetched_url {
                 Ok(song_url) if !song_url.url.is_empty() => {
+                    if self
+                        .should_retry_primary_after_quality_downgrade(primary_bitrate, song_url.br)
+                    {
+                        tracing::warn!(
+                            "Detected downgraded bitrate for music_id {} (requested {}, got {}), retrying primary before accepting fallback",
+                            song_id,
+                            primary_bitrate,
+                            song_url.br
+                        );
+                        downgraded_url_after_fallback = Some(song_url);
+                        break;
+                    }
                     if let Some(start) = fallback_url_start {
                         tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
                     }
@@ -624,6 +732,26 @@ impl MusicApi {
             }
         }
 
+        if let Some(downgraded_url) = downgraded_url_after_fallback {
+            if let Some(start) = fallback_url_start {
+                tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
+            }
+
+            if let Some(recovered) = self
+                .retry_primary_bitrate_url(song_id, primary_bitrate, self.max_retry_times)
+                .await
+            {
+                return Ok((Arc::clone(&detail), recovered));
+            }
+
+            tracing::warn!(
+                "Primary bitrate still unavailable after retries for music_id {}. Accepting downgraded bitrate {}",
+                song_id,
+                downgraded_url.br
+            );
+            return Ok((Arc::clone(&detail), downgraded_url));
+        }
+
         if let Some(start) = fallback_url_start {
             tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
         }
@@ -632,21 +760,15 @@ impl MusicApi {
             tracing::debug!(
                 "Retrying primary bitrate {primary_bitrate} after fallback attempts for music_id {song_id}"
             );
-            // The first primary attempt may have cached an empty URL.
-            // Evict it so retry performs a fresh request.
-            self.song_url_cache
-                .remove(&song_url_cache_key(song_id, primary_bitrate));
-            match self.get_song_url_shared(song_id, primary_bitrate).await {
-                Ok(song_url) if !song_url.url.is_empty() => return Ok((detail, song_url)),
-                Ok(_) => tracing::debug!(
-                    "Primary bitrate {primary_bitrate} retry returned empty URL for music_id {song_id}"
-                ),
-                Err(e) => {
-                    tracing::warn!(
-                        "Primary bitrate {primary_bitrate} retry failed for music_id {song_id}: {e}"
-                    );
-                    last_error = Some(e);
-                }
+            if let Some(song_url) = self
+                .retry_primary_bitrate_url(
+                    song_id,
+                    primary_bitrate,
+                    self.retry_attempts_for_primary_unavailable(),
+                )
+                .await
+            {
+                return Ok((detail, song_url));
             }
         }
 
@@ -779,6 +901,37 @@ impl MusicApi {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
         }
 
+        let retry_times = if self.auto_retry {
+            self.max_retry_times
+        } else {
+            0
+        };
+        let total_attempts = retry_times.saturating_add(1);
+        let mut last_error = None;
+
+        for attempt in 1..=total_attempts {
+            match self.download_album_art_data_once(pic_url).await {
+                Ok(data) => return Ok(data),
+                Err(e) => {
+                    if attempt < total_attempts {
+                        tracing::warn!(
+                            "Album art download attempt {}/{} failed for {}: {}",
+                            attempt,
+                            total_attempts,
+                            pic_url,
+                            e
+                        );
+                    }
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        Err(last_error
+            .unwrap_or_else(|| BotError::MusicApi("Album art download failed".to_string())))
+    }
+
+    async fn download_album_art_data_once(&self, pic_url: &str) -> Result<Vec<u8>> {
         // Download the image with common headers
         let request = self.client.get(pic_url);
         let request = Self::apply_image_download_headers(request);
@@ -865,6 +1018,7 @@ mod tests {
     use tokio::task::JoinHandle;
     use tokio::time::Duration;
 
+    use crate::config::Config;
     use crate::error::BotError;
 
     use super::build_http_client;
@@ -1451,6 +1605,47 @@ mod tests {
         assert_eq!(song_url.url, "https://mock.example/primary-retry.mp3");
         assert_eq!(server.calls_for_bitrate(320_000), 2);
         assert_eq!(server.calls_for_bitrate(192_000), 1);
+    }
+
+    #[tokio::test]
+    async fn get_song_detail_and_best_url_retries_primary_before_accepting_downgraded_bitrate() {
+        let song_id = 1005;
+        let server = MockMusicApiServer::start(
+            song_id,
+            HashMap::from([
+                (
+                    999_000,
+                    vec![
+                        MockSongUrlReply::OkEmptyUrl,
+                        MockSongUrlReply::OkWithUrl("https://mock.example/flac-999.flac"),
+                    ],
+                ),
+                (
+                    320_000,
+                    vec![MockSongUrlReply::OkWithUrl(
+                        "https://mock.example/fallback-320.mp3",
+                    )],
+                ),
+            ]),
+        )
+        .await;
+        let mut config = Config::default();
+        config.music_api = server.base_url();
+        config.music_u = Some("cookie".to_string());
+        config.auto_retry = true;
+        config.max_retry_times = 1;
+        let api = MusicApi::new_with_config(&config);
+        api.cache_song_detail(song_id, sample_song_detail(song_id));
+
+        let (_, song_url) = api
+            .get_song_detail_and_best_url(song_id, &[999_000, 320_000, 128_000])
+            .await
+            .expect("primary bitrate should be retried before accepting downgraded bitrate");
+
+        assert_eq!(song_url.br, 999_000);
+        assert_eq!(song_url.url, "https://mock.example/flac-999.flac");
+        assert_eq!(server.calls_for_bitrate(999_000), 2);
+        assert_eq!(server.calls_for_bitrate(320_000), 1);
     }
 
     #[test]
