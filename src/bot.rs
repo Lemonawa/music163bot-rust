@@ -415,9 +415,7 @@ fn sample_current_process_memory_mb(system: &mut System) -> Option<u64> {
 }
 
 fn format_bot_memory(bot_memory_mb: Option<u64>) -> String {
-    bot_memory_mb
-        .map(|mb| format!("{mb} MB"))
-        .unwrap_or_else(|| "n/a".to_string())
+    bot_memory_mb.map_or_else(|| "n/a".to_string(), |mb| format!("{mb} MB"))
 }
 
 fn build_status_text(
@@ -431,23 +429,24 @@ fn build_status_text(
     upload_line: &str,
 ) -> String {
     format!(
-        "Status\n\n\
-Cache:\n\
-Total: {total_count}\n\
-User: {user_count}\n\
-Chat: {chat_count}\n\n\
-Runtime Cache:\n\
-Hits: {hits}\n\
-Misses: {misses}\n\
-Hit Rate: {hit_rate:.2}%\n\n\
-Resources:\n\
-CPU: {cpu:.1}%\n\
-System Memory: {system_used} / {system_total} MB\n\
-Bot Memory: {bot_memory}\n\
-Uptime: {uptime}\n\n\
-Transfer:\n\
-{download_line}\n\
-{upload_line}",
+        "📊 <b>系统状态</b>\n\
+<blockquote>实时运行指标</blockquote>\n\n\
+<b>💾 缓存</b>\n\
+• 总缓存: <b>{total_count}</b>\n\
+• 用户缓存: <code>{user_count}</code>\n\
+• 群组缓存: <code>{chat_count}</code>\n\n\
+<b>⚡ 运行缓存</b>\n\
+• 命中: <b>{hits}</b>\n\
+• 未命中: <code>{misses}</code>\n\
+• 命中率: <b>{hit_rate:.2}%</b>\n\n\
+<b>🖥️ 资源</b>\n\
+• CPU: <b>{cpu:.1}%</b>\n\
+• 系统内存: <code>{system_used} / {system_total} MB</code>\n\
+• Bot 内存: <code>{bot_memory}</code>\n\
+• 运行时长: <b>{uptime}</b>\n\n\
+<b>🚀 传输</b>\n\
+<code>{download_line}</code>\n\
+<code>{upload_line}</code>",
         hits = cache_snapshot.hits,
         misses = cache_snapshot.misses,
         hit_rate = cache_snapshot.hit_rate_percent,
@@ -1007,6 +1006,7 @@ async fn process_music(
     // Send status message and fetch song detail+URL in parallel
     let status_init_start = std::time::Instant::now();
     let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
+    let primary_bitrate = bitrate_candidates.first().copied().unwrap_or(0);
 
     let status_fut = bot
         .send_message(msg.chat.id, "🔄 正在获取歌曲信息...")
@@ -1044,6 +1044,12 @@ async fn process_music(
         return Ok(());
     }
 
+    let cookie_quality_downgraded = is_cookie_quality_downgrade(
+        state.music_api.music_u.is_some(),
+        primary_bitrate,
+        song_url.br,
+    );
+
     let pre_upload_path_start = std::time::Instant::now();
 
     // Update status (fire-and-forget to overlap with download start)
@@ -1068,6 +1074,8 @@ async fn process_music(
         state,
         song_detail,
         &song_url,
+        primary_bitrate,
+        cookie_quality_downgraded,
         &status_msg,
         pre_upload_path_start,
         &artists,
@@ -1090,6 +1098,8 @@ async fn download_and_send_music(
     state: &Arc<BotState>,
     song_detail: Arc<crate::music_api::SongDetail>,
     song_url: &crate::music_api::SongUrl,
+    requested_primary_bitrate: u64,
+    cookie_quality_downgraded: bool,
     status_msg: &Message,
     pre_upload_path_start: std::time::Instant,
     artists: &str,
@@ -1129,7 +1139,7 @@ async fn download_and_send_music(
             if let Some(ref pic_url) = al.pic_url {
                 if pic_url.is_empty() {
                     tracing::warn!("Album art URL is empty for music_id {}", song_id);
-                    (None, None)
+                    (None, None, false)
                 } else {
                     tracing::debug!(
                         "Starting album art download for music_id {} (mode: {:?}), pic_url: {}",
@@ -1166,7 +1176,7 @@ async fn download_and_send_music(
                                     None
                                 };
 
-                                (Some(data), thumbnail_buffer)
+                                (Some(data), thumbnail_buffer, false)
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -1174,20 +1184,20 @@ async fn download_and_send_music(
                                     song_id,
                                     e
                                 );
-                                (None, None)
+                                (None, None, true)
                             }
                         }
                     } else {
-                        (None, None)
+                        (None, None, false)
                     }
                 }
             } else {
                 tracing::warn!("No pic_url found in album for music_id {}", song_id);
-                (None, None)
+                (None, None, false)
             }
         } else {
             tracing::warn!("No album info found for music_id {}", song_id);
-            (None, None)
+            (None, None, false)
         }
     };
 
@@ -1255,13 +1265,34 @@ async fn download_and_send_music(
 
     // Execute downloads and upload permit acquisition in parallel
     // Acquire upload permit early to minimize delay before upload starts
-    let (downloaded_result, (cover_artwork_data, thumbnail_buffer), upload_permit_result) = tokio::join!(
+    let (
+        downloaded_result,
+        (cover_artwork_data, thumbnail_buffer, cover_retry_exhausted),
+        upload_permit_result,
+    ) = tokio::join!(
         audio_future,
         artwork_future,
         acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore))
     );
     let (mut audio_buffer, downloaded) = downloaded_result?;
     let _upload_permit = upload_permit_result?;
+    let should_remove_song_cache = should_remove_song_cache_after_partial_failure(
+        cover_retry_exhausted,
+        cookie_quality_downgraded,
+    );
+
+    if cover_retry_exhausted {
+        tracing::warn!(
+            "Cover fetch failed after retries for music_id {}. Audio will be sent without cover and cache will be removed",
+            song_id
+        );
+    }
+    if cookie_quality_downgraded {
+        tracing::warn!(
+            "Detected downgraded bitrate for music_id {} (requested with MUSIC_U). Audio will still be sent and cache will be removed",
+            song_id
+        );
+    }
 
     tracing::debug!(
         "Audio download completed: {} bytes (mode: {})",
@@ -1542,16 +1573,42 @@ async fn download_and_send_music(
         tracing::warn!("Thumbnail cleanup failed: {}", e);
     }
 
-    // Save to database and update query statistics
-    state.database.save_song_info(&song_info).await?;
-    for signal in collect_maintenance_signals(&state.maintenance_counters, &state.config) {
-        if state.maintenance_tx.send(signal).is_err() {
-            tracing::warn!("Maintenance worker unavailable; skipping signal");
+    // Save to database unless this upload is partially degraded.
+    if should_remove_song_cache {
+        if let Err(e) = state.database.delete_song_by_music_id(song_id as i64).await {
+            tracing::warn!(
+                "Failed to remove partial cache for music_id {} after upload: {}",
+                song_id,
+                e
+            );
+        }
+    } else {
+        state.database.save_song_info(&song_info).await?;
+        for signal in collect_maintenance_signals(&state.maintenance_counters, &state.config) {
+            if state.maintenance_tx.send(signal).is_err() {
+                tracing::warn!("Maintenance worker unavailable; skipping signal");
+            }
         }
     }
 
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
+
+    if cookie_quality_downgraded {
+        let warning_text =
+            build_cookie_expired_warning_text(requested_primary_bitrate, song_url.br);
+        if let Err(e) = bot
+            .send_message(msg.chat.id, warning_text)
+            .reply_parameters(ReplyParameters::new(msg.id))
+            .await
+        {
+            tracing::warn!(
+                "Failed to send cookie-expired warning for music_id {}: {}",
+                song_id,
+                e
+            );
+        }
+    }
 
     Ok(())
 }
@@ -1693,6 +1750,37 @@ fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
         &[999_000, 320_000, 128_000]
     } else {
         &[320_000, 128_000]
+    }
+}
+
+fn is_cookie_quality_downgrade(
+    has_music_u: bool,
+    requested_primary_bitrate: u64,
+    actual_bitrate: u64,
+) -> bool {
+    has_music_u && requested_primary_bitrate > 0 && actual_bitrate < requested_primary_bitrate
+}
+
+fn should_remove_song_cache_after_partial_failure(
+    cover_retry_exhausted: bool,
+    cookie_quality_downgraded: bool,
+) -> bool {
+    cover_retry_exhausted || cookie_quality_downgraded
+}
+
+fn build_cookie_expired_warning_text(
+    requested_primary_bitrate: u64,
+    actual_bitrate: u64,
+) -> String {
+    if requested_primary_bitrate > 0 && actual_bitrate > 0 {
+        format!(
+            "⚠️ 检测到 MUSIC_U Cookie 可能已失效，音质已从 {} kbps 降至 {} kbps。\n已发送可用音频，请尽快更新 Cookie。",
+            requested_primary_bitrate / 1000,
+            actual_bitrate / 1000
+        )
+    } else {
+        "⚠️ 检测到 MUSIC_U Cookie 可能已失效，当前音质已降级。\n已发送可用音频，请尽快更新 Cookie。"
+            .to_string()
     }
 }
 
@@ -2625,6 +2713,34 @@ mod tests {
     }
 
     #[test]
+    fn cookie_quality_downgrade_detects_only_when_music_u_present() {
+        assert!(super::is_cookie_quality_downgrade(true, 999_000, 320_000));
+        assert!(!super::is_cookie_quality_downgrade(false, 999_000, 320_000));
+        assert!(!super::is_cookie_quality_downgrade(true, 999_000, 999_000));
+    }
+
+    #[test]
+    fn partial_failure_should_remove_song_cache() {
+        assert!(super::should_remove_song_cache_after_partial_failure(
+            true, false
+        ));
+        assert!(super::should_remove_song_cache_after_partial_failure(
+            false, true
+        ));
+        assert!(!super::should_remove_song_cache_after_partial_failure(
+            false, false
+        ));
+    }
+
+    #[test]
+    fn cookie_expired_warning_text_contains_requested_and_actual_bitrate() {
+        let text = super::build_cookie_expired_warning_text(999_000, 320_000);
+        assert!(text.contains("Cookie"));
+        assert!(text.contains("999"));
+        assert!(text.contains("320"));
+    }
+
+    #[test]
     fn spawn_gate_identifies_supported_messages() {
         assert!(super::should_spawn_message_task("/start"));
         assert!(super::should_spawn_message_task(
@@ -2997,9 +3113,14 @@ mod tests {
             "Download speed: 6.00 MB/s",
             "Upload speed: 2.00 MB/s",
         );
-        assert!(text.contains("Cache:\nTotal: 100\nUser: 20\nChat: 8"));
-        assert!(text.contains("System Memory: 512 / 1024 MB"));
-        assert!(text.contains("Bot Memory: 12 MB"));
+        assert!(text.contains("<b>系统状态</b>"));
+        assert!(text.contains("<b>💾 缓存</b>"));
+        assert!(text.contains("• 总缓存: <b>100</b>"));
+        assert!(text.contains("• 用户缓存: <code>20</code>"));
+        assert!(text.contains("• 群组缓存: <code>8</code>"));
+        assert!(text.contains("• 系统内存: <code>512 / 1024 MB</code>"));
+        assert!(text.contains("• Bot 内存: <code>12 MB</code>"));
+        assert!(text.contains("<code>Download speed: 6.00 MB/s</code>"));
     }
 }
 
@@ -3302,6 +3423,7 @@ async fn handle_status_command(
     );
 
     bot.send_message(msg.chat.id, status_text)
+        .parse_mode(ParseMode::Html)
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
