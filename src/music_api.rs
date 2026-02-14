@@ -146,6 +146,16 @@ const DEFAULT_AUTO_RETRY: bool = true;
 const DEFAULT_MAX_RETRY_TIMES: u32 = 3;
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 const SHORT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+const MEDIA_URL_REWRITE_RULES: [(&str, &str); 8] = [
+    ("https://m8.", "https://m7."),
+    ("https://m801.", "https://m701."),
+    ("https://m804.", "https://m701."),
+    ("https://m704.", "https://m701."),
+    ("http://m8.", "http://m7."),
+    ("http://m801.", "http://m701."),
+    ("http://m804.", "http://m701."),
+    ("http://m704.", "http://m701."),
+];
 
 #[derive(Debug, Clone)]
 struct TimedCacheEntry<T> {
@@ -191,6 +201,10 @@ fn fallback_bitrate_candidates(
     } else {
         bitrate_candidates
     }
+}
+
+fn song_url_has_download_url(song_url: &SongUrl) -> bool {
+    !song_url.url.is_empty()
 }
 
 impl MusicApi {
@@ -276,6 +290,14 @@ impl MusicApi {
         }
     }
 
+    fn album_art_total_attempts(&self) -> u32 {
+        if self.auto_retry {
+            self.max_retry_times.saturating_add(1)
+        } else {
+            1
+        }
+    }
+
     fn should_retry_primary_after_quality_downgrade(
         &self,
         primary_bitrate: u64,
@@ -302,7 +324,7 @@ impl MusicApi {
                 .remove(&song_url_cache_key(song_id, primary_bitrate));
 
             match self.get_song_url_shared(song_id, primary_bitrate).await {
-                Ok(song_url) if song_url.url.is_empty() => {
+                Ok(song_url) if !song_url_has_download_url(&song_url) => {
                     tracing::warn!(
                         "Primary bitrate retry {}/{} returned empty URL for music_id {}",
                         attempt,
@@ -378,6 +400,21 @@ impl MusicApi {
             self.song_url_cache.remove(&key);
             None
         }
+    }
+
+    fn get_first_cached_song_url(
+        &self,
+        song_id: u64,
+        bitrate_candidates: &[u64],
+    ) -> Option<Arc<SongUrl>> {
+        for &bitrate in bitrate_candidates {
+            if let Some(song_url) = self.get_cached_song_url(song_id, bitrate)
+                && song_url_has_download_url(&song_url)
+            {
+                return Some(song_url);
+            }
+        }
+        None
     }
 
     #[cfg(test)]
@@ -755,14 +792,10 @@ impl MusicApi {
         };
 
         let mut cached_detail = self.get_cached_song_detail(song_id);
-        if let Some(ref detail) = cached_detail {
-            for &bitrate in bitrate_candidates {
-                if let Some(song_url) = self.get_cached_song_url(song_id, bitrate)
-                    && !song_url.url.is_empty()
-                {
-                    return Ok((Arc::clone(detail), song_url));
-                }
-            }
+        if let Some(ref detail) = cached_detail
+            && let Some(song_url) = self.get_first_cached_song_url(song_id, bitrate_candidates)
+        {
+            return Ok((Arc::clone(detail), song_url));
         }
 
         let mut primary_url = self.get_cached_song_url(song_id, primary_bitrate);
@@ -796,7 +829,9 @@ impl MusicApi {
             }
             if let Some(result) = url_result {
                 match result {
-                    Ok(song_url) if !song_url.url.is_empty() => primary_url = Some(song_url),
+                    Ok(song_url) if song_url_has_download_url(&song_url) => {
+                        primary_url = Some(song_url);
+                    }
                     Ok(_) => {
                         primary_attempted_unavailable = true;
                         tracing::debug!(
@@ -841,7 +876,7 @@ impl MusicApi {
             };
 
             match fetched_url {
-                Ok(song_url) if !song_url.url.is_empty() => {
+                Ok(song_url) if song_url_has_download_url(&song_url) => {
                     if self
                         .should_retry_primary_after_quality_downgrade(primary_bitrate, song_url.br)
                     {
@@ -1047,12 +1082,7 @@ impl MusicApi {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
         }
 
-        let retry_times = if self.auto_retry {
-            self.max_retry_times
-        } else {
-            0
-        };
-        let total_attempts = retry_times.saturating_add(1);
+        let total_attempts = self.album_art_total_attempts();
         let mut last_error = None;
 
         for attempt in 1..=total_attempts {
@@ -1109,28 +1139,12 @@ fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client>
 }
 
 fn rewrite_media_url(url: &str) -> Cow<'_, str> {
-    // The host prefixes (m8., m801., m804., m704.) are mutually exclusive,
-    // so we check once and do a single replacement instead of chaining
-    // four .replace() calls that each allocate a new String.
-    if let Some(rest) = url.strip_prefix("https://m8.") {
-        Cow::Owned(format!("https://m7.{rest}"))
-    } else if let Some(rest) = url.strip_prefix("https://m801.") {
-        Cow::Owned(format!("https://m701.{rest}"))
-    } else if let Some(rest) = url.strip_prefix("https://m804.") {
-        Cow::Owned(format!("https://m701.{rest}"))
-    } else if let Some(rest) = url.strip_prefix("https://m704.") {
-        Cow::Owned(format!("https://m701.{rest}"))
-    } else if let Some(rest) = url.strip_prefix("http://m8.") {
-        Cow::Owned(format!("http://m7.{rest}"))
-    } else if let Some(rest) = url.strip_prefix("http://m801.") {
-        Cow::Owned(format!("http://m701.{rest}"))
-    } else if let Some(rest) = url.strip_prefix("http://m804.") {
-        Cow::Owned(format!("http://m701.{rest}"))
-    } else if let Some(rest) = url.strip_prefix("http://m704.") {
-        Cow::Owned(format!("http://m701.{rest}"))
-    } else {
-        Cow::Borrowed(url)
+    for (from_prefix, to_prefix) in MEDIA_URL_REWRITE_RULES {
+        if let Some(rest) = url.strip_prefix(from_prefix) {
+            return Cow::Owned(format!("{to_prefix}{rest}"));
+        }
     }
+    Cow::Borrowed(url)
 }
 
 pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {

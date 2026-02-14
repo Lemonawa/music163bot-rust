@@ -242,17 +242,31 @@ impl AudioBuffer {
 
     /// Finish writing and flush any buffers
     pub async fn finish(&mut self) -> Result<()> {
-        match self {
-            Self::Disk { file, .. } => {
-                if let Some(f) = file {
-                    f.flush().await.context("Failed to flush file")?;
-                }
-            }
-            Self::Memory { .. } => {
-                // Nothing to flush for memory buffer
-            }
+        if let Self::Disk { file, .. } = self
+            && let Some(f) = file
+        {
+            f.flush().await.context("Failed to flush file")?;
         }
         Ok(())
+    }
+
+    async fn disk_size(path: &Path, written_bytes: u64) -> u64 {
+        if written_bytes > 0 {
+            written_bytes
+        } else {
+            tokio::fs::metadata(path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0)
+        }
+    }
+
+    fn disk_size_fast(path: &Path, written_bytes: u64) -> u64 {
+        if written_bytes > 0 {
+            written_bytes
+        } else {
+            std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+        }
     }
 
     /// Get the current size of the buffer (async to avoid blocking)
@@ -262,16 +276,7 @@ impl AudioBuffer {
                 path,
                 written_bytes,
                 ..
-            } => {
-                if *written_bytes > 0 {
-                    *written_bytes
-                } else {
-                    tokio::fs::metadata(path)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0)
-                }
-            }
+            } => Self::disk_size(path, *written_bytes).await,
             Self::Memory { data, .. } => data.len() as u64,
         }
     }
@@ -286,13 +291,7 @@ impl AudioBuffer {
                 path,
                 written_bytes,
                 ..
-            } => {
-                if *written_bytes > 0 {
-                    *written_bytes
-                } else {
-                    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-                }
-            }
+            } => Self::disk_size_fast(path, *written_bytes),
             Self::Memory { data, .. } => data.len() as u64,
         }
     }

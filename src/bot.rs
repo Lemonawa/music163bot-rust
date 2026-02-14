@@ -702,15 +702,13 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
             let _permit = permit;
 
             // Handle commands
-            if text.starts_with('/') {
+            if is_command_text(&text) {
                 if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
                     tracing::error!("Error handling command: {}", e);
                 }
             }
             // Handle music URLs
-            else if (text.contains("music.163.com")
-                || text.contains("163cn.tv")
-                || text.contains("163cn.link"))
+            else if contains_music_link_hint(&text)
                 && let Err(e) = handle_music_url(&bot, &msg, &state, &text).await
             {
                 tracing::error!("Error handling music URL: {}", e);
@@ -726,26 +724,11 @@ async fn handle_command(
     state: &Arc<BotState>,
     text: &str,
 ) -> ResponseResult<()> {
-    let (command_part, args) = if let Some((cmd, rest)) = text.split_once(char::is_whitespace) {
-        (cmd, Some(rest.trim_start().to_string()))
-    } else {
-        (text, None)
-    };
-    // Filter out empty args (whitespace-only after command)
-    let args = args.filter(|a| !a.is_empty());
-    let mut command = command_part.trim_start_matches('/');
-
-    // Remove bot username if present (e.g., "/start@BotName" -> "start")
-    if let Some(at_pos) = command.find('@') {
-        command = &command[..at_pos];
-    }
+    let (command, args) = parse_command_and_args(text);
 
     // Only log music/search commands and admin commands
-    match command {
-        "music" | "netease" | "search" | "rmcache" | "clearallcache" => {
-            tracing::info!("Command: /{} from chat {}", command, msg.chat.id);
-        }
-        _ => {} // Don't log about/start/status commands
+    if should_log_command(command) {
+        tracing::info!("Command: /{} from chat {}", command, msg.chat.id);
     }
 
     match command {
@@ -758,13 +741,8 @@ async fn handle_command(
         "status" => handle_status_command(bot, msg, state).await,
         "rmcache" => handle_rmcache_command(bot, msg, state, args).await,
         "clearallcache" => {
-            // Check if this is a confirmation
-            if let Some(ref arg) = args {
-                if arg.trim() == "confirm" {
-                    handle_clearallcache_confirm_command(bot, msg, state).await
-                } else {
-                    handle_clearallcache_command(bot, msg, state).await
-                }
+            if is_clearallcache_confirm(args.as_deref()) {
+                handle_clearallcache_confirm_command(bot, msg, state).await
             } else {
                 handle_clearallcache_command(bot, msg, state).await
             }
@@ -774,6 +752,20 @@ async fn handle_command(
             Ok(())
         }
     }
+}
+
+fn parse_command_and_args(text: &str) -> (&str, Option<String>) {
+    let (command_part, args) = if let Some((cmd, rest)) = text.split_once(char::is_whitespace) {
+        (cmd, Some(rest.trim_start().to_string()))
+    } else {
+        (text, None)
+    };
+    let args = args.filter(|arg| !arg.is_empty());
+    let command = command_part.trim_start_matches('/');
+    let command = command
+        .split_once('@')
+        .map_or(command, |(without_username, _)| without_username);
+    (command, args)
 }
 
 fn parse_start_music_id(args: Option<&str>) -> Option<u64> {
@@ -869,9 +861,7 @@ async fn handle_music_command(
     let args = args.unwrap_or_default();
 
     if args.is_empty() {
-        bot.send_message(msg.chat.id, "请输入歌曲ID或歌曲关键词")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+        send_reply_text(bot, msg, "请输入歌曲ID或歌曲关键词").await?;
         return Ok(());
     }
 
@@ -886,16 +876,12 @@ async fn handle_music_command(
             if let Some(song) = songs.first() {
                 process_music(bot, msg, state, song.id).await
             } else {
-                bot.send_message(msg.chat.id, "未找到相关歌曲")
-                    .reply_parameters(ReplyParameters::new(msg.id))
-                    .await?;
+                send_reply_text(bot, msg, "未找到相关歌曲").await?;
                 Ok(())
             }
         }
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("搜索失败: {e}"))
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .await?;
+            send_reply_text(bot, msg, format!("搜索失败: {e}")).await?;
             Ok(())
         }
     }
@@ -1325,24 +1311,9 @@ async fn download_and_send_music(
             "disk"
         }
     );
-    let cover_status = if download_cover {
-        if cover_artwork_data.is_some() {
-            "Available"
-        } else {
-            "None"
-        }
-    } else {
-        "Skipped"
-    };
-    let thumbnail_status = if download_thumbnail {
-        if thumbnail_buffer.is_some() {
-            "Available"
-        } else {
-            "None"
-        }
-    } else {
-        "Skipped"
-    };
+    let cover_status = resource_availability_status(download_cover, cover_artwork_data.is_some());
+    let thumbnail_status =
+        resource_availability_status(download_thumbnail, thumbnail_buffer.is_some());
     tracing::debug!(
         "Cover download result - Cover: {}, Thumbnail: {}",
         cover_status,
@@ -1351,18 +1322,16 @@ async fn download_and_send_music(
 
     // Validate file size using downloaded byte count
     if downloaded == 0 {
-        if let Err(e) = audio_buffer.cleanup().await {
-            tracing::warn!("Audio buffer cleanup failed: {}", e);
-        }
+        cleanup_audio_buffer(audio_buffer).await;
+        cleanup_thumbnail_buffer(thumbnail_buffer).await;
         bot.edit_message_text(msg.chat.id, status_msg.id, "下载失败: 文件为空")
             .await?;
         return Ok(());
     }
 
     if downloaded < 1024 {
-        if let Err(e) = audio_buffer.cleanup().await {
-            tracing::warn!("Audio buffer cleanup failed: {}", e);
-        }
+        cleanup_audio_buffer(audio_buffer).await;
+        cleanup_thumbnail_buffer(thumbnail_buffer).await;
         bot.edit_message_text(
             msg.chat.id,
             status_msg.id,
@@ -1461,14 +1430,8 @@ async fn download_and_send_music(
     let keyboard = create_music_keyboard(song_id, &song_info.song_name, &song_info.song_artists);
 
     if file_size == 0 {
-        if let Err(e) = audio_buffer.cleanup().await {
-            tracing::warn!("Audio buffer cleanup failed: {}", e);
-        }
-        if let Some(thumb_buf) = thumbnail_buffer
-            && let Err(e) = thumb_buf.cleanup().await
-        {
-            tracing::warn!("Thumbnail cleanup failed: {}", e);
-        }
+        cleanup_audio_buffer(audio_buffer).await;
+        cleanup_thumbnail_buffer(thumbnail_buffer).await;
         return Err(anyhow::anyhow!("Audio file is empty after processing").into());
     }
 
@@ -1574,26 +1537,14 @@ async fn download_and_send_music(
         );
         tracing::warn!("Upload failed: {}", e);
 
-        if let Err(cleanup_err) = audio_buffer.cleanup().await {
-            tracing::warn!("Audio buffer cleanup failed: {}", cleanup_err);
-        }
-        if let Some(thumb_buf) = thumbnail_buffer
-            && let Err(cleanup_err) = thumb_buf.cleanup().await
-        {
-            tracing::warn!("Thumbnail cleanup failed: {}", cleanup_err);
-        }
+        cleanup_audio_buffer(audio_buffer).await;
+        cleanup_thumbnail_buffer(thumbnail_buffer).await;
 
         return Err(e);
     }
 
-    if let Err(e) = audio_buffer.cleanup().await {
-        tracing::warn!("Audio buffer cleanup failed: {}", e);
-    }
-    if let Some(thumb_buf) = thumbnail_buffer
-        && let Err(e) = thumb_buf.cleanup().await
-    {
-        tracing::warn!("Thumbnail cleanup failed: {}", e);
-    }
+    cleanup_audio_buffer(audio_buffer).await;
+    cleanup_thumbnail_buffer(thumbnail_buffer).await;
 
     // Save to database unless this upload is partially degraded.
     if should_remove_song_cache {
@@ -1719,6 +1670,15 @@ fn is_admin(msg: &Message, config: &Config) -> bool {
     config.bot_admin.contains(&user_id)
 }
 
+async fn ensure_admin(bot: &Bot, msg: &Message, config: &Config) -> ResponseResult<bool> {
+    if is_admin(msg, config) {
+        Ok(true)
+    } else {
+        send_reply_text(bot, msg, "❌ 该命令仅限管理员使用").await?;
+        Ok(false)
+    }
+}
+
 fn is_official_telegram_api(api_url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(api_url) else {
         return false;
@@ -1814,11 +1774,43 @@ fn build_cookie_expired_warning_text(
     }
 }
 
-fn should_spawn_message_task(text: &str) -> bool {
+const MESSAGE_TASK_LINK_HINTS: [&str; 3] = ["music.163.com", "163cn.tv", "163cn.link"];
+const MUSIC_ID_EXTRACT_FAILED_TEXT: &str = "无法从链接中提取音乐ID";
+
+fn contains_music_link_hint(text: &str) -> bool {
+    MESSAGE_TASK_LINK_HINTS
+        .iter()
+        .any(|hint| text.contains(hint))
+}
+
+fn is_spawnable_command_text(text: &str) -> bool {
+    text.trim_start().starts_with('/')
+}
+
+fn is_command_text(text: &str) -> bool {
     text.starts_with('/')
-        || text.contains("music.163.com")
-        || text.contains("163cn.tv")
-        || text.contains("163cn.link")
+}
+
+fn should_spawn_message_task(text: &str) -> bool {
+    is_spawnable_command_text(text) || contains_music_link_hint(text)
+}
+
+fn should_log_command(command: &str) -> bool {
+    matches!(
+        command,
+        "music" | "netease" | "search" | "rmcache" | "clearallcache"
+    )
+}
+
+fn is_clearallcache_confirm(args: Option<&str>) -> bool {
+    matches!(args.map(str::trim), Some("confirm"))
+}
+
+async fn send_reply_text(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+    bot.send_message(msg.chat.id, text)
+        .reply_parameters(ReplyParameters::new(msg.id))
+        .await?;
+    Ok(())
 }
 
 fn message_task_limit(max_concurrent_downloads: u32) -> usize {
@@ -1832,15 +1824,7 @@ fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
 }
 
 fn should_refresh_upload_client(upload_state: &UploadClientState, reuse_limit: u32) -> bool {
-    if upload_state.bot.is_none() {
-        return true;
-    }
-
-    if reuse_limit == 0 {
-        return false;
-    }
-
-    upload_state.reuse_count >= reuse_limit
+    upload_state.bot.is_none() || (reuse_limit != 0 && upload_state.reuse_count >= reuse_limit)
 }
 
 fn collect_maintenance_signals(
@@ -1848,19 +1832,21 @@ fn collect_maintenance_signals(
     config: &Config,
 ) -> Vec<MaintenanceSignal> {
     let mut signals = Vec::with_capacity(2);
-
-    if MaintenanceCounters::should_run(
-        &counters.db_analyze_requests,
-        config.db_analyze_interval_requests,
-    ) {
-        signals.push(MaintenanceSignal::AnalyzeDb);
-    }
-
-    if MaintenanceCounters::should_run(
-        &counters.memory_release_requests,
-        config.memory_release_interval_requests,
-    ) {
-        signals.push(MaintenanceSignal::ReleaseMemory);
+    for (counter, interval, signal) in [
+        (
+            &counters.db_analyze_requests,
+            config.db_analyze_interval_requests,
+            MaintenanceSignal::AnalyzeDb,
+        ),
+        (
+            &counters.memory_release_requests,
+            config.memory_release_interval_requests,
+            MaintenanceSignal::ReleaseMemory,
+        ),
+    ] {
+        if MaintenanceCounters::should_run(counter, interval) {
+            signals.push(signal);
+        }
     }
 
     signals
@@ -1947,6 +1933,28 @@ fn append_search_result_line(results: &mut String, index: usize, song_name: &str
 
     if let Err(e) = writeln!(results, "{index}.「{song_name}」 - {artists}") {
         tracing::error!("Failed to format search result line: {}", e);
+    }
+}
+
+fn resource_availability_status(download_enabled: bool, is_available: bool) -> &'static str {
+    match (download_enabled, is_available) {
+        (false, _) => "Skipped",
+        (true, true) => "Available",
+        (true, false) => "None",
+    }
+}
+
+async fn cleanup_audio_buffer(buffer: AudioBuffer) {
+    if let Err(e) = buffer.cleanup().await {
+        tracing::warn!("Audio buffer cleanup failed: {}", e);
+    }
+}
+
+async fn cleanup_thumbnail_buffer(buffer: Option<ThumbnailBuffer>) {
+    if let Some(thumbnail) = buffer
+        && let Err(e) = thumbnail.cleanup().await
+    {
+        tracing::warn!("Thumbnail cleanup failed: {}", e);
     }
 }
 
@@ -2807,6 +2815,7 @@ mod tests {
     #[test]
     fn spawn_gate_identifies_supported_messages() {
         assert!(super::should_spawn_message_task("/start"));
+        assert!(super::should_spawn_message_task("   /start"));
         assert!(super::should_spawn_message_task(
             "https://music.163.com/song?id=1"
         ));
@@ -3120,6 +3129,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_command_and_args_handles_bot_mention_and_whitespace() {
+        let (cmd, args) = super::parse_command_and_args("/search@mybot    hello world");
+        assert_eq!(cmd, "search");
+        assert_eq!(args.as_deref(), Some("hello world"));
+
+        let (cmd, args) = super::parse_command_and_args("/status@mybot");
+        assert_eq!(cmd, "status");
+        assert_eq!(args, None);
+
+        let (cmd, args) = super::parse_command_and_args("/start   ");
+        assert_eq!(cmd, "start");
+        assert_eq!(args, None);
+    }
+
+    #[test]
     fn runtime_metrics_cache_hit_rate_tracks_counts() {
         let metrics = super::RuntimeMetrics::new();
         metrics.record_cache_hit();
@@ -3218,9 +3242,7 @@ async fn handle_music_url(
     }
 
     let Some(url) = extract_first_url(text) else {
-        bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+        send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
         return Ok(());
     };
 
@@ -3228,9 +3250,7 @@ async fn handle_music_url(
         Ok(final_url) => final_url.to_string(),
         Err(e) => {
             tracing::warn!("Failed to resolve share link: {}", e);
-            bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .await?;
+            send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
             return Ok(());
         }
     };
@@ -3238,9 +3258,7 @@ async fn handle_music_url(
     if let Some(music_id) = parse_music_id(&final_url) {
         process_music(bot, msg, state, music_id).await
     } else {
-        bot.send_message(msg.chat.id, "无法从链接中提取音乐ID")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+        send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
         Ok(())
     }
 }
@@ -3254,9 +3272,7 @@ async fn handle_search_command(
     let keyword = match args {
         Some(kw) if !kw.is_empty() => kw,
         _ => {
-            bot.send_message(msg.chat.id, "请输入搜索关键词")
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .await?;
+            send_reply_text(bot, msg, "请输入搜索关键词").await?;
             return Ok(());
         }
     };
@@ -3345,9 +3361,7 @@ async fn handle_lyric_command(
     let args = args.unwrap_or_default();
 
     if args.is_empty() {
-        bot.send_message(msg.chat.id, "请输入歌曲ID或关键词")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+        send_reply_text(bot, msg, "请输入歌曲ID或关键词").await?;
         return Ok(());
     }
 
@@ -3359,16 +3373,12 @@ async fn handle_lyric_command(
                 if let Some(song) = songs.first() {
                     song.id
                 } else {
-                    bot.send_message(msg.chat.id, "未找到相关歌曲")
-                        .reply_parameters(ReplyParameters::new(msg.id))
-                        .await?;
+                    send_reply_text(bot, msg, "未找到相关歌曲").await?;
                     return Ok(());
                 }
             }
             Err(e) => {
-                bot.send_message(msg.chat.id, format!("搜索失败: {e}"))
-                    .reply_parameters(ReplyParameters::new(msg.id))
-                    .await?;
+                send_reply_text(bot, msg, format!("搜索失败: {e}")).await?;
                 return Ok(());
             }
         }
@@ -3528,21 +3538,18 @@ async fn handle_rmcache_command(
         state.config.bot_admin
     );
 
-    if !is_admin(msg, &state.config) {
-        bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+    if !ensure_admin(bot, msg, &state.config).await? {
         return Ok(());
     }
 
     let args = args.unwrap_or_default();
 
     if args.is_empty() {
-        bot.send_message(
-            msg.chat.id,
+        send_reply_text(
+            bot,
+            msg,
             "请输入要删除缓存的歌曲ID\n\n用法: `/rmcache <音乐ID>`",
         )
-        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
         return Ok(());
     }
@@ -3555,33 +3562,25 @@ async fn handle_rmcache_command(
             match state.database.delete_song_by_music_id(music_id_i64).await {
                 Ok(deleted) => {
                     if deleted {
-                        bot.send_message(
-                            msg.chat.id,
+                        send_reply_text(
+                            bot,
+                            msg,
                             format!("✅ 已删除歌曲缓存: {}", song_info.song_name),
                         )
-                        .reply_parameters(ReplyParameters::new(msg.id))
                         .await?;
                     } else {
-                        bot.send_message(msg.chat.id, "歌曲未缓存")
-                            .reply_parameters(ReplyParameters::new(msg.id))
-                            .await?;
+                        send_reply_text(bot, msg, "歌曲未缓存").await?;
                     }
                 }
                 Err(e) => {
-                    bot.send_message(msg.chat.id, format!("删除缓存失败: {e}"))
-                        .reply_parameters(ReplyParameters::new(msg.id))
-                        .await?;
+                    send_reply_text(bot, msg, format!("删除缓存失败: {e}")).await?;
                 }
             }
         } else {
-            bot.send_message(msg.chat.id, "歌曲未缓存")
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .await?;
+            send_reply_text(bot, msg, "歌曲未缓存").await?;
         }
     } else {
-        bot.send_message(msg.chat.id, "无效的歌曲ID")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+        send_reply_text(bot, msg, "无效的歌曲ID").await?;
     }
 
     Ok(())
@@ -3601,10 +3600,7 @@ async fn handle_clearallcache_command(
         state.config.bot_admin
     );
 
-    if !is_admin(msg, &state.config) {
-        bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+    if !ensure_admin(bot, msg, &state.config).await? {
         return Ok(());
     }
 
@@ -3625,10 +3621,7 @@ async fn handle_clearallcache_confirm_command(
     // Check if user is admin
     let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
 
-    if !is_admin(msg, &state.config) {
-        bot.send_message(msg.chat.id, "❌ 该命令仅限管理员使用")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+    if !ensure_admin(bot, msg, &state.config).await? {
         return Ok(());
     }
 

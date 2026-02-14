@@ -135,13 +135,10 @@ impl UploadLogLevel {
 }
 
 fn parse_bool_like(value: &str) -> Option<bool> {
-    let trimmed = value.trim();
-    if trimmed.eq_ignore_ascii_case("true") {
-        Some(true)
-    } else if trimmed.eq_ignore_ascii_case("false") {
-        Some(false)
-    } else {
-        None
+    match value.trim() {
+        v if v.eq_ignore_ascii_case("true") => Some(true),
+        v if v.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
     }
 }
 
@@ -160,6 +157,13 @@ fn apply_bool_field(value: &str, target: &mut bool, key: &str) {
     } else {
         tracing::warn!("Invalid {key} '{value}', using default {target}");
     }
+}
+
+fn parse_admin_list(admins: &str) -> Vec<i64> {
+    admins
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,17 +340,11 @@ impl Config {
         }
 
         if let Some(admins) = config_map.get("bot.botadmin") {
-            config.bot_admin = admins
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
+            config.bot_admin = parse_admin_list(admins);
             tracing::info!("Loaded bot admins: {:?}", config.bot_admin);
         } else if let Some(admins) = config_map.get("bot.admin") {
             // Support alternative config key "bot.admin"
-            config.bot_admin = admins
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
+            config.bot_admin = parse_admin_list(admins);
             tracing::info!("Loaded bot admins (from bot.admin): {:?}", config.bot_admin);
         }
 

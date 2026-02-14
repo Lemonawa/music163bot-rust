@@ -3,12 +3,13 @@ use std::path::Path;
 use regex::Regex;
 
 /// Global regex patterns for URL parsing
-static SONG_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"music\.163\.com/.*?song.*?[?&]id=(\d+)").unwrap());
+static SONG_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"music\.163\.com/.*?song.*?[?&]id=(\d+)").expect("song id regex should be valid")
+});
 
 static SHARE_LINK_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"(http|https)://[\w\-_]+(\.[\w\-_]+)+([\w\-.,@?^=%&:/~+#]*[\w\-@?^=%&/~+#])?")
-        .unwrap()
+        .expect("share link regex should be valid")
 });
 
 fn parse_direct_numeric_id(text: &str) -> Option<u64> {
@@ -60,6 +61,14 @@ fn extract_first_number(text: &str) -> Option<u64> {
     text[start..start + len].parse::<u64>().ok()
 }
 
+fn parse_music_id_from_share_url(url: &str) -> Option<u64> {
+    if !url.contains("song") {
+        return None;
+    }
+
+    extract_music_id_from_canonical_song_url(url).or_else(|| extract_first_number(url))
+}
+
 /// Extract music ID from text
 pub fn parse_music_id(text: &str) -> Option<u64> {
     if let Some(id) = parse_direct_numeric_id(text) {
@@ -79,15 +88,7 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
 
     // Try to extract from share link
     if let Some(url_match) = SHARE_LINK_REGEX.find(text) {
-        let url = url_match.as_str();
-        if url.contains("song") {
-            if let Some(id) = extract_music_id_from_canonical_song_url(url) {
-                return Some(id);
-            }
-            if let Some(id) = extract_first_number(url) {
-                return Some(id);
-            }
-        }
+        return parse_music_id_from_share_url(url_match.as_str());
     }
 
     None
@@ -102,8 +103,7 @@ pub fn extract_first_url(text: &str) -> Option<String> {
 
 /// Check if directory exists, create if not
 pub fn ensure_dir(path: &str) -> std::io::Result<()> {
-    let path = Path::new(path);
-    std::fs::create_dir_all(path)?;
+    std::fs::create_dir_all(Path::new(path))?;
     Ok(())
 }
 

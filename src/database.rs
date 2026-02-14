@@ -118,33 +118,7 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
 
-        match row {
-            Some(row) => {
-                let song_info = SongInfo {
-                    id: row.get("id"),
-                    music_id: row.get("music_id"),
-                    song_name: row.get("song_name"),
-                    song_artists: row.get("song_artists"),
-                    song_album: row.get("song_album"),
-                    file_ext: row.get("file_ext"),
-                    music_size: row.get("music_size"),
-                    pic_size: row.get("pic_size"),
-                    emb_pic_size: row.get("emb_pic_size"),
-                    bit_rate: row.get("bit_rate"),
-                    duration: row.get("duration"),
-                    file_id: row.get("file_id"),
-                    thumb_file_id: row.get("thumb_file_id"),
-                    from_user_id: row.get("from_user_id"),
-                    from_user_name: row.get("from_user_name"),
-                    from_chat_id: row.get("from_chat_id"),
-                    from_chat_name: row.get("from_chat_name"),
-                    created_at: decode_sqlite_datetime(&row, "created_at"),
-                    updated_at: decode_sqlite_datetime(&row, "updated_at"),
-                };
-                Ok(Some(song_info))
-            }
-            None => Ok(None),
-        }
+        Ok(row.as_ref().map(map_song_info_row))
     }
 
     /// Save or update song info
@@ -326,6 +300,30 @@ fn decode_sqlite_datetime(row: &SqliteRow, column: &'static str) -> DateTime<Utc
         .ok()
         .and_then(|value| parse_sqlite_timestamp(&value))
         .unwrap_or_else(Utc::now)
+}
+
+fn map_song_info_row(row: &SqliteRow) -> SongInfo {
+    SongInfo {
+        id: row.get("id"),
+        music_id: row.get("music_id"),
+        song_name: row.get("song_name"),
+        song_artists: row.get("song_artists"),
+        song_album: row.get("song_album"),
+        file_ext: row.get("file_ext"),
+        music_size: row.get("music_size"),
+        pic_size: row.get("pic_size"),
+        emb_pic_size: row.get("emb_pic_size"),
+        bit_rate: row.get("bit_rate"),
+        duration: row.get("duration"),
+        file_id: row.get("file_id"),
+        thumb_file_id: row.get("thumb_file_id"),
+        from_user_id: row.get("from_user_id"),
+        from_user_name: row.get("from_user_name"),
+        from_chat_id: row.get("from_chat_id"),
+        from_chat_name: row.get("from_chat_name"),
+        created_at: decode_sqlite_datetime(row, "created_at"),
+        updated_at: decode_sqlite_datetime(row, "updated_at"),
+    }
 }
 
 #[cfg(test)]
