@@ -24,7 +24,7 @@ use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode, UploadLogLevel};
 use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
-use crate::music_api::{MusicApi, format_artists};
+use crate::music_api::{MusicApi, MusicUCookieHealth, format_artists};
 use crate::utils::{
     clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps, update_peak,
 };
@@ -1044,11 +1044,33 @@ async fn process_music(
         return Ok(());
     }
 
-    let cookie_quality_downgraded = is_cookie_quality_downgrade(
-        state.music_api.music_u.is_some(),
-        primary_bitrate,
-        song_url.br,
-    );
+    let has_music_u = state.music_api.music_u.is_some();
+    let should_probe_cookie = should_probe_cookie_health(has_music_u, primary_bitrate, song_url.br);
+    let cookie_quality_downgraded = if should_probe_cookie {
+        match state.music_api.probe_music_u_health().await {
+            MusicUCookieHealth::Unhealthy => true,
+            MusicUCookieHealth::Healthy => {
+                tracing::debug!(
+                    "MUSIC_U health probe is healthy for music_id {} (requested {}, got {}), skip cookie warning",
+                    music_id,
+                    primary_bitrate,
+                    song_url.br
+                );
+                false
+            }
+            MusicUCookieHealth::Unknown => {
+                tracing::warn!(
+                    "MUSIC_U health probe is inconclusive for music_id {} (requested {}, got {}), skip cookie warning",
+                    music_id,
+                    primary_bitrate,
+                    song_url.br
+                );
+                false
+            }
+        }
+    } else {
+        false
+    };
 
     let pre_upload_path_start = std::time::Instant::now();
 
@@ -1289,7 +1311,7 @@ async fn download_and_send_music(
     }
     if cookie_quality_downgraded {
         tracing::warn!(
-            "Detected downgraded bitrate for music_id {} (requested with MUSIC_U). Audio will still be sent and cache will be removed",
+            "Detected downgraded bitrate for music_id {} (MUSIC_U health probe unhealthy). Audio will still be sent and cache will be removed",
             song_id
         );
     }
@@ -1596,7 +1618,7 @@ async fn download_and_send_music(
 
     if cookie_quality_downgraded {
         let warning_text =
-            build_cookie_expired_warning_text(requested_primary_bitrate, song_url.br);
+            build_cookie_expired_warning_text(requested_primary_bitrate, song_info.bit_rate);
         if let Err(e) = bot
             .send_message(msg.chat.id, warning_text)
             .reply_parameters(ReplyParameters::new(msg.id))
@@ -1753,12 +1775,20 @@ fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
     }
 }
 
-fn is_cookie_quality_downgrade(
+// Provider may report slightly above nominal 320 kbps; keep a small tolerance for probe trigger.
+const MP3_MAX_BITRATE_BPS: u64 = 320_000;
+const BITRATE_PROBE_TOLERANCE_BPS: u64 = 5_000;
+const COOKIE_HEALTH_PROBE_MAX_BITRATE: u64 = MP3_MAX_BITRATE_BPS + BITRATE_PROBE_TOLERANCE_BPS;
+
+fn should_probe_cookie_health(
     has_music_u: bool,
     requested_primary_bitrate: u64,
-    actual_bitrate: u64,
+    returned_bitrate: u64,
 ) -> bool {
-    has_music_u && requested_primary_bitrate > 0 && actual_bitrate < requested_primary_bitrate
+    has_music_u
+        && requested_primary_bitrate > COOKIE_HEALTH_PROBE_MAX_BITRATE
+        && returned_bitrate > 0
+        && returned_bitrate <= COOKIE_HEALTH_PROBE_MAX_BITRATE
 }
 
 fn should_remove_song_cache_after_partial_failure(
@@ -1770,13 +1800,13 @@ fn should_remove_song_cache_after_partial_failure(
 
 fn build_cookie_expired_warning_text(
     requested_primary_bitrate: u64,
-    actual_bitrate: u64,
+    actual_bitrate_bps: i64,
 ) -> String {
-    if requested_primary_bitrate > 0 && actual_bitrate > 0 {
+    if requested_primary_bitrate > 0 && actual_bitrate_bps > 0 {
         format!(
             "⚠️ 检测到 MUSIC_U Cookie 可能已失效，音质已从 {} kbps 降至 {} kbps。\n已发送可用音频，请尽快更新 Cookie。",
-            requested_primary_bitrate / 1000,
-            actual_bitrate / 1000
+            format_bitrate_kbps(requested_primary_bitrate as i64),
+            format_bitrate_kbps(actual_bitrate_bps)
         )
     } else {
         "⚠️ 检测到 MUSIC_U Cookie 可能已失效，当前音质已降级。\n已发送可用音频，请尽快更新 Cookie。"
@@ -2713,10 +2743,37 @@ mod tests {
     }
 
     #[test]
-    fn cookie_quality_downgrade_detects_only_when_music_u_present() {
-        assert!(super::is_cookie_quality_downgrade(true, 999_000, 320_000));
-        assert!(!super::is_cookie_quality_downgrade(false, 999_000, 320_000));
-        assert!(!super::is_cookie_quality_downgrade(true, 999_000, 999_000));
+    fn cookie_health_probe_trigger_handles_320_neighborhood() {
+        assert!(super::should_probe_cookie_health(
+            true,
+            999_000,
+            super::MP3_MAX_BITRATE_BPS
+        ));
+        assert!(super::should_probe_cookie_health(
+            true,
+            999_000,
+            super::MP3_MAX_BITRATE_BPS + 1
+        ));
+        assert!(super::should_probe_cookie_health(
+            true,
+            999_000,
+            super::COOKIE_HEALTH_PROBE_MAX_BITRATE
+        ));
+        assert!(!super::should_probe_cookie_health(
+            true,
+            999_000,
+            super::COOKIE_HEALTH_PROBE_MAX_BITRATE + 1
+        ));
+        assert!(!super::should_probe_cookie_health(
+            false,
+            999_000,
+            super::MP3_MAX_BITRATE_BPS
+        ));
+        assert!(!super::should_probe_cookie_health(
+            true,
+            super::MP3_MAX_BITRATE_BPS,
+            super::MP3_MAX_BITRATE_BPS
+        ));
     }
 
     #[test]
@@ -2738,6 +2795,13 @@ mod tests {
         assert!(text.contains("Cookie"));
         assert!(text.contains("999"));
         assert!(text.contains("320"));
+    }
+
+    #[test]
+    fn cookie_expired_warning_text_matches_caption_precision() {
+        let text = super::build_cookie_expired_warning_text(999_000, 958_321);
+        assert!(text.contains("999.00"));
+        assert!(text.contains("958.32"));
     }
 
     #[test]
@@ -3732,9 +3796,14 @@ fn build_caption(
     bot_username: &str,
 ) -> String {
     let size_mb = (size_bytes as f64) / 1024.0 / 1024.0;
-    // bitrate_bps may already be bps, convert to kbps with 2 decimals
-    let kbps = (bitrate_bps as f64) / 1000.0;
+    let kbps = format_bitrate_kbps(bitrate_bps);
     format!(
-        "「{title}」- {artists}\n专辑: {album}\n#网易云音乐 #{file_ext} {size_mb:.2}MB {kbps:.2}kbps\nvia @{bot_username}",
+        "「{title}」- {artists}\n专辑: {album}\n#网易云音乐 #{file_ext} {size_mb:.2}MB {kbps}kbps\nvia @{bot_username}",
     )
+}
+
+#[must_use]
+fn format_bitrate_kbps(bitrate_bps: i64) -> String {
+    let bitrate_bps = bitrate_bps.max(0) as f64;
+    format!("{:.2}", bitrate_bps / 1000.0)
 }
