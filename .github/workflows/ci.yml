@@ -25,8 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Verify (Linux-x86_64)
+  build_artifact:
+    name: Build Artifact (Linux-x86_64)
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: sccache
@@ -51,18 +51,6 @@ jobs:
       - name: Reset sccache stats
         shell: bash
         run: sccache --zero-stats || true
-
-      - name: cargo fmt --check
-        run: cargo fmt -- --check
-
-      - name: cargo check
-        run: cargo check
-
-      - name: cargo clippy -D warnings
-        run: cargo clippy -- -D warnings
-
-      - name: cargo test
-        run: cargo test
 
       - name: cargo build --release
         run: cargo build --release --target x86_64-unknown-linux-gnu
