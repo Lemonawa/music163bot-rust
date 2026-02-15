@@ -3229,6 +3229,14 @@ mod tests {
         assert!(text.contains("• Bot 内存: <code>12 MB</code>"));
         assert!(text.contains("• 下载: 实时 <code>6.00</code> MB/s"));
     }
+
+    #[test]
+    fn about_text_includes_build_commit_line() {
+        let text = super::build_about_text();
+        assert!(text.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+        assert!(text.contains("构建提交：<code>"));
+        assert!(text.contains(super::BUILD_GIT_COMMIT));
+    }
 }
 
 async fn handle_music_url(
@@ -3317,13 +3325,15 @@ async fn handle_search_command(
     Ok(())
 }
 
-async fn handle_about_command(
-    bot: &Bot,
-    msg: &Message,
-    _state: &Arc<BotState>,
-) -> ResponseResult<()> {
-    let about_text = format!(
+const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
+    Some(value) => value,
+    None => "unknown",
+};
+
+fn build_about_text() -> String {
+    format!(
         r"🎵 Music163bot-Rust v{}
+构建提交：<code>{}</code>
 
 一个用来下载/分享/搜索网易云歌曲的 Telegram Bot
 
@@ -3341,8 +3351,17 @@ async fn handle_about_command(
 • 📦 轻量级部署
 
 源码：GitHub | 原版：Music163bot-Go",
-        env!("CARGO_PKG_VERSION")
-    );
+        env!("CARGO_PKG_VERSION"),
+        BUILD_GIT_COMMIT
+    )
+}
+
+async fn handle_about_command(
+    bot: &Bot,
+    msg: &Message,
+    _state: &Arc<BotState>,
+) -> ResponseResult<()> {
+    let about_text = build_about_text();
 
     bot.send_message(msg.chat.id, about_text)
         .reply_parameters(ReplyParameters::new(msg.id))
