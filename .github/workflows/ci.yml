@@ -94,4 +94,66 @@ jobs:
       - name: Show sccache stats
         if: always()
         shell: bash
-        run: sccache --show-stats || true
+        run: |
+          mkdir -p .ci
+          sccache --show-stats 2>&1 | tee .ci/sccache-stats.txt || true
+
+      - name: Summarize sccache stats
+        if: always()
+        shell: bash
+        run: |
+          STATS_FILE=".ci/sccache-stats.txt"
+          if [ ! -f "$STATS_FILE" ]; then
+            echo "No sccache stats file found."
+            exit 0
+          fi
+
+          stats="$(cat "$STATS_FILE")"
+
+          extract_field() {
+            local pattern="$1"
+            local result
+            result="$(printf '%s\n' "$stats" | awk -v pat="$pattern" '$0 ~ pat {print $NF; exit}')"
+            if [ -z "$result" ]; then
+              echo "N/A"
+            else
+              echo "$result"
+            fi
+          }
+
+          cache_hits="$(extract_field '^Cache hits[[:space:]]')"
+          cache_misses="$(extract_field '^Cache misses[[:space:]]')"
+          compile_requests="$(extract_field '^Compile requests[[:space:]]')"
+          compile_executed="$(extract_field '^Compile requests executed[[:space:]]')"
+          compile_errors="$(extract_field '^Compile errors[[:space:]]')"
+          cache_hit_rate="$(printf '%s\n' "$stats" | awk '/^Cache hits rate[[:space:]]/ {print $(NF-1) " " $NF; exit}')"
+          if [ -z "$cache_hit_rate" ]; then
+            cache_hit_rate="$(printf '%s\n' "$stats" | awk '/^Cache hit rate[[:space:]]/ {print $(NF-1) " " $NF; exit}')"
+          fi
+          if [ -z "$cache_hit_rate" ]; then
+            cache_hit_rate="N/A"
+          fi
+
+          {
+            echo "### sccache summary"
+            echo ""
+            echo "| Metric | Value |"
+            echo "| --- | --- |"
+            echo "| Compile requests | ${compile_requests} |"
+            echo "| Compile requests executed | ${compile_executed} |"
+            echo "| Cache hits | ${cache_hits} |"
+            echo "| Cache misses | ${cache_misses} |"
+            echo "| Cache hit rate | ${cache_hit_rate} |"
+            echo "| Compile errors | ${compile_errors} |"
+            echo ""
+            echo "<details><summary>Full <code>sccache --show-stats</code></summary>"
+            echo ""
+            echo '```text'
+            cat "$STATS_FILE"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$cache_hits" = "0" ] && [ "$cache_misses" = "0" ]; then
+            echo "::notice title=sccache::No cache activity detected (hits=0, misses=0)."
+          fi
