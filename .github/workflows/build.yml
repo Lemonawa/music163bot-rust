@@ -17,9 +17,6 @@ jobs:
   build:
     name: Build - ${{ matrix.platform.os_name }} (${{ matrix.platform.arch }})
     runs-on: ${{ matrix.platform.runs_on }}
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -69,20 +66,11 @@ jobs:
         with:
           targets: ${{ matrix.platform.target }}
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Cache Rust dependencies
+      - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: cargo-registry-${{ runner.os }}
-          # Let rust-cache focus on Cargo registry/git crates.
-          # Build outputs are handled by sccache to avoid overlapping target caches.
-          cache-targets: false
-
-      - name: Reset sccache stats
-        shell: bash
-        run: sccache --zero-stats || true
+          shared-key: rust-${{ runner.os }}-${{ matrix.platform.target }}
+          save-if: ${{ false }}
 
       - name: Install cross compiler (Linux aarch64)
         if: runner.os == 'Linux' && matrix.platform.arch == 'aarch64'
@@ -97,73 +85,6 @@ jobs:
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           fi
           cargo build --release --target ${{ matrix.platform.target }}
-
-      - name: Show sccache stats
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p .ci
-          sccache --show-stats 2>&1 | tee .ci/sccache-stats.txt || true
-
-      - name: Summarize sccache stats
-        if: always()
-        shell: bash
-        run: |
-          STATS_FILE=".ci/sccache-stats.txt"
-          if [ ! -f "$STATS_FILE" ]; then
-            echo "No sccache stats file found."
-            exit 0
-          fi
-
-          stats="$(cat "$STATS_FILE")"
-
-          extract_field() {
-            local pattern="$1"
-            local result
-            result="$(printf '%s\n' "$stats" | awk -v pat="$pattern" '$0 ~ pat {print $NF; exit}')"
-            if [ -z "$result" ]; then
-              echo "N/A"
-            else
-              echo "$result"
-            fi
-          }
-
-          cache_hits="$(extract_field '^Cache hits[[:space:]]')"
-          cache_misses="$(extract_field '^Cache misses[[:space:]]')"
-          compile_requests="$(extract_field '^Compile requests[[:space:]]')"
-          compile_executed="$(extract_field '^Compile requests executed[[:space:]]')"
-          compile_errors="$(extract_field '^Compile errors[[:space:]]')"
-          cache_hit_rate="$(printf '%s\n' "$stats" | awk '/^Cache hits rate[[:space:]]/ {print $(NF-1) " " $NF; exit}')"
-          if [ -z "$cache_hit_rate" ]; then
-            cache_hit_rate="$(printf '%s\n' "$stats" | awk '/^Cache hit rate[[:space:]]/ {print $(NF-1) " " $NF; exit}')"
-          fi
-          if [ -z "$cache_hit_rate" ]; then
-            cache_hit_rate="N/A"
-          fi
-
-          {
-            echo "### sccache summary"
-            echo ""
-            echo "| Metric | Value |"
-            echo "| --- | --- |"
-            echo "| Compile requests | ${compile_requests} |"
-            echo "| Compile requests executed | ${compile_executed} |"
-            echo "| Cache hits | ${cache_hits} |"
-            echo "| Cache misses | ${cache_misses} |"
-            echo "| Cache hit rate | ${cache_hit_rate} |"
-            echo "| Compile errors | ${compile_errors} |"
-            echo ""
-            echo "<details><summary>Full <code>sccache --show-stats</code></summary>"
-            echo ""
-            echo '```text'
-            cat "$STATS_FILE"
-            echo '```'
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$cache_hits" = "0" ] && [ "$cache_misses" = "0" ]; then
-            echo "::notice title=sccache::No cache activity detected (hits=0, misses=0)."
-          fi
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
