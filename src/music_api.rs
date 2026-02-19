@@ -15,7 +15,6 @@ use image::{DynamicImage, GenericImageView, ImageFormat};
 use md5::compute as md5_compute;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -33,14 +32,6 @@ pub struct MusicApi {
     song_detail_cache: DashMap<u64, TimedCacheEntry<Arc<SongDetail>>>,
     song_url_cache: DashMap<(u64, u64), TimedCacheEntry<Arc<SongUrl>>>,
     song_lyric_cache: DashMap<u64, TimedCacheEntry<String>>,
-    cookie_health_cache: DashMap<u8, TimedCacheEntry<MusicUCookieHealth>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MusicUCookieHealth {
-    Healthy,
-    Unhealthy,
-    Unknown,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -138,10 +129,6 @@ pub struct SearchSong {
 const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
-const COOKIE_HEALTH_CACHE_KEY: u8 = 1;
-const COOKIE_HEALTH_TTL_HEALTHY: Duration = Duration::from_secs(600);
-const COOKIE_HEALTH_TTL_UNHEALTHY: Duration = Duration::from_secs(120);
-const COOKIE_HEALTH_TTL_UNKNOWN: Duration = Duration::from_secs(60);
 const DEFAULT_AUTO_RETRY: bool = true;
 const DEFAULT_MAX_RETRY_TIMES: u32 = 3;
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
@@ -278,15 +265,6 @@ impl MusicApi {
             song_detail_cache: DashMap::new(),
             song_url_cache: DashMap::new(),
             song_lyric_cache: DashMap::new(),
-            cookie_health_cache: DashMap::new(),
-        }
-    }
-
-    fn retry_attempts_for_primary_unavailable(&self) -> u32 {
-        if self.auto_retry {
-            self.max_retry_times.max(1)
-        } else {
-            1
         }
     }
 
@@ -296,75 +274,6 @@ impl MusicApi {
         } else {
             1
         }
-    }
-
-    fn should_retry_primary_after_quality_downgrade(
-        &self,
-        primary_bitrate: u64,
-        returned_bitrate: u64,
-    ) -> bool {
-        self.auto_retry
-            && self.max_retry_times > 0
-            && self.music_u.is_some()
-            && returned_bitrate < primary_bitrate
-    }
-
-    async fn retry_primary_bitrate_url(
-        &self,
-        song_id: u64,
-        primary_bitrate: u64,
-        retry_times: u32,
-    ) -> Option<Arc<SongUrl>> {
-        if retry_times == 0 {
-            return None;
-        }
-
-        for attempt in 1..=retry_times {
-            self.song_url_cache
-                .remove(&song_url_cache_key(song_id, primary_bitrate));
-
-            match self.get_song_url_shared(song_id, primary_bitrate).await {
-                Ok(song_url) if !song_url_has_download_url(&song_url) => {
-                    tracing::warn!(
-                        "Primary bitrate retry {}/{} returned empty URL for music_id {}",
-                        attempt,
-                        retry_times,
-                        song_id
-                    );
-                }
-                Ok(song_url) if song_url.br >= primary_bitrate => {
-                    tracing::info!(
-                        "Primary bitrate recovered on retry {}/{} for music_id {} (br={})",
-                        attempt,
-                        retry_times,
-                        song_id,
-                        song_url.br
-                    );
-                    return Some(song_url);
-                }
-                Ok(song_url) => {
-                    tracing::warn!(
-                        "Primary bitrate retry {}/{} still downgraded for music_id {} (requested {}, got {})",
-                        attempt,
-                        retry_times,
-                        song_id,
-                        primary_bitrate,
-                        song_url.br
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Primary bitrate retry {}/{} failed for music_id {}: {}",
-                        attempt,
-                        retry_times,
-                        song_id,
-                        e
-                    );
-                }
-            }
-        }
-
-        None
     }
 
     fn get_cached_song_detail(&self, song_id: u64) -> Option<Arc<SongDetail>> {
@@ -480,138 +389,6 @@ impl MusicApi {
         } else {
             request
         }
-    }
-
-    fn cookie_health_ttl(health: MusicUCookieHealth) -> Duration {
-        match health {
-            MusicUCookieHealth::Healthy => COOKIE_HEALTH_TTL_HEALTHY,
-            MusicUCookieHealth::Unhealthy => COOKIE_HEALTH_TTL_UNHEALTHY,
-            MusicUCookieHealth::Unknown => COOKIE_HEALTH_TTL_UNKNOWN,
-        }
-    }
-
-    fn get_cached_cookie_health(&self) -> Option<MusicUCookieHealth> {
-        let now = Instant::now();
-        let entry = self.cookie_health_cache.get(&COOKIE_HEALTH_CACHE_KEY)?;
-        if entry.is_fresh_at(now) {
-            Some(entry.value)
-        } else {
-            drop(entry);
-            self.cookie_health_cache.remove(&COOKIE_HEALTH_CACHE_KEY);
-            None
-        }
-    }
-
-    fn cache_cookie_health(&self, health: MusicUCookieHealth) {
-        self.cookie_health_cache.insert(
-            COOKIE_HEALTH_CACHE_KEY,
-            TimedCacheEntry::new(health, Self::cookie_health_ttl(health)),
-        );
-    }
-
-    fn parse_account_health_signal(payload: &Value) -> Option<bool> {
-        let code = payload.get("code").and_then(Value::as_i64)?;
-        if code == 301 {
-            return Some(false);
-        }
-        if code != 200 {
-            return None;
-        }
-
-        let has_account = payload
-            .get("account")
-            .is_some_and(|account| !account.is_null());
-        let has_profile = payload
-            .get("profile")
-            .is_some_and(|profile| !profile.is_null());
-        Some(has_account && has_profile)
-    }
-
-    fn parse_user_level_health_signal(payload: &Value) -> Option<bool> {
-        let code = payload.get("code").and_then(Value::as_i64)?;
-        match code {
-            200 => Some(true),
-            301 => Some(false),
-            _ => None,
-        }
-    }
-
-    async fn fetch_account_health_signal(&self) -> Option<bool> {
-        let url = format!("{}/api/nuser/account/get", self.base_url);
-        let mut request = self.client.post(url);
-        request = self.apply_music_u_cookie(request);
-
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(e) => {
-                tracing::warn!("MUSIC_U health probe(account) request failed: {}", e);
-                return None;
-            }
-        };
-
-        let payload: Value = match response.json().await {
-            Ok(payload) => payload,
-            Err(e) => {
-                tracing::warn!("MUSIC_U health probe(account) parse failed: {}", e);
-                return None;
-            }
-        };
-
-        Self::parse_account_health_signal(&payload)
-    }
-
-    async fn fetch_user_level_health_signal(&self) -> Option<bool> {
-        let url = format!("{}/api/user/level", self.base_url);
-        let mut request = self.client.post(url);
-        request = self.apply_music_u_cookie(request);
-
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(e) => {
-                tracing::warn!("MUSIC_U health probe(level) request failed: {}", e);
-                return None;
-            }
-        };
-
-        let payload: Value = match response.json().await {
-            Ok(payload) => payload,
-            Err(e) => {
-                tracing::warn!("MUSIC_U health probe(level) parse failed: {}", e);
-                return None;
-            }
-        };
-
-        Self::parse_user_level_health_signal(&payload)
-    }
-
-    fn reduce_cookie_health(
-        account_signal: Option<bool>,
-        level_signal: Option<bool>,
-    ) -> MusicUCookieHealth {
-        if account_signal == Some(true) || level_signal == Some(true) {
-            MusicUCookieHealth::Healthy
-        } else if account_signal == Some(false) && level_signal == Some(false) {
-            MusicUCookieHealth::Unhealthy
-        } else {
-            MusicUCookieHealth::Unknown
-        }
-    }
-
-    /// Probe MUSIC_U health with cache to avoid noisy and expensive checks.
-    pub async fn probe_music_u_health(&self) -> MusicUCookieHealth {
-        if self.music_u.is_none() {
-            return MusicUCookieHealth::Unknown;
-        }
-
-        if let Some(cached) = self.get_cached_cookie_health() {
-            return cached;
-        }
-
-        let account_signal = self.fetch_account_health_signal().await;
-        let level_signal = self.fetch_user_level_health_signal().await;
-        let health = Self::reduce_cookie_health(account_signal, level_signal);
-        self.cache_cookie_health(health);
-        health
     }
 
     /// Build common headers for image downloads (album art).
@@ -858,7 +635,6 @@ impl MusicApi {
         })?;
 
         let mut last_error = None;
-        let mut downgraded_url_after_fallback: Option<Arc<SongUrl>> = None;
         let mut fallback_url_start = None;
         for &bitrate in
             fallback_bitrate_candidates(bitrate_candidates, primary_attempted_unavailable)
@@ -877,18 +653,6 @@ impl MusicApi {
 
             match fetched_url {
                 Ok(song_url) if song_url_has_download_url(&song_url) => {
-                    if self
-                        .should_retry_primary_after_quality_downgrade(primary_bitrate, song_url.br)
-                    {
-                        tracing::warn!(
-                            "Detected downgraded bitrate for music_id {} (requested {}, got {}), retrying primary before accepting fallback",
-                            song_id,
-                            primary_bitrate,
-                            song_url.br
-                        );
-                        downgraded_url_after_fallback = Some(song_url);
-                        break;
-                    }
                     if let Some(start) = fallback_url_start {
                         tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
                     }
@@ -913,44 +677,8 @@ impl MusicApi {
             }
         }
 
-        if let Some(downgraded_url) = downgraded_url_after_fallback {
-            if let Some(start) = fallback_url_start {
-                tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
-            }
-
-            if let Some(recovered) = self
-                .retry_primary_bitrate_url(song_id, primary_bitrate, self.max_retry_times)
-                .await
-            {
-                return Ok((Arc::clone(&detail), recovered));
-            }
-
-            tracing::warn!(
-                "Primary bitrate still unavailable after retries for music_id {}. Accepting downgraded bitrate {}",
-                song_id,
-                downgraded_url.br
-            );
-            return Ok((Arc::clone(&detail), downgraded_url));
-        }
-
         if let Some(start) = fallback_url_start {
             tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
-        }
-
-        if primary_attempted_unavailable {
-            tracing::debug!(
-                "Retrying primary bitrate {primary_bitrate} after fallback attempts for music_id {song_id}"
-            );
-            if let Some(song_url) = self
-                .retry_primary_bitrate_url(
-                    song_id,
-                    primary_bitrate,
-                    self.retry_attempts_for_primary_unavailable(),
-                )
-                .await
-            {
-                return Ok((detail, song_url));
-            }
         }
 
         if let Some(e) = last_error {
@@ -1173,7 +901,6 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
 
-    use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::task::JoinHandle;
@@ -1183,7 +910,7 @@ mod tests {
     use crate::error::BotError;
 
     use super::build_http_client;
-    use super::{Album, Artist, MusicApi, MusicUCookieHealth, SongDetail, SongUrl};
+    use super::{Album, Artist, MusicApi, SongDetail, SongUrl};
 
     #[derive(Clone, Debug)]
     enum MockSongUrlReply {
@@ -1738,18 +1465,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_song_detail_and_best_url_retries_primary_after_primary_attempted_unavailable() {
+    async fn get_song_detail_and_best_url_returns_error_when_primary_unavailable_and_fallback_fails()
+     {
         let song_id = 1004;
         let server = MockMusicApiServer::start(
             song_id,
             HashMap::from([
-                (
-                    320_000,
-                    vec![
-                        MockSongUrlReply::OkEmptyUrl,
-                        MockSongUrlReply::OkWithUrl("https://mock.example/primary-retry.mp3"),
-                    ],
-                ),
+                (320_000, vec![MockSongUrlReply::OkEmptyUrl]),
                 (192_000, vec![MockSongUrlReply::ApiCode(503)]),
             ]),
         )
@@ -1757,30 +1479,26 @@ mod tests {
         let api = MusicApi::new(None, server.base_url());
         api.cache_song_detail(song_id, sample_song_detail(song_id));
 
-        let (_, song_url) = api
+        let result = api
             .get_song_detail_and_best_url(song_id, &[320_000, 192_000])
-            .await
-            .expect("primary retry should succeed after fallback failure");
+            .await;
 
-        assert_eq!(song_url.br, 320_000);
-        assert_eq!(song_url.url, "https://mock.example/primary-retry.mp3");
-        assert_eq!(server.calls_for_bitrate(320_000), 2);
+        assert!(
+            result.is_err(),
+            "should return error when primary unavailable and fallback also fails"
+        );
+        assert_eq!(server.calls_for_bitrate(320_000), 1);
         assert_eq!(server.calls_for_bitrate(192_000), 1);
     }
 
     #[tokio::test]
-    async fn get_song_detail_and_best_url_retries_primary_before_accepting_downgraded_bitrate() {
+    async fn get_song_detail_and_best_url_accepts_fallback_without_retrying_primary_for_downgraded_bitrate()
+     {
         let song_id = 1005;
         let server = MockMusicApiServer::start(
             song_id,
             HashMap::from([
-                (
-                    999_000,
-                    vec![
-                        MockSongUrlReply::OkEmptyUrl,
-                        MockSongUrlReply::OkWithUrl("https://mock.example/flac-999.flac"),
-                    ],
-                ),
+                (999_000, vec![MockSongUrlReply::OkEmptyUrl]),
                 (
                     320_000,
                     vec![MockSongUrlReply::OkWithUrl(
@@ -1801,11 +1519,12 @@ mod tests {
         let (_, song_url) = api
             .get_song_detail_and_best_url(song_id, &[999_000, 320_000, 128_000])
             .await
-            .expect("primary bitrate should be retried before accepting downgraded bitrate");
+            .expect("should return fallback bitrate without retrying primary");
 
-        assert_eq!(song_url.br, 999_000);
-        assert_eq!(song_url.url, "https://mock.example/flac-999.flac");
-        assert_eq!(server.calls_for_bitrate(999_000), 2);
+        assert_eq!(song_url.br, 320_000);
+        assert_eq!(song_url.url, "https://mock.example/fallback-320.mp3");
+        // primary should only be tried once (no retry)
+        assert_eq!(server.calls_for_bitrate(999_000), 1);
         assert_eq!(server.calls_for_bitrate(320_000), 1);
     }
 
@@ -1852,58 +1571,6 @@ mod tests {
     fn music_u_cookie_none_without_value() {
         let api = MusicApi::new(None, "http://localhost".to_string());
         assert!(api.music_u_cookie.is_none());
-    }
-
-    #[test]
-    fn account_health_signal_detects_logged_in_cookie() {
-        let payload = json!({
-            "code": 200,
-            "account": { "id": 1 },
-            "profile": { "userId": 1 }
-        });
-        assert_eq!(MusicApi::parse_account_health_signal(&payload), Some(true));
-    }
-
-    #[test]
-    fn account_health_signal_detects_missing_login_profile() {
-        let payload = json!({
-            "code": 200,
-            "account": null,
-            "profile": null
-        });
-        assert_eq!(MusicApi::parse_account_health_signal(&payload), Some(false));
-    }
-
-    #[test]
-    fn user_level_health_signal_maps_known_codes() {
-        assert_eq!(
-            MusicApi::parse_user_level_health_signal(&json!({ "code": 200 })),
-            Some(true)
-        );
-        assert_eq!(
-            MusicApi::parse_user_level_health_signal(&json!({ "code": 301 })),
-            Some(false)
-        );
-        assert_eq!(
-            MusicApi::parse_user_level_health_signal(&json!({ "code": 500 })),
-            None
-        );
-    }
-
-    #[test]
-    fn reduce_cookie_health_requires_consistent_unhealthy_signals() {
-        assert_eq!(
-            MusicApi::reduce_cookie_health(Some(true), Some(false)),
-            MusicUCookieHealth::Healthy
-        );
-        assert_eq!(
-            MusicApi::reduce_cookie_health(Some(false), Some(false)),
-            MusicUCookieHealth::Unhealthy
-        );
-        assert_eq!(
-            MusicApi::reduce_cookie_health(Some(false), None),
-            MusicUCookieHealth::Unknown
-        );
     }
 
     // --- B.3: rewrite_media_url Cow tests ---
