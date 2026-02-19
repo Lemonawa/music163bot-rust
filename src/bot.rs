@@ -62,6 +62,7 @@ pub struct UploadCounters {
 
 const SPEED_SAMPLE_WINDOW: usize = 20;
 const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub struct RuntimeMetrics {
@@ -1220,16 +1221,16 @@ async fn download_and_send_music(
             return Err(anyhow::anyhow!("HTTP {}", response.status()));
         }
 
-        // Check content length
-        let content_length = response.content_length().unwrap_or(0);
-        if content_length == 0 {
+        // Check content length. None means unknown/chunked transfer and is allowed.
+        let content_length = response.content_length();
+        if content_length == Some(0) {
             return Err(anyhow::anyhow!("Empty file or unable to get file size"));
         }
 
         // Create audio buffer based on storage mode configuration
         let mut audio_buffer = AudioBuffer::new(
             &state.config,
-            content_length,
+            content_length.unwrap_or(0),
             filename.clone(),
             &state.config.cache_dir,
         )
@@ -1237,14 +1238,21 @@ async fn download_and_send_music(
 
         let mut stream = response.bytes_stream();
         let downloaded = if audio_buffer.is_disk() {
+            let chunk_bytes = download_chunk_bytes(&state.config);
             let stream = stream.map_err(std::io::Error::other);
-            let mut reader = StreamReader::new(stream);
+            let mut reader =
+                tokio::io::BufReader::with_capacity(chunk_bytes, StreamReader::new(stream));
             let file = audio_buffer
                 .disk_file_mut()
                 .ok_or_else(|| anyhow::anyhow!("Disk buffer missing file handle"))?;
-            tokio::io::copy(&mut reader, file)
+            let mut writer = tokio::io::BufWriter::with_capacity(chunk_bytes, file);
+            let downloaded = tokio::io::copy_buf(&mut reader, &mut writer)
                 .await
-                .context("Failed to stream download to disk")?
+                .context("Failed to stream download to disk")?;
+            tokio::io::AsyncWriteExt::flush(&mut writer)
+                .await
+                .context("Failed to flush disk writer")?;
+            downloaded
         } else {
             let mut downloaded = 0u64;
             while let Some(chunk) = stream.next().await {
@@ -1926,6 +1934,13 @@ fn upload_log_enabled(config: &Config, level: UploadLogLevel) -> bool {
 
 fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
+}
+
+fn download_chunk_bytes(config: &Config) -> usize {
+    config
+        .download_chunk_size_kb
+        .saturating_mul(1024)
+        .max(MIN_DOWNLOAD_CHUNK_BYTES)
 }
 
 fn append_search_result_line(results: &mut String, index: usize, song_name: &str, artists: &str) {
@@ -2852,6 +2867,25 @@ mod tests {
     fn upload_pool_idle_timeout_disabled_when_zero() {
         assert!(!super::should_set_upload_pool_idle_timeout(0));
         assert!(super::should_set_upload_pool_idle_timeout(60));
+    }
+
+    #[test]
+    fn download_chunk_bytes_uses_configured_kib() {
+        let mut config = Config::default();
+        config.download_chunk_size_kb = 512;
+
+        assert_eq!(super::download_chunk_bytes(&config), 512 * 1024);
+    }
+
+    #[test]
+    fn download_chunk_bytes_clamps_zero_to_minimum() {
+        let mut config = Config::default();
+        config.download_chunk_size_kb = 0;
+
+        assert_eq!(
+            super::download_chunk_bytes(&config),
+            super::MIN_DOWNLOAD_CHUNK_BYTES
+        );
     }
 
     #[test]
