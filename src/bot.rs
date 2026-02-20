@@ -32,12 +32,12 @@ use crate::utils::{
 pub struct BotState {
     pub config: Config,
     pub database: Database,
-    pub music_api: MusicApi,
+    pub music_api: Arc<MusicApi>,
     inflight_downloads: Arc<InflightDownloads>,
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
     pub upload_semaphore: Arc<tokio::sync::Semaphore>,
     pub message_task_semaphore: Arc<tokio::sync::Semaphore>,
-    pub maintenance_tx: tokio::sync::mpsc::UnboundedSender<MaintenanceSignal>,
+    pub maintenance_tx: tokio::sync::mpsc::Sender<MaintenanceSignal>,
     pub bot_username: String,
     pub upload_client_state: Arc<Mutex<UploadClientState>>,
     pub maintenance_counters: MaintenanceCounters,
@@ -63,6 +63,8 @@ pub struct UploadCounters {
 const SPEED_SAMPLE_WINDOW: usize = 20;
 const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
+const MAINTENANCE_QUEUE_CAPACITY: usize = 32;
+const CACHE_PRUNE_INTERVAL_REQUESTS: u32 = 50;
 
 #[derive(Debug)]
 pub struct RuntimeMetrics {
@@ -129,12 +131,14 @@ static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, Resour
 pub struct MaintenanceCounters {
     pub memory_release_requests: AtomicU32,
     pub db_analyze_requests: AtomicU32,
+    pub api_cache_prune_requests: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaintenanceSignal {
     AnalyzeDb,
     ReleaseMemory,
+    PruneApiCache,
 }
 
 #[derive(Debug, Default)]
@@ -248,6 +252,7 @@ impl MaintenanceCounters {
         Self {
             memory_release_requests: AtomicU32::new(0),
             db_analyze_requests: AtomicU32::new(0),
+            api_cache_prune_requests: AtomicU32::new(0),
         }
     }
 
@@ -516,15 +521,16 @@ pub async fn run(config: Config) -> Result<()> {
     let database = Database::new(&config.database).await?;
     tracing::info!("Database initialized");
 
-    let (maintenance_tx, maintenance_rx) = tokio::sync::mpsc::unbounded_channel();
-    let maintenance_database = database.clone();
-    tokio::spawn(async move {
-        maintenance_worker(maintenance_rx, maintenance_database).await;
-    });
-
     // Initialize music API
-    let music_api = MusicApi::new_with_config(&config);
+    let music_api = Arc::new(MusicApi::new_with_config(&config));
     tracing::info!("Music API initialized");
+
+    let (maintenance_tx, maintenance_rx) = tokio::sync::mpsc::channel(MAINTENANCE_QUEUE_CAPACITY);
+    let maintenance_database = database.clone();
+    let maintenance_music_api = Arc::clone(&music_api);
+    tokio::spawn(async move {
+        maintenance_worker(maintenance_rx, maintenance_database, maintenance_music_api).await;
+    });
 
     // Initialize bot with custom API URL support
     let bot = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org" {
@@ -625,7 +631,7 @@ pub async fn run(config: Config) -> Result<()> {
     let bot_state = Arc::new(BotState {
         config,
         database,
-        music_api,
+        music_api: Arc::clone(&music_api),
         inflight_downloads: Arc::new(InflightDownloads::default()),
         download_semaphore: Arc::new(tokio::sync::Semaphore::new(
             max_concurrent_downloads as usize,
@@ -1525,8 +1531,14 @@ async fn download_and_send_music(
     } else {
         state.database.save_song_info(&song_info).await?;
         for signal in collect_maintenance_signals(&state.maintenance_counters, &state.config) {
-            if state.maintenance_tx.send(signal).is_err() {
-                tracing::warn!("Maintenance worker unavailable; skipping signal");
+            match state.maintenance_tx.try_send(signal) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    tracing::debug!("Maintenance queue full; dropping signal {:?}", signal);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::warn!("Maintenance worker unavailable; skipping signal");
+                }
             }
         }
     }
@@ -1747,7 +1759,7 @@ fn collect_maintenance_signals(
     counters: &MaintenanceCounters,
     config: &Config,
 ) -> Vec<MaintenanceSignal> {
-    let mut signals = Vec::with_capacity(2);
+    let mut signals = Vec::with_capacity(3);
     for (counter, interval, signal) in [
         (
             &counters.db_analyze_requests,
@@ -1758,6 +1770,11 @@ fn collect_maintenance_signals(
             &counters.memory_release_requests,
             config.memory_release_interval_requests,
             MaintenanceSignal::ReleaseMemory,
+        ),
+        (
+            &counters.api_cache_prune_requests,
+            CACHE_PRUNE_INTERVAL_REQUESTS,
+            MaintenanceSignal::PruneApiCache,
         ),
     ] {
         if MaintenanceCounters::should_run(counter, interval) {
@@ -1793,8 +1810,9 @@ async fn acquire_download_leader(
 }
 
 async fn maintenance_worker(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<MaintenanceSignal>,
+    mut rx: tokio::sync::mpsc::Receiver<MaintenanceSignal>,
     database: Database,
+    music_api: Arc<MusicApi>,
 ) {
     while let Some(signal) = rx.recv().await {
         match signal {
@@ -1811,6 +1829,17 @@ async fn maintenance_worker(
                 .await
                 {
                     tracing::warn!("Memory release background task failed: {}", e);
+                }
+            }
+            MaintenanceSignal::PruneApiCache => {
+                let stats = music_api.prune_expired_cache_entries();
+                if stats.total_removed() > 0 {
+                    tracing::debug!(
+                        "Pruned API cache entries: detail={}, url={}, lyric={}",
+                        stats.song_detail_removed,
+                        stats.song_url_removed,
+                        stats.song_lyric_removed
+                    );
                 }
             }
         }
@@ -2707,6 +2736,21 @@ mod tests {
 
         let third = super::collect_maintenance_signals(&counters, &config);
         assert_eq!(third, vec![super::MaintenanceSignal::ReleaseMemory]);
+    }
+
+    #[test]
+    fn maintenance_scheduler_emits_cache_prune_signal_on_interval() {
+        let counters = super::MaintenanceCounters::new();
+        let mut config = crate::config::Config::default();
+        config.db_analyze_interval_requests = 0;
+        config.memory_release_interval_requests = 0;
+
+        for _ in 0..super::CACHE_PRUNE_INTERVAL_REQUESTS.saturating_sub(1) {
+            let _ = super::collect_maintenance_signals(&counters, &config);
+        }
+
+        let signals = super::collect_maintenance_signals(&counters, &config);
+        assert_eq!(signals, vec![super::MaintenanceSignal::PruneApiCache]);
     }
 
     #[test]

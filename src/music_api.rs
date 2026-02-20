@@ -194,6 +194,20 @@ fn song_url_has_download_url(song_url: &SongUrl) -> bool {
     !song_url.url.is_empty()
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CachePruneStats {
+    pub song_detail_removed: usize,
+    pub song_url_removed: usize,
+    pub song_lyric_removed: usize,
+}
+
+impl CachePruneStats {
+    #[must_use]
+    pub fn total_removed(self) -> usize {
+        self.song_detail_removed + self.song_url_removed + self.song_lyric_removed
+    }
+}
+
 impl MusicApi {
     #[must_use]
     pub fn new(music_u: Option<String>, base_url: String) -> Self {
@@ -352,6 +366,32 @@ impl MusicApi {
     fn cache_song_lyric(&self, song_id: u64, lyric: String) {
         self.song_lyric_cache
             .insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
+    }
+
+    #[must_use]
+    pub fn prune_expired_cache_entries(&self) -> CachePruneStats {
+        let now = Instant::now();
+
+        let detail_before = self.song_detail_cache.len();
+        self.song_detail_cache
+            .retain(|_, entry| entry.is_fresh_at(now));
+        let song_detail_removed = detail_before.saturating_sub(self.song_detail_cache.len());
+
+        let url_before = self.song_url_cache.len();
+        self.song_url_cache
+            .retain(|_, entry| entry.is_fresh_at(now));
+        let song_url_removed = url_before.saturating_sub(self.song_url_cache.len());
+
+        let lyric_before = self.song_lyric_cache.len();
+        self.song_lyric_cache
+            .retain(|_, entry| entry.is_fresh_at(now));
+        let song_lyric_removed = lyric_before.saturating_sub(self.song_lyric_cache.len());
+
+        CachePruneStats {
+            song_detail_removed,
+            song_url_removed,
+            song_lyric_removed,
+        }
     }
 
     fn generate_eapi_cookie(music_u: Option<&str>) -> String {
@@ -1376,6 +1416,87 @@ mod tests {
 
         let missing = api.get_cached_song_url(42, 192_000);
         assert!(missing.is_none(), "uncached bitrate should return None");
+    }
+
+    #[test]
+    fn prune_expired_cache_entries_removes_stale_entries_only() {
+        let api = MusicApi::new(None, "http://localhost".to_string());
+        let now = std::time::Instant::now();
+
+        api.song_detail_cache.insert(
+            1,
+            super::TimedCacheEntry {
+                value: Arc::new(sample_song_detail(1)),
+                created_at: now - super::SONG_DETAIL_CACHE_TTL - Duration::from_secs(1),
+                ttl: super::SONG_DETAIL_CACHE_TTL,
+            },
+        );
+        api.song_detail_cache.insert(
+            2,
+            super::TimedCacheEntry {
+                value: Arc::new(sample_song_detail(2)),
+                created_at: now,
+                ttl: super::SONG_DETAIL_CACHE_TTL,
+            },
+        );
+        api.song_url_cache.insert(
+            super::song_url_cache_key(1, 320_000),
+            super::TimedCacheEntry {
+                value: Arc::new(sample_song_url(1, 320_000, "https://stale.example/1.mp3")),
+                created_at: now - super::SONG_URL_CACHE_TTL - Duration::from_secs(1),
+                ttl: super::SONG_URL_CACHE_TTL,
+            },
+        );
+        api.song_url_cache.insert(
+            super::song_url_cache_key(2, 320_000),
+            super::TimedCacheEntry {
+                value: Arc::new(sample_song_url(2, 320_000, "https://fresh.example/2.mp3")),
+                created_at: now,
+                ttl: super::SONG_URL_CACHE_TTL,
+            },
+        );
+        api.song_lyric_cache.insert(
+            1,
+            super::TimedCacheEntry {
+                value: "stale lyric".to_string(),
+                created_at: now - super::SONG_LYRIC_CACHE_TTL - Duration::from_secs(1),
+                ttl: super::SONG_LYRIC_CACHE_TTL,
+            },
+        );
+        api.song_lyric_cache.insert(
+            2,
+            super::TimedCacheEntry {
+                value: "fresh lyric".to_string(),
+                created_at: now,
+                ttl: super::SONG_LYRIC_CACHE_TTL,
+            },
+        );
+
+        let stats = api.prune_expired_cache_entries();
+
+        assert_eq!(
+            stats,
+            super::CachePruneStats {
+                song_detail_removed: 1,
+                song_url_removed: 1,
+                song_lyric_removed: 1,
+            }
+        );
+        assert_eq!(stats.total_removed(), 3);
+        assert!(api.song_detail_cache.get(&1).is_none());
+        assert!(
+            api.song_url_cache
+                .get(&super::song_url_cache_key(1, 320_000))
+                .is_none()
+        );
+        assert!(api.song_lyric_cache.get(&1).is_none());
+        assert!(api.song_detail_cache.get(&2).is_some());
+        assert!(
+            api.song_url_cache
+                .get(&super::song_url_cache_key(2, 320_000))
+                .is_some()
+        );
+        assert!(api.song_lyric_cache.get(&2).is_some());
     }
 
     #[tokio::test]
