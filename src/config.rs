@@ -160,6 +160,9 @@ fn apply_bool_field(value: &str, target: &mut bool, key: &str) {
 }
 
 fn parse_admin_list(admins: &str) -> Vec<i64> {
+    if admins.trim().is_empty() {
+        return Vec::new();
+    }
     admins
         .split(',')
         .filter_map(|s| s.trim().parse().ok())

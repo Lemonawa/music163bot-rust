@@ -37,6 +37,8 @@ use config::Config;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
+const DEFAULT_LOG_LEVEL_SPEC: &str = "info";
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -59,7 +61,7 @@ fn resolve_log_level_spec(
         ("--log-level", cli_log_level),
         ("config.loglevel", Some(config_log_level)),
         ("RUST_LOG", env_log_level),
-        ("default", Some("info")),
+        ("default", Some(DEFAULT_LOG_LEVEL_SPEC)),
     ] {
         let Some(raw) = candidate else {
             continue;
@@ -75,7 +77,7 @@ fn resolve_log_level_spec(
             eprintln!("Invalid {source} value '{trimmed}', trying next source");
         }
     }
-    "info".to_string()
+    DEFAULT_LOG_LEVEL_SPEC.to_string()
 }
 
 #[tokio::main]

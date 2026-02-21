@@ -103,8 +103,7 @@ pub fn extract_first_url(text: &str) -> Option<String> {
 
 /// Check if directory exists, create if not
 pub fn ensure_dir(path: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all(Path::new(path))?;
-    Ok(())
+    std::fs::create_dir_all(Path::new(path))
 }
 
 /// Clean filename for safe file operations

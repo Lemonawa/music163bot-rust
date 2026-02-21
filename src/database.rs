@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,15 @@ pub struct SongInfo {
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
+}
+
+const PERF_DB_LOG_PREFIX: &str = "PERF_DB";
+
+fn log_db_perf(op: &str, duration: Duration) {
+    tracing::debug!(
+        "{PERF_DB_LOG_PREFIX}|op={op}|elapsed_ms={}",
+        duration.as_millis()
+    );
 }
 
 impl Database {
@@ -107,7 +116,8 @@ impl Database {
 
     /// Get song info by music ID
     pub async fn get_song_by_music_id(&self, music_id: i64) -> Result<Option<SongInfo>> {
-        let row = sqlx::query(
+        let query_start = Instant::now();
+        let row_result = sqlx::query(
             "SELECT id, music_id, song_name, song_artists, song_album, file_ext, \
              music_size, pic_size, emb_pic_size, bit_rate, duration, file_id, \
              thumb_file_id, from_user_id, from_user_name, from_chat_id, \
@@ -116,13 +126,16 @@ impl Database {
         )
         .bind(music_id)
         .fetch_optional(&self.pool)
-        .await?;
+        .await;
+        log_db_perf("get_song_by_music_id", query_start.elapsed());
+        let row = row_result?;
 
         Ok(row.as_ref().map(map_song_info_row))
     }
 
     /// Save or update song info
     pub async fn save_song_info(&self, song_info: &SongInfo) -> Result<i64> {
+        let query_start = Instant::now();
         let result = sqlx::query(
             r"
             INSERT INTO song_infos (
@@ -164,7 +177,9 @@ impl Database {
         .bind(song_info.from_chat_id)
         .bind(&song_info.from_chat_name)
         .execute(&self.pool)
-        .await?;
+        .await;
+        log_db_perf("save_song_info", query_start.elapsed());
+        let result = result?;
 
         Ok(result.last_insert_rowid())
     }
@@ -234,10 +249,13 @@ impl Database {
 
     /// Delete song by music ID
     pub async fn delete_song_by_music_id(&self, music_id: i64) -> Result<bool> {
+        let query_start = Instant::now();
         let result = sqlx::query("DELETE FROM song_infos WHERE music_id = ?")
             .bind(music_id)
             .execute(&self.pool)
-            .await?;
+            .await;
+        log_db_perf("delete_song_by_music_id", query_start.elapsed());
+        let result = result?;
 
         Ok(result.rows_affected() > 0)
     }

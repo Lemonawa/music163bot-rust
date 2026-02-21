@@ -65,6 +65,100 @@ const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duratio
 const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 const MAINTENANCE_QUEUE_CAPACITY: usize = 32;
 const CACHE_PRUNE_INTERVAL_REQUESTS: u32 = 50;
+const PERF_LOG_PREFIX: &str = "PERF";
+const PERF_STAGE_CACHE_LOOKUP: &str = "cache_lookup";
+const PERF_STAGE_SINGLEFLIGHT_WAIT: &str = "singleflight_wait";
+const PERF_STAGE_COVER_DOWNLOAD: &str = "cover_download";
+const PERF_STAGE_DOWNLOAD_AUDIO: &str = "download_audio";
+const PERF_STAGE_UPLOAD_PERMIT_WAIT: &str = "upload_permit_wait";
+const PERF_STAGE_UPLOAD_CLIENT_ACQUIRE: &str = "upload_client_acquire";
+const PERF_STAGE_UPLOAD_SEND: &str = "upload_send";
+const PERF_STAGE_TAG_PROCESS: &str = "tag_process";
+const PERF_STAGE_DB_SAVE: &str = "db_save";
+const PERF_STAGE_E2E_TOTAL: &str = "e2e_total";
+static PERF_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone)]
+struct PerfTraceContext {
+    trace_id: String,
+    music_id: u64,
+    topology: &'static str,
+    cache_path: &'static str,
+}
+
+impl PerfTraceContext {
+    fn new(music_id: u64, topology: &'static str, cache_path: &'static str) -> Self {
+        Self {
+            trace_id: next_perf_trace_id(),
+            music_id,
+            topology,
+            cache_path,
+        }
+    }
+
+    fn with_cache_path(&self, cache_path: &'static str) -> Self {
+        Self {
+            cache_path,
+            ..self.clone()
+        }
+    }
+
+    fn log_stage(&self, stage: &str, duration: std::time::Duration) {
+        tracing::info!(
+            "{}",
+            format_perf_stage_line(
+                &self.trace_id,
+                self.music_id,
+                self.topology,
+                self.cache_path,
+                stage,
+                duration,
+            )
+        );
+    }
+}
+
+fn build_perf_trace_context(
+    state: &BotState,
+    music_id: u64,
+    cache_path: &'static str,
+) -> PerfTraceContext {
+    PerfTraceContext::new(
+        music_id,
+        upload_topology_label(&state.config, state.is_official_api),
+        cache_path,
+    )
+}
+
+fn next_perf_trace_id() -> String {
+    let ts_millis = chrono::Utc::now().timestamp_millis();
+    let seq = PERF_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{ts_millis:x}-{seq:x}")
+}
+
+fn format_perf_stage_line(
+    trace_id: &str,
+    music_id: u64,
+    topology: &str,
+    cache_path: &str,
+    stage: &str,
+    duration: std::time::Duration,
+) -> String {
+    format!(
+        "{PERF_LOG_PREFIX}|trace_id={trace_id}|music_id={music_id}|topology={topology}|cache_path={cache_path}|stage={stage}|elapsed_ms={}",
+        duration.as_millis()
+    )
+}
+
+fn upload_topology_label(config: &Config, is_official_api: bool) -> &'static str {
+    if is_official_api {
+        "official_api"
+    } else if config.upload_local_file_uri {
+        "selfhost_api_uri_upload"
+    } else {
+        "selfhost_api_multipart_upload"
+    }
+}
 
 #[derive(Debug)]
 pub struct RuntimeMetrics {
@@ -971,30 +1065,65 @@ async fn process_music(
     state: &Arc<BotState>,
     music_id: u64,
 ) -> ResponseResult<()> {
+    let e2e_start = std::time::Instant::now();
+    let mut perf_ctx = build_perf_trace_context(state, music_id, "initial");
+
+    let cache_lookup_start = std::time::Instant::now();
     if try_send_cached_song(bot, msg, state, music_id).await? {
+        perf_ctx = perf_ctx.with_cache_path("hit_pre_singleflight");
+        perf_ctx.log_stage(PERF_STAGE_CACHE_LOOKUP, cache_lookup_start.elapsed());
         state.runtime_metrics.record_cache_hit();
+        perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
         return Ok(());
     }
+    perf_ctx.log_stage(PERF_STAGE_CACHE_LOOKUP, cache_lookup_start.elapsed());
 
+    let singleflight_wait_start = std::time::Instant::now();
+    let mut waited_for_existing_leader = false;
     let _singleflight_guard = loop {
         if let Some(leader_guard) =
             acquire_download_leader(&state.inflight_downloads, music_id).await
         {
             break leader_guard;
         }
+        waited_for_existing_leader = true;
 
         if try_send_cached_song(bot, msg, state, music_id).await? {
+            perf_ctx = perf_ctx.with_cache_path("hit_during_singleflight");
             state.runtime_metrics.record_cache_hit();
+            perf_ctx.log_stage(
+                PERF_STAGE_SINGLEFLIGHT_WAIT,
+                singleflight_wait_start.elapsed(),
+            );
+            perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
             return Ok(());
         }
     };
+    perf_ctx.log_stage(
+        PERF_STAGE_SINGLEFLIGHT_WAIT,
+        singleflight_wait_start.elapsed(),
+    );
 
-    if try_send_cached_song(bot, msg, state, music_id).await? {
-        state.runtime_metrics.record_cache_hit();
-        return Ok(());
+    if waited_for_existing_leader {
+        let post_wait_cache_lookup_start = std::time::Instant::now();
+        if try_send_cached_song(bot, msg, state, music_id).await? {
+            perf_ctx = perf_ctx.with_cache_path("hit_post_singleflight");
+            perf_ctx.log_stage(
+                PERF_STAGE_CACHE_LOOKUP,
+                post_wait_cache_lookup_start.elapsed(),
+            );
+            state.runtime_metrics.record_cache_hit();
+            perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
+            return Ok(());
+        }
+        perf_ctx.log_stage(
+            PERF_STAGE_CACHE_LOOKUP,
+            post_wait_cache_lookup_start.elapsed(),
+        );
     }
 
     state.runtime_metrics.record_cache_miss();
+    perf_ctx = perf_ctx.with_cache_path("miss_cold");
 
     // Send status message and fetch song detail+URL in parallel
     let status_init_start = std::time::Instant::now();
@@ -1012,6 +1141,7 @@ async fn process_music(
     let status_msg = status_result?;
     let select_url_duration = status_init_start.elapsed();
     log_perf(PERF_STAGE_SELECT_URL, select_url_duration);
+    perf_ctx.log_stage(PERF_STAGE_SELECT_URL, select_url_duration);
 
     let (song_detail, song_url) = match detail_and_url_result {
         Ok(result) => result,
@@ -1022,6 +1152,7 @@ async fn process_music(
                 format!("❌ 获取歌曲信息或下载链接失败: {e}"),
             )
             .await?;
+            perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
             return Ok(());
         }
     };
@@ -1033,6 +1164,7 @@ async fn process_music(
             "❌ 无法获取下载链接，可能需要VIP权限",
         )
         .await?;
+        perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
         return Ok(());
     }
 
@@ -1062,6 +1194,7 @@ async fn process_music(
         &song_url,
         &status_msg,
         pre_upload_path_start,
+        &perf_ctx,
         &artists,
     )
     .await
@@ -1073,6 +1206,7 @@ async fn process_music(
         }
     }
 
+    perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
     Ok(())
 }
 
@@ -1084,6 +1218,7 @@ async fn download_and_send_music(
     song_url: &crate::music_api::SongUrl,
     status_msg: &Message,
     pre_upload_path_start: std::time::Instant,
+    perf_ctx: &PerfTraceContext,
     artists: &str,
 ) -> Result<()> {
     // Determine file extension
@@ -1115,8 +1250,10 @@ async fn download_and_send_music(
     let duration_ms = song_detail.dt;
 
     // Start parallel downloads: audio file and album art
+    let cover_perf_ctx = perf_ctx.clone();
     let artwork_future = async {
-        if let Some(ref al) = song_detail.al {
+        let cover_download_start = std::time::Instant::now();
+        let result = if let Some(ref al) = song_detail.al {
             tracing::debug!("Album info found: id={}, name={}", al.id, al.name);
             if let Some(ref pic_url) = al.pic_url {
                 if pic_url.is_empty() {
@@ -1180,10 +1317,13 @@ async fn download_and_send_music(
         } else {
             tracing::warn!("No album info found for music_id {}", song_id);
             (None, None, false)
-        }
+        };
+        cover_perf_ctx.log_stage(PERF_STAGE_COVER_DOWNLOAD, cover_download_start.elapsed());
+        result
     };
 
     // Download audio file using smart storage
+    let download_perf_ctx = perf_ctx.clone();
     let audio_future = async {
         let _download_permit = acquire_download_permit(&state.download_semaphore).await?;
         let download_start = std::time::Instant::now();
@@ -1247,9 +1387,21 @@ async fn download_and_send_music(
             download_duration.as_secs_f64(),
             download_mbps
         );
-        log_perf("download_audio", download_duration);
+        log_perf(PERF_STAGE_DOWNLOAD_AUDIO, download_duration);
+        download_perf_ctx.log_stage(PERF_STAGE_DOWNLOAD_AUDIO, download_duration);
 
         Ok::<(AudioBuffer, u64), anyhow::Error>((audio_buffer, downloaded))
+    };
+
+    let upload_permit_perf_ctx = perf_ctx.clone();
+    let upload_permit_future = async {
+        let upload_permit_wait_start = std::time::Instant::now();
+        let permit = acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await;
+        upload_permit_perf_ctx.log_stage(
+            PERF_STAGE_UPLOAD_PERMIT_WAIT,
+            upload_permit_wait_start.elapsed(),
+        );
+        permit
     };
 
     // Execute downloads and upload permit acquisition in parallel
@@ -1258,11 +1410,7 @@ async fn download_and_send_music(
         downloaded_result,
         (cover_artwork_data, thumbnail_buffer, cover_retry_exhausted),
         upload_permit_result,
-    ) = tokio::join!(
-        audio_future,
-        artwork_future,
-        acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore))
-    );
+    ) = tokio::join!(audio_future, artwork_future, upload_permit_future);
     let (mut audio_buffer, downloaded) = downloaded_result?;
     let _upload_permit = upload_permit_result?;
     let should_remove_song_cache =
@@ -1318,23 +1466,39 @@ async fn download_and_send_music(
 
     // 封面处理：使用320x320图片嵌入文件，缩略图用于Telegram显示
     // Overlap tag processing with upload client/permit acquisition — they are independent.
-    let tags_start = std::time::Instant::now();
     tracing::debug!("Processing tags for {} format", file_ext);
-    let (tag_result, upload_client_result) = tokio::join!(
-        apply_tags_in_blocking(
+    let tag_perf_ctx = perf_ctx.clone();
+    let tag_future = async {
+        let tags_start = std::time::Instant::now();
+        let result = apply_tags_in_blocking(
             audio_buffer,
             file_ext,
             song_detail,
             cover_artwork_data,
             cover_policy.embed_cover,
-        ),
-        acquire_upload_client(state),
-    );
+        )
+        .await;
+        let tags_duration = tags_start.elapsed();
+        log_perf("process_tags", tags_duration);
+        tag_perf_ctx.log_stage(PERF_STAGE_TAG_PROCESS, tags_duration);
+        result
+    };
+
+    let upload_client_perf_ctx = perf_ctx.clone();
+    let upload_client_future = async {
+        let upload_client_start = std::time::Instant::now();
+        let result = acquire_upload_client(state).await;
+        upload_client_perf_ctx.log_stage(
+            PERF_STAGE_UPLOAD_CLIENT_ACQUIRE,
+            upload_client_start.elapsed(),
+        );
+        result
+    };
+
+    let (tag_result, upload_client_result) = tokio::join!(tag_future, upload_client_future);
     audio_buffer = tag_result?;
     let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
     // upload_permit already acquired during download phase
-
-    log_perf("process_tags", tags_start.elapsed());
 
     // Get file size for database and logging
     let file_size = audio_buffer.size().await;
@@ -1419,7 +1583,9 @@ async fn download_and_send_music(
         }
     );
 
-    log_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_start.elapsed());
+    let pre_upload_path_duration = pre_upload_path_start.elapsed();
+    log_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
+    perf_ctx.log_stage(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
 
     // Send audio file with enhanced error handling and proper MIME type
     tracing::debug!(
@@ -1477,6 +1643,7 @@ async fn download_and_send_music(
         .fetch_sub(1, Ordering::Relaxed)
         - 1;
     log_perf("upload_audio", upload_duration);
+    perf_ctx.log_stage(PERF_STAGE_UPLOAD_SEND, upload_duration);
 
     if let Ok(ref resp_json) = upload_result {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
@@ -1520,7 +1687,8 @@ async fn download_and_send_music(
     cleanup_thumbnail_buffer(thumbnail_buffer).await;
 
     // Save to database unless this upload is partially degraded.
-    if should_remove_song_cache {
+    let db_save_start = std::time::Instant::now();
+    let db_save_result = if should_remove_song_cache {
         if let Err(e) = state.database.delete_song_by_music_id(song_id as i64).await {
             tracing::warn!(
                 "Failed to remove partial cache for music_id {} after upload: {}",
@@ -1528,20 +1696,30 @@ async fn download_and_send_music(
                 e
             );
         }
+        Ok(())
     } else {
-        state.database.save_song_info(&song_info).await?;
-        for signal in collect_maintenance_signals(&state.maintenance_counters, &state.config) {
-            match state.maintenance_tx.try_send(signal) {
-                Ok(()) => {}
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    tracing::debug!("Maintenance queue full; dropping signal {:?}", signal);
+        match state.database.save_song_info(&song_info).await {
+            Ok(_) => {
+                for signal in
+                    collect_maintenance_signals(&state.maintenance_counters, &state.config)
+                {
+                    match state.maintenance_tx.try_send(signal) {
+                        Ok(()) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            tracing::debug!("Maintenance queue full; dropping signal {:?}", signal);
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                            tracing::warn!("Maintenance worker unavailable; skipping signal");
+                        }
+                    }
                 }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                    tracing::warn!("Maintenance worker unavailable; skipping signal");
-                }
+                Ok(())
             }
+            Err(e) => Err(e),
         }
-    }
+    };
+    perf_ctx.log_stage(PERF_STAGE_DB_SAVE, db_save_start.elapsed());
+    db_save_result?;
 
     // Delete status message
     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
@@ -1858,6 +2036,7 @@ const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
 
 fn log_perf(label: &str, duration: std::time::Duration) {
     tracing::debug!("[{label}] {}ms", duration.as_millis());
+    tracing::debug!("PERF_RAW|stage={label}|elapsed_ms={}", duration.as_millis());
 }
 
 #[cfg(test)]
@@ -2679,6 +2858,44 @@ mod tests {
     fn perf_log_includes_stage_label() {
         let s = format_perf("download", std::time::Duration::from_millis(50));
         assert!(s.contains("download"));
+    }
+
+    #[test]
+    fn structured_perf_line_contains_required_fields() {
+        let line = super::format_perf_stage_line(
+            "trace-123",
+            42,
+            "official_api",
+            "miss_cold",
+            "e2e_total",
+            std::time::Duration::from_millis(88),
+        );
+        assert!(line.starts_with("PERF|"));
+        assert!(line.contains("trace_id=trace-123"));
+        assert!(line.contains("music_id=42"));
+        assert!(line.contains("topology=official_api"));
+        assert!(line.contains("cache_path=miss_cold"));
+        assert!(line.contains("stage=e2e_total"));
+        assert!(line.contains("elapsed_ms=88"));
+    }
+
+    #[test]
+    fn upload_topology_label_matches_mode() {
+        let mut config = Config::default();
+        config.upload_local_file_uri = false;
+        assert_eq!(super::upload_topology_label(&config, true), "official_api");
+
+        config.upload_local_file_uri = true;
+        assert_eq!(
+            super::upload_topology_label(&config, false),
+            "selfhost_api_uri_upload"
+        );
+
+        config.upload_local_file_uri = false;
+        assert_eq!(
+            super::upload_topology_label(&config, false),
+            "selfhost_api_multipart_upload"
+        );
     }
 
     #[test]

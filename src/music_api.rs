@@ -129,6 +129,7 @@ pub struct SearchSong {
 const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
+const PERF_API_LOG_PREFIX: &str = "PERF_API";
 const DEFAULT_AUTO_RETRY: bool = true;
 const DEFAULT_MAX_RETRY_TIMES: u32 = 3;
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
@@ -192,6 +193,13 @@ fn fallback_bitrate_candidates(
 
 fn song_url_has_download_url(song_url: &SongUrl) -> bool {
     !song_url.url.is_empty()
+}
+
+fn log_music_api_perf(song_id: u64, stage: &str, duration: Duration) {
+    tracing::debug!(
+        "{PERF_API_LOG_PREFIX}|music_id={song_id}|stage={stage}|elapsed_ms={}",
+        duration.as_millis()
+    );
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -602,6 +610,7 @@ impl MusicApi {
         song_id: u64,
         bitrate_candidates: &[u64],
     ) -> Result<(Arc<SongDetail>, Arc<SongUrl>)> {
+        let select_url_total_start = Instant::now();
         let Some((&primary_bitrate, _)) = bitrate_candidates.split_first() else {
             return Err(BotError::MusicApi(
                 "No bitrate candidates provided".to_string(),
@@ -612,6 +621,11 @@ impl MusicApi {
         if let Some(ref detail) = cached_detail
             && let Some(song_url) = self.get_first_cached_song_url(song_id, bitrate_candidates)
         {
+            log_music_api_perf(
+                song_id,
+                "select_url_total",
+                select_url_total_start.elapsed(),
+            );
             return Ok((Arc::clone(detail), song_url));
         }
 
@@ -668,11 +682,19 @@ impl MusicApi {
                 "[parallel_fetch] {}ms (detail={need_detail}, url={need_url})",
                 parallel_start.elapsed().as_millis()
             );
+            log_music_api_perf(song_id, "parallel_fetch", parallel_start.elapsed());
         }
 
-        let detail = cached_detail.ok_or_else(|| {
-            BotError::MusicApi(format!("Failed to get song detail for {song_id}"))
-        })?;
+        let Some(detail) = cached_detail else {
+            log_music_api_perf(
+                song_id,
+                "select_url_total",
+                select_url_total_start.elapsed(),
+            );
+            return Err(BotError::MusicApi(format!(
+                "Failed to get song detail for {song_id}"
+            )));
+        };
 
         let mut last_error = None;
         let mut fallback_url_start = None;
@@ -694,8 +716,15 @@ impl MusicApi {
             match fetched_url {
                 Ok(song_url) if song_url_has_download_url(&song_url) => {
                     if let Some(start) = fallback_url_start {
-                        tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
+                        let fallback_duration = start.elapsed();
+                        tracing::debug!("[fallback_url] {}ms", fallback_duration.as_millis());
+                        log_music_api_perf(song_id, "fallback_url", fallback_duration);
                     }
+                    log_music_api_perf(
+                        song_id,
+                        "select_url_total",
+                        select_url_total_start.elapsed(),
+                    );
                     return Ok((Arc::clone(&detail), song_url));
                 }
                 Ok(_) => {
@@ -718,9 +747,16 @@ impl MusicApi {
         }
 
         if let Some(start) = fallback_url_start {
-            tracing::debug!("[fallback_url] {}ms", start.elapsed().as_millis());
+            let fallback_duration = start.elapsed();
+            tracing::debug!("[fallback_url] {}ms", fallback_duration.as_millis());
+            log_music_api_perf(song_id, "fallback_url", fallback_duration);
         }
 
+        log_music_api_perf(
+            song_id,
+            "select_url_total",
+            select_url_total_start.elapsed(),
+        );
         if let Some(e) = last_error {
             Err(e)
         } else {
