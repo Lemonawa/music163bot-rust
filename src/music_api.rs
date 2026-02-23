@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::{BotError, Result};
+use crate::utils::build_http_client;
 
 #[derive(Debug)]
 pub struct MusicApi {
@@ -591,17 +592,8 @@ impl MusicApi {
     }
 
     /// Get song details
-    pub async fn get_song_detail(&self, song_id: u64) -> Result<SongDetail> {
-        self.get_song_detail_shared(song_id)
-            .await
-            .map(|detail| detail.as_ref().clone())
-    }
-
-    /// Get song download URL
-    pub async fn get_song_url(&self, song_id: u64, br: u64) -> Result<SongUrl> {
-        self.get_song_url_shared(song_id, br)
-            .await
-            .map(|song_url| song_url.as_ref().clone())
+    pub async fn get_song_detail(&self, song_id: u64) -> Result<Arc<SongDetail>> {
+        self.get_song_detail_shared(song_id).await
     }
 
     /// Get song details and best available URL using a batch-first strategy with safe fallback.
@@ -935,13 +927,6 @@ impl MusicApi {
     }
 }
 
-fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
-    builder.build().map_err(|e| {
-        tracing::error!("Failed to build HTTP client: {}", e);
-        BotError::Network(e)
-    })
-}
-
 fn rewrite_media_url(url: &str) -> Cow<'_, str> {
     for (from_prefix, to_prefix) in MEDIA_URL_REWRITE_RULES {
         if let Some(rest) = url.strip_prefix(from_prefix) {
@@ -982,11 +967,11 @@ mod tests {
     use tokio::task::JoinHandle;
     use tokio::time::Duration;
 
+    use super::{Album, Artist, MusicApi, SongDetail, SongUrl};
     use crate::config::Config;
     use crate::error::BotError;
-
-    use super::build_http_client;
-    use super::{Album, Artist, MusicApi, SongDetail, SongUrl};
+    use crate::utils::build_http_client;
+    use image::{DynamicImage, GenericImageView};
 
     #[derive(Clone, Debug)]
     enum MockSongUrlReply {
@@ -1830,6 +1815,22 @@ mod tests {
         ];
         assert_eq!(super::format_artists(&artists), "周杰伦/林俊杰");
     }
+
+    #[test]
+    fn resize_image_with_padding_zero_target_returns_original() {
+        let img = DynamicImage::new_rgb8(100, 100);
+        let result = super::resize_image_with_padding(img.clone(), 0, 100);
+        assert_eq!(result.dimensions(), (100, 100));
+        let result = super::resize_image_with_padding(img, 100, 0);
+        assert_eq!(result.dimensions(), (100, 100));
+    }
+
+    #[test]
+    fn resize_image_with_padding_zero_source_returns_blank_canvas() {
+        let img = DynamicImage::new_rgb8(0, 0);
+        let result = super::resize_image_with_padding(img, 320, 320);
+        assert_eq!(result.dimensions(), (320, 320));
+    }
 }
 
 /// Parse artists into a formatted string
@@ -1859,7 +1860,15 @@ fn resize_image_with_padding(
 ) -> DynamicImage {
     use image::RgbImage;
 
+    // Guard against zero dimensions to prevent division by zero and panics
+    if target_width == 0 || target_height == 0 {
+        return img;
+    }
     let (orig_width, orig_height) = img.dimensions();
+    if orig_width == 0 || orig_height == 0 {
+        return DynamicImage::ImageRgb8(RgbImage::new(target_width, target_height));
+    }
+
     let aspect_ratio = orig_width as f32 / orig_height as f32;
     let target_aspect_ratio = target_width as f32 / target_height as f32;
 

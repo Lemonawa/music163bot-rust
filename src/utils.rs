@@ -2,6 +2,16 @@ use std::path::Path;
 
 use regex::Regex;
 
+use crate::error::{BotError, Result};
+
+/// Build a reqwest HTTP client from a builder, logging and mapping errors on failure.
+pub fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
+    builder.build().map_err(|e| {
+        tracing::error!("Failed to build HTTP client: {}", e);
+        BotError::Network(e)
+    })
+}
+
 /// Global regex patterns for URL parsing
 static SONG_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"music\.163\.com/.*?song.*?[?&]id=(\d+)").expect("song id regex should be valid")
@@ -316,5 +326,12 @@ mod tests {
     fn is_timeout_error_rejects_non_timeout() {
         let err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         assert!(!super::is_timeout_error(&err));
+    }
+
+    #[test]
+    fn build_http_client_returns_client() {
+        let client =
+            super::build_http_client(reqwest::Client::builder()).expect("client should be built");
+        let _ = client;
     }
 }

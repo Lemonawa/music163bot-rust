@@ -26,7 +26,8 @@ use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, format_artists};
 use crate::utils::{
-    clean_filename, ensure_dir, extract_first_url, parse_music_id, throughput_mbps, update_peak,
+    build_http_client, clean_filename, ensure_dir, extract_first_url, parse_music_id,
+    throughput_mbps, update_peak,
 };
 
 pub struct BotState {
@@ -645,7 +646,7 @@ pub async fn run(config: Config) -> Result<()> {
                     .pool_idle_timeout(std::time::Duration::from_secs(60))
                     .timeout(std::time::Duration::from_secs(30))
                     .no_gzip();
-                let client = build_reqwest_client(client_builder)?;
+                let client = build_http_client(client_builder)?;
 
                 // Create bot with custom client and API URL
                 let bot = Bot::with_client(&config.bot_token, client).set_api_url(api_url.clone());
@@ -703,7 +704,7 @@ pub async fn run(config: Config) -> Result<()> {
             .pool_max_idle_per_host(2)
             .pool_idle_timeout(std::time::Duration::from_secs(60))
             .timeout(std::time::Duration::from_secs(30));
-        let client = build_reqwest_client(client_builder)?;
+        let client = build_http_client(client_builder)?;
         Bot::with_client(&config.bot_token, client)
     };
 
@@ -1890,7 +1891,7 @@ fn contains_music_link_hint(text: &str) -> bool {
 }
 
 fn is_spawnable_command_text(text: &str) -> bool {
-    text.trim_start().starts_with('/')
+    text.starts_with('/')
 }
 
 fn is_command_text(text: &str) -> bool {
@@ -2022,13 +2023,6 @@ async fn maintenance_worker(
             }
         }
     }
-}
-
-fn build_reqwest_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
-    builder.build().map_err(|e| {
-        tracing::error!("Failed to build HTTP client: {}", e);
-        e.into()
-    })
 }
 
 const PERF_STAGE_SELECT_URL: &str = "select_url";
@@ -2411,7 +2405,7 @@ fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
         );
     }
 
-    let client = build_reqwest_client(client_builder)?;
+    let client = build_http_client(client_builder)?;
     let bot = Bot::with_client(&config.bot_token, client.clone()).set_api_url(api_url);
 
     // Build full API base URL for raw requests: "{base}bot{token}/"
@@ -2558,7 +2552,6 @@ mod tests {
     use super::acquire_download_permit;
     use super::append_search_result_line;
     use super::build_music_url;
-    use super::build_reqwest_client;
     use super::format_perf;
     use super::get_upload_bot;
     use super::parse_api_url;
@@ -2567,6 +2560,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::CoverMode;
     use crate::config::UploadLogLevel;
+    use crate::utils::build_http_client;
     use teloxide::Bot;
     use uuid::Uuid;
 
@@ -2798,9 +2792,8 @@ mod tests {
     }
 
     #[test]
-    fn build_reqwest_client_returns_client() {
-        let client =
-            build_reqwest_client(reqwest::Client::builder()).expect("client should be built");
+    fn build_http_client_returns_client() {
+        let client = build_http_client(reqwest::Client::builder()).expect("client should be built");
         let _ = client;
     }
 
@@ -2922,7 +2915,10 @@ mod tests {
     #[test]
     fn spawn_gate_identifies_supported_messages() {
         assert!(super::should_spawn_message_task("/start"));
-        assert!(super::should_spawn_message_task("   /start"));
+        assert!(
+            !super::should_spawn_message_task("   /start"),
+            "leading whitespace should not be treated as a command"
+        );
         assert!(super::should_spawn_message_task(
             "https://music.163.com/song?id=1"
         ));
@@ -3376,6 +3372,21 @@ mod tests {
         let text = super::build_about_text();
         assert!(text.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
         assert!(text.contains(&format!("({})", super::BUILD_GIT_COMMIT)));
+    }
+
+    #[test]
+    fn is_spawnable_command_text_requires_leading_slash() {
+        assert!(super::is_spawnable_command_text("/start"));
+        assert!(super::is_spawnable_command_text("/music 123"));
+        assert!(!super::is_spawnable_command_text("  /start"));
+        assert!(!super::is_spawnable_command_text("hello"));
+    }
+
+    #[test]
+    fn is_command_text_requires_leading_slash() {
+        assert!(super::is_command_text("/start"));
+        assert!(!super::is_command_text("  /start"));
+        assert!(!super::is_command_text("hello"));
     }
 }
 
