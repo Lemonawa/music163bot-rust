@@ -26,8 +26,8 @@ use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, format_artists};
 use crate::utils::{
-    build_http_client, clean_filename, ensure_dir, extract_first_url, parse_music_id,
-    throughput_mbps, update_peak,
+    MusicCollectionTarget, build_http_client, clean_filename, ensure_dir, extract_first_url,
+    parse_music_collection_target, parse_music_id, throughput_mbps, update_peak,
 };
 
 pub struct BotState {
@@ -931,7 +931,9 @@ async fn handle_help_command(
         "📖 <b>使用帮助</b>\n\n\
         1️⃣ <b>直接解析</b>\n\
         发送网易云音乐链接给机器人，例如：\n\
-        <code>https://music.163.com/song?id=12345</code>\n\n\
+        <code>https://music.163.com/song?id=12345</code>\n\
+        <code>https://music.163.com/playlist?id=12345</code>\n\
+        <code>https://music.163.com/album?id=12345</code>\n\n\
         2️⃣ <b>搜索音乐</b>\n\
         使用 <code>/search &lt;关键词&gt;</code> 在私聊中搜索。\n\n\
         3️⃣ <b>Inline 搜索</b>\n\
@@ -970,6 +972,10 @@ async fn handle_music_command(
     // Try to parse as music ID first
     if let Some(music_id) = parse_music_id(&args) {
         return process_music(bot, msg, state, music_id).await;
+    }
+
+    if let Some(target) = parse_music_collection_target(&args) {
+        return process_music_collection(bot, msg, state, target).await;
     }
 
     // If not a number, search for the song
@@ -1208,6 +1214,94 @@ async fn process_music(
     }
 
     perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
+    Ok(())
+}
+
+async fn process_music_collection(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    target: MusicCollectionTarget,
+) -> ResponseResult<()> {
+    let (collection_name, collection_id, song_ids_result) = match target {
+        MusicCollectionTarget::Playlist(playlist_id) => (
+            "歌单",
+            playlist_id,
+            state.music_api.get_playlist_song_ids(playlist_id).await,
+        ),
+        MusicCollectionTarget::Album(album_id) => (
+            "专辑",
+            album_id,
+            state.music_api.get_album_song_ids(album_id).await,
+        ),
+    };
+
+    let song_ids = match song_ids_result {
+        Ok(song_ids) => song_ids,
+        Err(e) => {
+            send_reply_text(
+                bot,
+                msg,
+                format!("❌ 获取{collection_name}歌曲列表失败: {e}"),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    if song_ids.is_empty() {
+        send_reply_text(bot, msg, format!("❌ 该{collection_name}中没有可下载歌曲")).await?;
+        return Ok(());
+    }
+
+    let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
+    if exceeds_batch_download_limit(song_ids.len(), state.config.max_batch_download_tracks) {
+        send_reply_text(
+            bot,
+            msg,
+            format!(
+                "❌ 该{collection_name}包含 {} 首歌曲，超过单次下载上限 {} 首，已拒绝全部下载",
+                song_ids.len(),
+                max_tracks
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    send_reply_text(
+        bot,
+        msg,
+        format!(
+            "📚 检测到{collection_name}（ID: {collection_id}），共 {} 首，开始下载",
+            song_ids.len()
+        ),
+    )
+    .await?;
+
+    let mut failed_count = 0usize;
+    for song_id in song_ids {
+        if let Err(e) = process_music(bot, msg, state, song_id).await {
+            failed_count += 1;
+            tracing::error!(
+                "Failed to process song {} from {} {}: {}",
+                song_id,
+                collection_name,
+                collection_id,
+                e
+            );
+        }
+    }
+
+    if failed_count > 0 {
+        send_reply_text(
+            bot,
+            msg,
+            format!("⚠️ {collection_name}下载完成，但有 {failed_count} 首歌曲处理失败"),
+        )
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -1924,6 +2018,10 @@ fn message_task_limit(max_concurrent_downloads: u32) -> usize {
     (max_concurrent_downloads as usize)
         .saturating_mul(4)
         .clamp(8, 256)
+}
+
+fn exceeds_batch_download_limit(track_count: usize, max_batch_download_tracks: u32) -> bool {
+    track_count > max_batch_download_tracks.max(1) as usize
 }
 
 fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
@@ -2936,6 +3034,12 @@ mod tests {
     }
 
     #[test]
+    fn batch_download_limit_rejects_only_when_over_limit() {
+        assert!(!super::exceeds_batch_download_limit(20, 20));
+        assert!(super::exceeds_batch_download_limit(21, 20));
+    }
+
+    #[test]
     fn maintenance_scheduler_emits_expected_signals() {
         let counters = super::MaintenanceCounters::new();
         let mut config = crate::config::Config::default();
@@ -3400,10 +3504,21 @@ async fn handle_music_url(
         return process_music(bot, msg, state, music_id).await;
     }
 
+    if let Some(target) = parse_music_collection_target(text) {
+        return process_music_collection(bot, msg, state, target).await;
+    }
+
     let Some(url) = extract_first_url(text) else {
         send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
         return Ok(());
     };
+
+    if let Some(music_id) = parse_music_id(&url) {
+        return process_music(bot, msg, state, music_id).await;
+    }
+    if let Some(target) = parse_music_collection_target(&url) {
+        return process_music_collection(bot, msg, state, target).await;
+    }
 
     let final_url = match state.music_api.resolve_share_link(&url).await {
         Ok(final_url) => final_url.to_string(),
@@ -3416,6 +3531,8 @@ async fn handle_music_url(
 
     if let Some(music_id) = parse_music_id(&final_url) {
         process_music(bot, msg, state, music_id).await
+    } else if let Some(target) = parse_music_collection_target(&final_url) {
+        process_music_collection(bot, msg, state, target).await
     } else {
         send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
         Ok(())

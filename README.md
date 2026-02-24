@@ -18,6 +18,8 @@
 
 - `https://music.163.com/song?id=xxxxx`
 - `https://music.163.com/#/song?id=xxxxx`
+- `https://music.163.com/playlist?id=xxxxx`
+- `https://music.163.com/album?id=xxxxx`
 - `https://163cn.tv/xxxxx`
 - `https://163cn.link/xxxxx`
 
@@ -55,6 +57,7 @@ cargo build --release
     - 调整 `cache_dir` 和 `database` 路径。
     - （v1.1.0+）在 `[download]` 部分配置存储模式（推荐 `disk`）。
     - 在 `[download]` 部分配置 `cover_mode`（默认 `thumbnail`，嵌入封面固定 320x320 JPEG；`original/both` 仅保留兼容，不再下载原始分辨率）。
+    - 在 `[download]` 部分配置 `max_batch_tracks`（默认 20，超出时拒绝整单歌单/专辑下载）。
     - （v1.1.14+）可在 `[upload]` 调整 `client_reuse_requests`（`0` 表示不按请求次数刷新）。
 
 ### 存储模式配置 (v1.1.0+)

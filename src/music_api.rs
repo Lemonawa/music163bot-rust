@@ -41,6 +41,34 @@ pub struct SongDetailResponse {
     pub songs: Vec<SongDetail>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PlaylistDetailResponse {
+    code: i32,
+    playlist: Option<PlaylistDetail>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaylistDetail {
+    #[serde(rename = "trackIds")]
+    track_ids: Vec<PlaylistTrackId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaylistTrackId {
+    id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumSongsResponse {
+    code: i32,
+    songs: Vec<AlbumSong>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumSong {
+    id: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SongDetail {
     pub id: u64,
@@ -596,6 +624,56 @@ impl MusicApi {
         self.get_song_detail_shared(song_id).await
     }
 
+    /// Get all song IDs from a playlist.
+    pub async fn get_playlist_song_ids(&self, playlist_id: u64) -> Result<Vec<u64>> {
+        let url = format!("{}/api/v6/playlist/detail", self.base_url);
+        let playlist_id_str = playlist_id.to_string();
+        let mut request = self.client.post(url).form(&[
+            ("id", playlist_id_str.as_str()),
+            ("n", "10000"),
+            ("s", "0"),
+        ]);
+        request = self.apply_music_u_cookie(request);
+
+        let response = request.send().await?.error_for_status()?;
+        let data: PlaylistDetailResponse = response.json().await?;
+
+        if data.code != 200 {
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
+        }
+
+        let playlist = data
+            .playlist
+            .ok_or_else(|| BotError::MusicApi("No playlist data found".to_string()))?;
+        Ok(playlist
+            .track_ids
+            .into_iter()
+            .map(|track| track.id)
+            .collect())
+    }
+
+    /// Get all song IDs from an album.
+    pub async fn get_album_song_ids(&self, album_id: u64) -> Result<Vec<u64>> {
+        let url = format!("{}/api/v1/album/{}", self.base_url, album_id);
+        let mut request = self.client.get(url);
+        request = self.apply_music_u_cookie(request);
+
+        let response = request.send().await?.error_for_status()?;
+        let data: AlbumSongsResponse = response.json().await?;
+
+        if data.code != 200 {
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
+        }
+
+        Ok(data.songs.into_iter().map(|song| song.id).collect())
+    }
+
     /// Get song details and best available URL using a batch-first strategy with safe fallback.
     pub async fn get_song_detail_and_best_url(
         &self,
@@ -1056,13 +1134,17 @@ mod tests {
             return Ok(());
         };
 
-        let body = match path.as_str() {
-            "/api/song/detail" => {
-                let song_id = state.lock().expect("lock mock server state").song_id;
-                mock_song_detail_response_json(song_id)
-            }
-            "/api/song/enhance/player/url" => mock_song_url_response_json(&state, &request_body),
-            _ => r#"{"code":404}"#.to_string(),
+        let body = if path == "/api/song/detail" {
+            let song_id = state.lock().expect("lock mock server state").song_id;
+            mock_song_detail_response_json(song_id)
+        } else if path == "/api/song/enhance/player/url" {
+            mock_song_url_response_json(&state, &request_body)
+        } else if path == "/api/v6/playlist/detail" {
+            mock_playlist_detail_response_json(&state)
+        } else if path.starts_with("/api/v1/album/") {
+            mock_album_song_response_json(&state)
+        } else {
+            r#"{"code":404}"#.to_string()
         };
 
         write_json_response(&mut stream, &body).await
@@ -1192,6 +1274,16 @@ mod tests {
         }
     }
 
+    fn mock_playlist_detail_response_json(state: &Arc<Mutex<MockMusicApiServerState>>) -> String {
+        let song_id = state.lock().expect("lock mock server state").song_id;
+        format!(r#"{{"code":200,"playlist":{{"trackIds":[{{"id":{song_id}}}]}}}}"#)
+    }
+
+    fn mock_album_song_response_json(state: &Arc<Mutex<MockMusicApiServerState>>) -> String {
+        let song_id = state.lock().expect("lock mock server state").song_id;
+        format!(r#"{{"code":200,"songs":[{{"id":{song_id}}}]}}"#)
+    }
+
     fn sample_song_detail(song_id: u64) -> SongDetail {
         SongDetail {
             id: song_id,
@@ -1218,6 +1310,34 @@ mod tests {
             md5: "md5".to_string(),
             format: "mp3".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn get_playlist_song_ids_returns_track_ids() {
+        let song_id = 2201;
+        let server = MockMusicApiServer::start(song_id, HashMap::new()).await;
+        let api = MusicApi::new(None, server.base_url());
+
+        let song_ids = api
+            .get_playlist_song_ids(17_607_381_913)
+            .await
+            .expect("playlist songs should be returned");
+
+        assert_eq!(song_ids, vec![song_id]);
+    }
+
+    #[tokio::test]
+    async fn get_album_song_ids_returns_track_ids() {
+        let song_id = 2202;
+        let server = MockMusicApiServer::start(song_id, HashMap::new()).await;
+        let api = MusicApi::new(None, server.base_url());
+
+        let song_ids = api
+            .get_album_song_ids(121_344_602)
+            .await
+            .expect("album songs should be returned");
+
+        assert_eq!(song_ids, vec![song_id]);
     }
 
     #[test]

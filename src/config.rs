@@ -200,6 +200,8 @@ pub struct Config {
     pub memory_max_file_mb: u64,
     /// Maximum concurrent downloads (lower = less memory, higher = more throughput)
     pub max_concurrent_downloads: u32,
+    /// Maximum tracks allowed for a single playlist/album download request
+    pub max_batch_download_tracks: u32,
     /// Max idle connections per host for download client
     pub download_pool_max_idle_per_host: usize,
     /// Download connect timeout (seconds)
@@ -252,6 +254,7 @@ impl Default for Config {
             memory_max_file_mb: 100,
             // Balanced default: slightly higher throughput than 3 with moderate memory growth.
             max_concurrent_downloads: 4,
+            max_batch_download_tracks: 20,
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,
@@ -409,6 +412,13 @@ impl Config {
                 "download.max_concurrent",
             );
         }
+        if let Some(v) = config_map.get("download.max_batch_tracks") {
+            config.max_batch_download_tracks = parse_field(
+                v,
+                config.max_batch_download_tracks,
+                "download.max_batch_tracks",
+            );
+        }
         if let Some(v) = config_map.get("download.pool_max_idle_per_host") {
             config.download_pool_max_idle_per_host = parse_field(
                 v,
@@ -523,6 +533,12 @@ mod tests {
     }
 
     #[test]
+    fn max_batch_download_tracks_has_default() {
+        let config = Config::default();
+        assert_eq!(config.max_batch_download_tracks, 20);
+    }
+
+    #[test]
     fn memory_max_file_has_default() {
         let config = Config::default();
         assert_eq!(config.memory_max_file_mb, 100);
@@ -601,6 +617,26 @@ upload.pool_idle_timeout_secs=120\n";
 
         assert_eq!(loaded.upload_pool_max_idle_per_host, 2);
         assert_eq!(loaded.upload_pool_idle_timeout_secs, 120);
+    }
+
+    #[test]
+    fn max_batch_download_tracks_parses() {
+        let temp_name = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let temp_path =
+            std::env::temp_dir().join(format!("music163bot_batch_limit_{temp_name}.ini"));
+        let content = "bot.token=token\n\
+download.max_batch_tracks=42\n";
+
+        std::fs::write(&temp_path, content).expect("write temp config");
+
+        let loaded = Config::load(temp_path.to_str().expect("temp path")).expect("load config");
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.max_batch_download_tracks, 42);
     }
 
     #[test]

@@ -4,6 +4,12 @@ use regex::Regex;
 
 use crate::error::{BotError, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicCollectionTarget {
+    Playlist(u64),
+    Album(u64),
+}
+
 /// Build a reqwest HTTP client from a builder, logging and mapping errors on failure.
 pub fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
     builder.build().map_err(|e| {
@@ -26,17 +32,9 @@ fn parse_direct_numeric_id(text: &str) -> Option<u64> {
     text.trim().parse::<u64>().ok()
 }
 
-fn extract_music_id_from_canonical_song_url(text: &str) -> Option<u64> {
-    let trimmed = text.trim();
-    let is_music_domain = trimmed.starts_with("https://music.163.com/")
-        || trimmed.starts_with("http://music.163.com/");
-    let is_song_url = trimmed.contains("/song?") || trimmed.contains("/#/song?");
-    if !is_music_domain || !is_song_url {
-        return None;
-    }
-
-    let query_start = trimmed.find('?')? + 1;
-    let query = &trimmed[query_start..];
+fn extract_music_id_query_value(text: &str) -> Option<u64> {
+    let query_start = text.find('?')? + 1;
+    let query = &text[query_start..];
 
     for pair in query.split('&') {
         let Some((key, value)) = pair.split_once('=') else {
@@ -58,6 +56,24 @@ fn extract_music_id_from_canonical_song_url(text: &str) -> Option<u64> {
     None
 }
 
+fn extract_music_entity_id_from_canonical_url(text: &str, entity: &str) -> Option<u64> {
+    let trimmed = text.trim();
+    let is_music_domain = trimmed.starts_with("https://music.163.com/")
+        || trimmed.starts_with("http://music.163.com/");
+    let direct_marker = format!("/{entity}?");
+    let hash_marker = format!("/#/{entity}?");
+    let is_target_url = trimmed.contains(&direct_marker) || trimmed.contains(&hash_marker);
+    if !is_music_domain || !is_target_url {
+        return None;
+    }
+
+    extract_music_id_query_value(trimmed)
+}
+
+fn extract_music_id_from_canonical_song_url(text: &str) -> Option<u64> {
+    extract_music_entity_id_from_canonical_url(text, "song")
+}
+
 fn extract_first_number(text: &str) -> Option<u64> {
     let bytes = text.as_bytes();
     let start = bytes.iter().position(u8::is_ascii_digit)?;
@@ -77,6 +93,15 @@ fn parse_music_id_from_share_url(url: &str) -> Option<u64> {
     }
 
     extract_music_id_from_canonical_song_url(url).or_else(|| extract_first_number(url))
+}
+
+fn parse_music_collection_target_from_url(url: &str) -> Option<MusicCollectionTarget> {
+    extract_music_entity_id_from_canonical_url(url, "playlist")
+        .map(MusicCollectionTarget::Playlist)
+        .or_else(|| {
+            extract_music_entity_id_from_canonical_url(url, "album")
+                .map(MusicCollectionTarget::Album)
+        })
 }
 
 /// Extract music ID from text
@@ -102,6 +127,17 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
     }
 
     None
+}
+
+/// Extract playlist/album target from text.
+pub fn parse_music_collection_target(text: &str) -> Option<MusicCollectionTarget> {
+    if let Some(target) = parse_music_collection_target_from_url(text) {
+        return Some(target);
+    }
+
+    SHARE_LINK_REGEX
+        .find(text)
+        .and_then(|url_match| parse_music_collection_target_from_url(url_match.as_str()))
 }
 
 /// Extract the first URL from text
@@ -226,7 +262,10 @@ pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use super::{clean_filename, ensure_dir, parse_music_id, throughput_mbps, update_peak};
+    use super::{
+        MusicCollectionTarget, clean_filename, ensure_dir, parse_music_collection_target,
+        parse_music_id, throughput_mbps, update_peak,
+    };
 
     #[test]
     fn parse_music_id_fast_path_detects_direct_numeric() {
@@ -280,6 +319,30 @@ mod tests {
     fn parse_music_id_handles_direct_numeric_input() {
         assert_eq!(parse_music_id("123456"), Some(123_456));
         assert_eq!(parse_music_id("  123456  "), Some(123_456));
+    }
+
+    #[test]
+    fn parse_music_collection_target_detects_playlist_with_optional_uct2() {
+        let url = "https://music.163.com/playlist?id=17607381913&uct2=U2FsdGVkX18AISWPo4dHRIRF8KPygbcmfo67g4xh6S8=";
+        assert_eq!(
+            parse_music_collection_target(url),
+            Some(MusicCollectionTarget::Playlist(17_607_381_913))
+        );
+    }
+
+    #[test]
+    fn parse_music_collection_target_detects_album_without_uct2() {
+        let url = "https://music.163.com/album?id=121344602";
+        assert_eq!(
+            parse_music_collection_target(url),
+            Some(MusicCollectionTarget::Album(121_344_602))
+        );
+    }
+
+    #[test]
+    fn parse_music_collection_target_rejects_song_link() {
+        let url = "https://music.163.com/song?id=424242";
+        assert_eq!(parse_music_collection_target(url), None);
     }
 
     #[test]
