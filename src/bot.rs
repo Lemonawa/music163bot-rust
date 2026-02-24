@@ -542,7 +542,7 @@ fn build_status_text(
 • 命中率: <code>{hit_rate:.2}%</code>\n\n\
 <b>🖥️ 资源</b>\n\
 • CPU: <code>{cpu:.1}%</code>\n\
-• 系统内存: <code>{system_used} / {system_total} MB</code>\n\
+• 系统内存: <code>{system_used}/{system_total} MB</code>\n\
 • Bot 内存: <code>{bot_memory}</code>\n\
 • 运行时长: <code>{uptime}</code>\n\n\
 <b>🚀 传输</b>\n\
@@ -2007,8 +2007,24 @@ fn is_clearallcache_confirm(args: Option<&str>) -> bool {
     matches!(args.map(str::trim), Some("confirm"))
 }
 
+fn rmcache_usage_prompt() -> &'static str {
+    "请输入要删除缓存的歌曲ID\n\n用法: <code>/rmcache &lt;音乐ID&gt;</code>"
+}
+
+fn clearallcache_confirmation_prompt() -> &'static str {
+    "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 <code>/clearallcache confirm</code> 确认操作。"
+}
+
 async fn send_reply_text(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
     bot.send_message(msg.chat.id, text)
+        .reply_parameters(ReplyParameters::new(msg.id))
+        .await?;
+    Ok(())
+}
+
+async fn send_reply_html(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+    bot.send_message(msg.chat.id, text)
+        .parse_mode(ParseMode::Html)
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
     Ok(())
@@ -3466,9 +3482,21 @@ mod tests {
         assert!(text.contains("• 总缓存: <code>100</code>"));
         assert!(text.contains("• 用户缓存: <code>20</code>"));
         assert!(text.contains("• 群组缓存: <code>8</code>"));
-        assert!(text.contains("• 系统内存: <code>512 / 1024 MB</code>"));
+        assert!(text.contains("• 系统内存: <code>512/1024 MB</code>"));
         assert!(text.contains("• Bot 内存: <code>12 MB</code>"));
         assert!(text.contains("• 下载: 实时 <code>6.00</code> MB/s"));
+    }
+
+    #[test]
+    fn rmcache_usage_prompt_uses_html_code() {
+        let text = super::rmcache_usage_prompt();
+        assert!(text.contains("<code>/rmcache &lt;音乐ID&gt;</code>"));
+    }
+
+    #[test]
+    fn clearallcache_confirmation_prompt_uses_html_code() {
+        let text = super::clearallcache_confirmation_prompt();
+        assert!(text.contains("<code>/clearallcache confirm</code>"));
     }
 
     #[test]
@@ -3831,12 +3859,7 @@ async fn handle_rmcache_command(
     let args = args.unwrap_or_default();
 
     if args.is_empty() {
-        send_reply_text(
-            bot,
-            msg,
-            "请输入要删除缓存的歌曲ID\n\n用法: `/rmcache <音乐ID>`",
-        )
-        .await?;
+        send_reply_html(bot, msg, rmcache_usage_prompt()).await?;
         return Ok(());
     }
 
@@ -3891,10 +3914,7 @@ async fn handle_clearallcache_command(
     }
 
     // Send confirmation message
-    bot
-        .send_message(msg.chat.id, "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 `/clearallcache confirm` 确认操作。")
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
 
     Ok(())
 }
