@@ -146,6 +146,16 @@ help - 显示详细使用帮助
 - **sqlx** - 异步 SQL 工具
 - **id3 / metaflac** - 音乐标签处理
 
+## 代码健康得分（desloppify）
+
+本仓库使用 `desloppify` 持续跟踪代码健康评分。可通过以下命令更新评分卡：
+
+```bash
+.venv-desloppify/bin/desloppify scan --path .
+```
+
+<img src="scorecard.png" width="100%">
+
 ## License
 
 [WTFPL License](LICENSE)
