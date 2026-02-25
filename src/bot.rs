@@ -64,6 +64,7 @@ pub struct UploadCounters {
 const SPEED_SAMPLE_WINDOW: usize = 20;
 const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
+const MAX_COLLECTION_DOWNLOAD_PARALLELISM: usize = 8;
 const MAINTENANCE_QUEUE_CAPACITY: usize = 32;
 const CACHE_PRUNE_INTERVAL_REQUESTS: u32 = 50;
 const PERF_LOG_PREFIX: &str = "PERF";
@@ -1279,19 +1280,38 @@ async fn process_music_collection(
     )
     .await?;
 
-    let mut failed_count = 0usize;
-    for song_id in song_ids {
-        if let Err(e) = process_music(bot, msg, state, song_id).await {
-            failed_count += 1;
-            tracing::error!(
-                "Failed to process song {} from {} {}: {}",
-                song_id,
-                collection_name,
-                collection_id,
-                e
-            );
-        }
-    }
+    let parallelism =
+        collection_download_parallelism(state.config.max_concurrent_downloads, song_ids.len());
+    tracing::info!(
+        "{} {} processing {} tracks with parallelism {}",
+        collection_name,
+        collection_id,
+        song_ids.len(),
+        parallelism
+    );
+
+    let failed_count = Arc::new(AtomicU32::new(0));
+    futures_util::stream::iter(song_ids)
+        .for_each_concurrent(parallelism, |song_id| {
+            let bot = bot.clone();
+            let msg = msg.clone();
+            let state = Arc::clone(state);
+            let failed_count = Arc::clone(&failed_count);
+            async move {
+                if let Err(e) = process_music(&bot, &msg, &state, song_id).await {
+                    failed_count.fetch_add(1, Ordering::Relaxed);
+                    tracing::error!(
+                        "Failed to process song {} from {} {}: {}",
+                        song_id,
+                        collection_name,
+                        collection_id,
+                        e
+                    );
+                }
+            }
+        })
+        .await;
+    let failed_count = failed_count.load(Ordering::Relaxed) as usize;
 
     if failed_count > 0 {
         send_reply_text(
@@ -2038,6 +2058,13 @@ fn message_task_limit(max_concurrent_downloads: u32) -> usize {
 
 fn exceeds_batch_download_limit(track_count: usize, max_batch_download_tracks: u32) -> bool {
     track_count > max_batch_download_tracks.max(1) as usize
+}
+
+fn collection_download_parallelism(max_concurrent_downloads: u32, track_count: usize) -> usize {
+    let track_count = track_count.max(1);
+    (max_concurrent_downloads as usize)
+        .clamp(1, MAX_COLLECTION_DOWNLOAD_PARALLELISM)
+        .min(track_count)
 }
 
 fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
@@ -3053,6 +3080,18 @@ mod tests {
     fn batch_download_limit_rejects_only_when_over_limit() {
         assert!(!super::exceeds_batch_download_limit(20, 20));
         assert!(super::exceeds_batch_download_limit(21, 20));
+    }
+
+    #[test]
+    fn collection_download_parallelism_respects_bounds() {
+        assert_eq!(super::collection_download_parallelism(0, 20), 1);
+        assert_eq!(super::collection_download_parallelism(1, 20), 1);
+        assert_eq!(super::collection_download_parallelism(4, 20), 4);
+        assert_eq!(
+            super::collection_download_parallelism(100, 20),
+            super::MAX_COLLECTION_DOWNLOAD_PARALLELISM
+        );
+        assert_eq!(super::collection_download_parallelism(4, 2), 2);
     }
 
     #[test]
