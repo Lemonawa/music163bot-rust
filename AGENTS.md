@@ -33,3 +33,5 @@ Before each `git push`, run:
 ```
 
 Address findings with `desloppify resolve fixed ...` (or justified `wontfix`) and rescan. `.desloppify/` is local tool state and should remain gitignored.
+
+For Codex-run dependency maintenance commands (for example `cargo update`), do not add `--offline` by default. If the command needs network access outside sandbox limits, request sandbox escalation permission first, then run the command without `--offline`.
