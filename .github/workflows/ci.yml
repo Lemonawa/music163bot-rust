@@ -64,7 +64,8 @@ jobs:
           echo "archive=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact (Linux-x86_64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-linux-x86_64
           path: ${{ steps.package.outputs.archive }}
+          archive: false
