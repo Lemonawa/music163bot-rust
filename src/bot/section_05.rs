@@ -42,8 +42,27 @@ async fn apply_tags_in_blocking(
 }
 
 fn create_music_keyboard(music_id: u64, song_name: &str, artists: &str) -> InlineKeyboardMarkup {
+    create_music_keyboard_for_target(
+        MusicLinkTarget::Song(music_id),
+        music_id,
+        song_name,
+        artists,
+    )
+}
+
+fn create_music_keyboard_for_target(
+    link_target: MusicLinkTarget,
+    music_id: u64,
+    song_name: &str,
+    artists: &str,
+) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
-    match build_music_url("https://music.163.com", music_id) {
+    let primary_url_result = match link_target {
+        MusicLinkTarget::Song(link_music_id) => build_music_url("https://music.163.com", link_music_id),
+        MusicLinkTarget::Program(program_id) => build_program_url("https://music.163.com", program_id),
+    };
+
+    match primary_url_result {
         Ok(url) => {
             rows.push(vec![InlineKeyboardButton::url(
                 format!("{song_name} - {artists}"),
@@ -55,9 +74,13 @@ fn create_music_keyboard(music_id: u64, song_name: &str, artists: &str) -> Inlin
         }
     }
 
+    let switch_inline_query_url = match link_target {
+        MusicLinkTarget::Song(link_music_id) => format!("https://music.163.com/song?id={link_music_id}"),
+        MusicLinkTarget::Program(program_id) => format!("https://music.163.com/program?id={program_id}"),
+    };
     rows.push(vec![InlineKeyboardButton::switch_inline_query(
         "分享给朋友",
-        format!("https://music.163.com/song?id={music_id}"),
+        switch_inline_query_url,
     )]);
 
     InlineKeyboardMarkup::new(rows)
@@ -70,6 +93,16 @@ fn build_music_url(
     let mut url = reqwest::Url::parse(base_url)?;
     url.set_path("song");
     url.set_query(Some(&format!("id={music_id}")));
+    Ok(url)
+}
+
+fn build_program_url(
+    base_url: &str,
+    program_id: u64,
+) -> std::result::Result<reqwest::Url, url::ParseError> {
+    let mut url = reqwest::Url::parse(base_url)?;
+    url.set_path("program");
+    url.set_query(Some(&format!("id={program_id}")));
     Ok(url)
 }
 
@@ -459,4 +492,3 @@ async fn raw_send_document_bytes(
         .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to read upload response: {e}")))?;
     parse_telegram_api_response(&body, status, "sendDocument")
 }
-

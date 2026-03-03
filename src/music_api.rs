@@ -69,6 +69,57 @@ struct AlbumSong {
     id: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct DjProgramDetailResponse {
+    code: i32,
+    program: Option<DjProgramItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DjProgramListResponse {
+    code: i32,
+    count: usize,
+    #[serde(default)]
+    programs: Vec<DjProgramItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DjProgramItem {
+    id: u64,
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "mainTrackId")]
+    main_track_id: Option<u64>,
+    #[serde(default)]
+    dj: Option<DjProgramDj>,
+    #[serde(default)]
+    radio: Option<DjProgramRadio>,
+    #[serde(rename = "coverUrl")]
+    cover_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DjProgramDj {
+    #[serde(default)]
+    nickname: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DjProgramRadio {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramMainTrack {
+    pub program_id: u64,
+    pub main_track_id: u64,
+    pub program_name: String,
+    pub author_name: String,
+    pub radio_name: String,
+    pub cover_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SongDetail {
     pub id: u64,

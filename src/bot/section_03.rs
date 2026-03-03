@@ -9,7 +9,9 @@ async fn handle_help_command(
         发送网易云音乐链接给机器人，例如：\n\
         <code>https://music.163.com/song?id=12345</code>\n\
         <code>https://music.163.com/playlist?id=12345</code>\n\
-        <code>https://music.163.com/album?id=12345</code>\n\n\
+        <code>https://music.163.com/album?id=12345</code>\n\
+        <code>https://music.163.com/program?id=12345</code>\n\
+        <code>https://music.163.com/djradio?id=12345</code>\n\n\
         2️⃣ <b>搜索音乐</b>\n\
         使用 <code>/search &lt;关键词&gt;</code> 在私聊中搜索。\n\n\
         3️⃣ <b>Inline 搜索</b>\n\
@@ -48,6 +50,10 @@ async fn handle_music_command(
     // Try to parse as music ID first
     if let Some(music_id) = parse_music_id(&args) {
         return process_music(bot, msg, state, music_id).await;
+    }
+
+    if let Some(program_id) = parse_music_program_id(&args) {
+        return process_program(bot, msg, state, program_id).await;
     }
 
     if let Some(target) = parse_music_collection_target(&args) {
@@ -142,14 +148,122 @@ async fn try_send_cached_song(
     }
 }
 
+async fn process_program(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    program_id: u64,
+) -> ResponseResult<()> {
+    let program = match state.music_api.get_program_main_track(program_id).await {
+        Ok(program) => program,
+        Err(e) => {
+            send_reply_text(bot, msg, format!("❌ 获取声音详情失败: {e}")).await?;
+            return Ok(());
+        }
+    };
+
+    process_music_with_context(bot, msg, state, program.main_track_id, Some(program)).await
+}
+
+fn apply_program_metadata(
+    song_detail: Arc<crate::music_api::SongDetail>,
+    program: &ProgramMainTrack,
+) -> Arc<crate::music_api::SongDetail> {
+    let mut detail = (*song_detail).clone();
+
+    if !program.program_name.trim().is_empty() {
+        detail.name.clone_from(&program.program_name);
+    }
+
+    let author_name = if program.author_name.trim().is_empty() {
+        detail
+            .ar
+            .as_ref()
+            .and_then(|artists| artists.first())
+            .and_then(|artist| {
+                let name = artist.name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(artist.name.clone())
+                }
+            })
+            .unwrap_or_else(|| "Unknown Artist".to_string())
+    } else {
+        program.author_name.clone()
+    };
+    detail.ar = Some(vec![crate::music_api::Artist {
+        id: 0,
+        name: author_name,
+    }]);
+
+    let previous_album = detail.al.take();
+    let fallback_cover = previous_album
+        .as_ref()
+        .and_then(|album| album.pic_url.clone())
+        .filter(|url| !url.is_empty());
+    let cover_url = program
+        .cover_url
+        .clone()
+        .filter(|url| !url.is_empty())
+        .or(fallback_cover);
+    let album_name = if program.radio_name.trim().is_empty() {
+        previous_album
+            .as_ref()
+            .and_then(|album| {
+                let name = album.name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(album.name.clone())
+                }
+            })
+            .unwrap_or_else(|| "Unknown Album".to_string())
+    } else {
+        program.radio_name.clone()
+    };
+    let album_id = previous_album.as_ref().map_or(0, |album| album.id);
+    detail.al = Some(crate::music_api::Album {
+        id: album_id,
+        name: album_name,
+        pic_url: cover_url,
+    });
+
+    if detail.name.trim().is_empty() {
+        detail.name = format!("Program {}", program.program_id);
+    }
+
+    Arc::new(detail)
+}
+
 async fn process_music(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
     music_id: u64,
 ) -> ResponseResult<()> {
+    process_music_with_context(bot, msg, state, music_id, None).await
+}
+
+async fn process_music_with_context(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    music_id: u64,
+    program_context: Option<ProgramMainTrack>,
+) -> ResponseResult<()> {
     let e2e_start = std::time::Instant::now();
     let mut perf_ctx = build_perf_trace_context(state, music_id, "initial");
+    let media_label = if program_context.is_some() {
+        "声音"
+    } else {
+        "歌曲"
+    };
+    let loading_text = if program_context.is_some() {
+        "🔄 正在获取声音信息..."
+    } else {
+        "🔄 正在获取歌曲信息..."
+    };
 
     let cache_lookup_start = std::time::Instant::now();
     if try_send_cached_song(bot, msg, state, music_id).await? {
@@ -213,7 +327,7 @@ async fn process_music(
     let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
 
     let status_fut = bot
-        .send_message(msg.chat.id, "🔄 正在获取歌曲信息...")
+        .send_message(msg.chat.id, loading_text)
         .reply_parameters(ReplyParameters::new(msg.id))
         .send();
     let fetch_fut = state
@@ -232,12 +346,21 @@ async fn process_music(
             bot.edit_message_text(
                 msg.chat.id,
                 status_msg.id,
-                format!("❌ 获取歌曲信息或下载链接失败: {e}"),
+                format!("❌ 获取{media_label}信息或下载链接失败: {e}"),
             )
             .await?;
             perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
             return Ok(());
         }
+    };
+
+    let (song_detail, link_target) = if let Some(program) = program_context.as_ref() {
+        (
+            apply_program_metadata(song_detail, program),
+            MusicLinkTarget::Program(program.program_id),
+        )
+    } else {
+        (song_detail, MusicLinkTarget::Song(music_id))
     };
 
     if song_url.url.is_empty() {
@@ -279,6 +402,7 @@ async fn process_music(
         pre_upload_path_start,
         &perf_ctx,
         &artists,
+        link_target,
     )
     .await
     {
@@ -299,6 +423,10 @@ async fn process_music_collection(
     state: &Arc<BotState>,
     target: MusicCollectionTarget,
 ) -> ResponseResult<()> {
+    if let MusicCollectionTarget::DjRadio(radio_id) = target {
+        return process_djradio_collection(bot, msg, state, radio_id).await;
+    }
+
     let (collection_name, collection_id, song_ids_result) = match target {
         MusicCollectionTarget::Playlist(playlist_id) => (
             "歌单",
@@ -310,6 +438,7 @@ async fn process_music_collection(
             album_id,
             state.music_api.get_album_song_ids(album_id).await,
         ),
+        MusicCollectionTarget::DjRadio(_) => unreachable!("djradio handled above"),
     };
 
     let song_ids = match song_ids_result {
@@ -374,6 +503,101 @@ async fn process_music_collection(
             bot,
             msg,
             format!("⚠️ {collection_name}下载完成，但有 {failed_count} 首歌曲处理失败"),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn process_djradio_collection(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    radio_id: u64,
+) -> ResponseResult<()> {
+    let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
+    let fetch_limit = max_tracks.saturating_add(1);
+    let (total_programs, program_tracks) = match state
+        .music_api
+        .get_djradio_program_main_tracks(radio_id, fetch_limit)
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            send_reply_text(bot, msg, format!("❌ 获取电台声音列表失败: {e}")).await?;
+            return Ok(());
+        }
+    };
+
+    if total_programs == 0 || program_tracks.is_empty() {
+        send_reply_text(bot, msg, "❌ 该电台中没有可下载声音").await?;
+        return Ok(());
+    }
+
+    if exceeds_batch_download_limit(total_programs, state.config.max_batch_download_tracks) {
+        send_reply_text(
+            bot,
+            msg,
+            format!(
+                "❌ 该电台包含 {total_programs} 条声音，超过单次下载上限 {max_tracks} 条，已拒绝全部下载",
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let mut seen_track_ids = std::collections::HashSet::new();
+    let mut unique_tracks = Vec::with_capacity(program_tracks.len());
+    for program in program_tracks {
+        if seen_track_ids.insert(program.main_track_id) {
+            unique_tracks.push(program);
+        }
+    }
+
+    if unique_tracks.is_empty() {
+        send_reply_text(bot, msg, "❌ 该电台中没有可下载声音").await?;
+        return Ok(());
+    }
+
+    send_reply_text(
+        bot,
+        msg,
+        format!(
+            "📻 检测到电台（ID: {radio_id}），共 {} 条声音，开始下载",
+            unique_tracks.len()
+        ),
+    )
+    .await?;
+
+    let mut failed_count = 0usize;
+    for program in unique_tracks {
+        let program_id = program.program_id;
+        let main_track_id = program.main_track_id;
+        if let Err(e) = process_music_with_context(
+            bot,
+            msg,
+            state,
+            main_track_id,
+            Some(program),
+        )
+        .await
+        {
+            failed_count += 1;
+            tracing::error!(
+                "Failed to process program {} from radio {}: {}",
+                program_id,
+                radio_id,
+                e
+            );
+        }
+    }
+
+    if failed_count > 0 {
+        send_reply_text(
+            bot,
+            msg,
+            format!("⚠️ 电台下载完成，但有 {failed_count} 条声音处理失败"),
         )
         .await?;
     }
@@ -456,4 +680,3 @@ async fn download_cover_assets(
     perf_ctx.log_stage(PERF_STAGE_COVER_DOWNLOAD, cover_download_start.elapsed());
     result
 }
-

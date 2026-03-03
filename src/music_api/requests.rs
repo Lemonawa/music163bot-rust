@@ -1,4 +1,28 @@
 impl MusicApi {
+    fn map_program_main_track(program: DjProgramItem) -> Result<ProgramMainTrack> {
+        let main_track_id = program
+            .main_track_id
+            .filter(|id| *id > 0)
+            .ok_or_else(|| BotError::MusicApi("No mainTrackId found for program".to_string()))?;
+        let author_name = program
+            .dj
+            .as_ref()
+            .map_or_else(String::new, |dj| dj.nickname.clone());
+        let radio_name = program
+            .radio
+            .as_ref()
+            .map_or_else(String::new, |radio| radio.name.clone());
+
+        Ok(ProgramMainTrack {
+            program_id: program.id,
+            main_track_id,
+            program_name: program.name,
+            author_name,
+            radio_name,
+            cover_url: program.cover_url.filter(|url| !url.is_empty()),
+        })
+    }
+
     async fn get_song_detail_shared(&self, song_id: u64) -> Result<Arc<SongDetail>> {
         if let Some(cached) = self.get_cached_song_detail(song_id) {
             return Ok(cached);
@@ -124,6 +148,64 @@ impl MusicApi {
         }
 
         Ok(data.songs.into_iter().map(|song| song.id).collect())
+    }
+
+    /// Get main track metadata from a program.
+    pub async fn get_program_main_track(&self, program_id: u64) -> Result<ProgramMainTrack> {
+        let url = format!("{}/api/dj/program/detail?id={}", self.base_url, program_id);
+        let mut request = self.client.get(url);
+        request = self.apply_music_u_cookie(request);
+
+        let response = request.send().await?.error_for_status()?;
+        let data: DjProgramDetailResponse = response.json().await?;
+
+        if data.code != 200 {
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
+        }
+
+        let program = data
+            .program
+            .ok_or_else(|| BotError::MusicApi("No program data found".to_string()))?;
+        Self::map_program_main_track(program)
+    }
+
+    /// Get latest program main tracks from a djradio.
+    pub async fn get_djradio_program_main_tracks(
+        &self,
+        radio_id: u64,
+        limit: usize,
+    ) -> Result<(usize, Vec<ProgramMainTrack>)> {
+        let limit = limit.max(1);
+        let url = format!(
+            "{}/api/dj/program/byradio?radioId={}&limit={}&offset=0&asc=false",
+            self.base_url, radio_id, limit
+        );
+        let mut request = self
+            .client
+            .get(url)
+            .header("Referer", "https://music.163.com/");
+        request = self.apply_music_u_cookie(request);
+
+        let response = request.send().await?.error_for_status()?;
+        let data: DjProgramListResponse = response.json().await?;
+
+        if data.code != 200 {
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
+        }
+
+        let mut tracks = Vec::with_capacity(data.programs.len());
+        for program in data.programs {
+            if let Ok(track) = Self::map_program_main_track(program) {
+                tracks.push(track);
+            }
+        }
+        Ok((data.count, tracks))
     }
 
     /// Get song details and best available URL using a batch-first strategy with safe fallback.

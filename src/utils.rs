@@ -8,6 +8,7 @@ use crate::error::{BotError, Result};
 pub enum MusicCollectionTarget {
     Playlist(u64),
     Album(u64),
+    DjRadio(u64),
 }
 
 /// Build a reqwest HTTP client from a builder, logging and mapping errors on failure.
@@ -74,6 +75,11 @@ fn extract_music_id_from_canonical_song_url(text: &str) -> Option<u64> {
     extract_music_entity_id_from_canonical_url(text, "song")
 }
 
+fn extract_music_program_id_from_canonical_url(text: &str) -> Option<u64> {
+    extract_music_entity_id_from_canonical_url(text, "program")
+        .or_else(|| extract_music_entity_id_from_canonical_url(text, "dj"))
+}
+
 fn extract_first_number(text: &str) -> Option<u64> {
     let bytes = text.as_bytes();
     let start = bytes.iter().position(u8::is_ascii_digit)?;
@@ -95,12 +101,20 @@ fn parse_music_id_from_share_url(url: &str) -> Option<u64> {
     extract_music_id_from_canonical_song_url(url).or_else(|| extract_first_number(url))
 }
 
+fn parse_music_program_id_from_share_url(url: &str) -> Option<u64> {
+    extract_music_program_id_from_canonical_url(url)
+}
+
 fn parse_music_collection_target_from_url(url: &str) -> Option<MusicCollectionTarget> {
     extract_music_entity_id_from_canonical_url(url, "playlist")
         .map(MusicCollectionTarget::Playlist)
         .or_else(|| {
             extract_music_entity_id_from_canonical_url(url, "album")
                 .map(MusicCollectionTarget::Album)
+        })
+        .or_else(|| {
+            extract_music_entity_id_from_canonical_url(url, "djradio")
+                .map(MusicCollectionTarget::DjRadio)
         })
 }
 
@@ -127,6 +141,17 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
     }
 
     None
+}
+
+/// Extract program ID (program/dj) from text.
+pub fn parse_music_program_id(text: &str) -> Option<u64> {
+    if let Some(id) = extract_music_program_id_from_canonical_url(text) {
+        return Some(id);
+    }
+
+    SHARE_LINK_REGEX
+        .find(text)
+        .and_then(|url_match| parse_music_program_id_from_share_url(url_match.as_str()))
 }
 
 /// Extract playlist/album target from text.
@@ -264,7 +289,7 @@ mod tests {
 
     use super::{
         MusicCollectionTarget, clean_filename, ensure_dir, parse_music_collection_target,
-        parse_music_id, throughput_mbps, update_peak,
+        parse_music_id, parse_music_program_id, throughput_mbps, update_peak,
     };
 
     #[test]
@@ -343,6 +368,33 @@ mod tests {
     fn parse_music_collection_target_rejects_song_link() {
         let url = "https://music.163.com/song?id=424242";
         assert_eq!(parse_music_collection_target(url), None);
+    }
+
+    #[test]
+    fn parse_music_collection_target_detects_djradio() {
+        let url = "https://music.163.com/djradio?id=985936420";
+        assert_eq!(
+            parse_music_collection_target(url),
+            Some(MusicCollectionTarget::DjRadio(985_936_420))
+        );
+    }
+
+    #[test]
+    fn parse_music_program_id_detects_program_link() {
+        let url = "https://music.163.com/program?id=3714760479&uct2=foo";
+        assert_eq!(parse_music_program_id(url), Some(3_714_760_479));
+    }
+
+    #[test]
+    fn parse_music_program_id_detects_dj_link() {
+        let url = "https://music.163.com/dj?id=3714760479&uct2=foo";
+        assert_eq!(parse_music_program_id(url), Some(3_714_760_479));
+    }
+
+    #[test]
+    fn parse_music_program_id_rejects_song_link() {
+        let url = "https://music.163.com/song?id=3714760479";
+        assert_eq!(parse_music_program_id(url), None);
     }
 
     #[test]

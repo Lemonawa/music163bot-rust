@@ -54,6 +54,12 @@
     }
 
     #[test]
+    fn build_program_url_accepts_valid_base() {
+        let url = build_program_url("https://music.163.com", 123).expect("valid url");
+        assert_eq!(url.as_str(), "https://music.163.com/program?id=123");
+    }
+
+    #[test]
     fn parse_api_url_accepts_valid_base() {
         let url = parse_api_url("https://api.telegram.org/").expect("valid url");
         assert_eq!(url.as_str(), "https://api.telegram.org/");
@@ -190,4 +196,3 @@
         assert_eq!(detail, 1);
         assert_eq!(url, 2);
     }
-

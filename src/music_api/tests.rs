@@ -1,4 +1,3 @@
-
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -25,6 +24,7 @@ struct MockMusicApiServerState {
     song_id: u64,
     song_url_sequences: HashMap<u64, VecDeque<MockSongUrlReply>>,
     calls_by_bitrate: HashMap<u64, usize>,
+    byradio_referer_seen: bool,
 }
 
 impl MockMusicApiServerState {
@@ -37,6 +37,7 @@ impl MockMusicApiServerState {
             song_id,
             song_url_sequences,
             calls_by_bitrate: HashMap::new(),
+            byradio_referer_seen: false,
         }
     }
 }
@@ -80,6 +81,11 @@ impl MockMusicApiServer {
         let state = self.state.lock().expect("lock mock server state");
         *state.calls_by_bitrate.get(&bitrate).unwrap_or(&0)
     }
+
+    fn saw_byradio_referer(&self) -> bool {
+        let state = self.state.lock().expect("lock mock server state");
+        state.byradio_referer_seen
+    }
 }
 
 impl Drop for MockMusicApiServer {
@@ -92,7 +98,7 @@ async fn handle_mock_music_api_connection(
     mut stream: TcpStream,
     state: Arc<Mutex<MockMusicApiServerState>>,
 ) -> std::io::Result<()> {
-    let Some((path, request_body)) = read_http_request(&mut stream).await? else {
+    let Some((path, headers, request_body)) = read_http_request(&mut stream).await? else {
         return Ok(());
     };
 
@@ -105,6 +111,22 @@ async fn handle_mock_music_api_connection(
         mock_playlist_detail_response_json(&state)
     } else if path.starts_with("/api/v1/album/") {
         mock_album_song_response_json(&state)
+    } else if path.starts_with("/api/dj/program/detail") {
+        let song_id = state.lock().expect("lock mock server state").song_id;
+        let program_id = parse_query_field_as_u64(&path, "id").unwrap_or(3_714_760_479);
+        mock_program_detail_response_json(song_id, program_id)
+    } else if path.starts_with("/api/dj/program/byradio") {
+        if parse_header_value(&headers, "referer")
+            .is_some_and(|value| value.trim() == "https://music.163.com/")
+        {
+            let mut guard = state.lock().expect("lock mock server state");
+            guard.byradio_referer_seen = true;
+        }
+
+        let song_id = state.lock().expect("lock mock server state").song_id;
+        let limit =
+            parse_query_field_as_u64(&path, "limit").map_or(3, |value| value.max(1) as usize);
+        mock_djradio_program_response_json(song_id, limit)
     } else {
         r#"{"code":404}"#.to_string()
     };
@@ -122,7 +144,9 @@ async fn write_json_response(stream: &mut TcpStream, body: &str) -> std::io::Res
     stream.shutdown().await
 }
 
-async fn read_http_request(stream: &mut TcpStream) -> std::io::Result<Option<(String, String)>> {
+async fn read_http_request(
+    stream: &mut TcpStream,
+) -> std::io::Result<Option<(String, String, String)>> {
     let mut request_buffer = Vec::new();
     let mut chunk = [0u8; 1024];
 
@@ -162,7 +186,7 @@ async fn read_http_request(stream: &mut TcpStream) -> std::io::Result<Option<(St
     body.truncate(content_length);
 
     let body = String::from_utf8_lossy(&body).into_owned();
-    Ok(Some((path, body)))
+    Ok(Some((path, headers.into_owned(), body)))
 }
 
 fn parse_content_length(headers: &str) -> usize {
@@ -192,6 +216,28 @@ fn parse_form_field_as_u64(body: &str, field: &str) -> Option<u64> {
     url::form_urlencoded::parse(body.as_bytes()).find_map(|(k, v)| {
         if k == field {
             v.parse::<u64>().ok()
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_query_field_as_u64(path: &str, field: &str) -> Option<u64> {
+    let query = path.split_once('?')?.1;
+    url::form_urlencoded::parse(query.as_bytes()).find_map(|(k, v)| {
+        if k == field {
+            v.parse::<u64>().ok()
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    headers.lines().find_map(|line| {
+        let (header_name, value) = line.split_once(':')?;
+        if header_name.trim().eq_ignore_ascii_case(name) {
+            Some(value.trim())
         } else {
             None
         }
@@ -242,6 +288,25 @@ fn mock_playlist_detail_response_json(state: &Arc<Mutex<MockMusicApiServerState>
 fn mock_album_song_response_json(state: &Arc<Mutex<MockMusicApiServerState>>) -> String {
     let song_id = state.lock().expect("lock mock server state").song_id;
     format!(r#"{{"code":200,"songs":[{{"id":{song_id}}}]}}"#)
+}
+
+fn mock_program_detail_response_json(song_id: u64, program_id: u64) -> String {
+    format!(
+        r#"{{"code":200,"program":{{"id":{program_id},"name":"Mock Program {program_id}","mainTrackId":{song_id},"coverUrl":"https://mock.example/program-cover.jpg","dj":{{"nickname":"Mock DJ"}},"radio":{{"name":"Mock Radio"}}}}}}"#
+    )
+}
+
+fn mock_djradio_program_response_json(song_id: u64, limit: usize) -> String {
+    let mut programs = Vec::with_capacity(limit);
+    for idx in 0..limit {
+        let program_id = 3_714_760_479 + idx as u64;
+        let main_track_id = song_id + idx as u64;
+        programs.push(format!(
+            r#"{{"id":{program_id},"name":"Mock Program {program_id}","mainTrackId":{main_track_id},"coverUrl":"https://mock.example/program-{program_id}.jpg","dj":{{"nickname":"Mock DJ"}},"radio":{{"name":"Mock Radio"}}}}"#
+        ));
+    }
+    let programs_json = programs.join(",");
+    format!(r#"{{"code":200,"count":5,"programs":[{programs_json}]}}"#)
 }
 
 fn sample_song_detail(song_id: u64) -> SongDetail {

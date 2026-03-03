@@ -8,6 +8,7 @@ async fn download_and_send_music(
     pre_upload_path_start: std::time::Instant,
     perf_ctx: &PerfTraceContext,
     artists: &str,
+    link_target: MusicLinkTarget,
 ) -> Result<()> {
     // Determine file extension
     let file_ext = if song_url.url.contains(".flac") {
@@ -291,7 +292,12 @@ async fn download_and_send_music(
         &state.bot_username,
     );
 
-    let keyboard = create_music_keyboard(song_id, &song_info.song_name, &song_info.song_artists);
+    let keyboard = create_music_keyboard_for_target(
+        link_target,
+        song_id,
+        &song_info.song_name,
+        &song_info.song_artists,
+    );
 
     if file_size == 0 {
         cleanup_audio_buffer(audio_buffer).await;
@@ -453,4 +459,3 @@ async fn download_and_send_music(
 
     Ok(())
 }
-

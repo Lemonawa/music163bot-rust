@@ -24,10 +24,11 @@ use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode, UploadLogLevel};
 use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
-use crate::music_api::{MusicApi, format_artists};
+use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
 use crate::utils::{
     MusicCollectionTarget, build_http_client, clean_filename, ensure_dir, extract_first_url,
-    parse_music_collection_target, parse_music_id, throughput_mbps, update_peak,
+    parse_music_collection_target, parse_music_id, parse_music_program_id, throughput_mbps,
+    update_peak,
 };
 
 pub struct BotState {
@@ -59,6 +60,12 @@ pub struct UploadClientState {
 pub struct UploadCounters {
     pub in_flight: AtomicU32,
     pub peak_in_flight: AtomicU32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MusicLinkTarget {
+    Song(u64),
+    Program(u64),
 }
 
 const SPEED_SAMPLE_WINDOW: usize = 20;
@@ -472,4 +479,3 @@ impl DirectionSpeedMetrics {
         })
     }
 }
-

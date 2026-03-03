@@ -7,6 +7,7 @@
     use super::acquire_download_permit;
     use super::append_search_result_line;
     use super::build_music_url;
+    use super::build_program_url;
     use super::format_perf;
     use super::get_upload_bot;
     use super::parse_api_url;

@@ -382,6 +382,10 @@ async fn handle_music_url(
         return process_music(bot, msg, state, music_id).await;
     }
 
+    if let Some(program_id) = parse_music_program_id(text) {
+        return process_program(bot, msg, state, program_id).await;
+    }
+
     if let Some(target) = parse_music_collection_target(text) {
         return process_music_collection(bot, msg, state, target).await;
     }
@@ -393,6 +397,9 @@ async fn handle_music_url(
 
     if let Some(music_id) = parse_music_id(&url) {
         return process_music(bot, msg, state, music_id).await;
+    }
+    if let Some(program_id) = parse_music_program_id(&url) {
+        return process_program(bot, msg, state, program_id).await;
     }
     if let Some(target) = parse_music_collection_target(&url) {
         return process_music_collection(bot, msg, state, target).await;
@@ -409,6 +416,8 @@ async fn handle_music_url(
 
     if let Some(music_id) = parse_music_id(&final_url) {
         process_music(bot, msg, state, music_id).await
+    } else if let Some(program_id) = parse_music_program_id(&final_url) {
+        process_program(bot, msg, state, program_id).await
     } else if let Some(target) = parse_music_collection_target(&final_url) {
         process_music_collection(bot, msg, state, target).await
     } else {
@@ -475,4 +484,3 @@ const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
     Some(value) => value,
     None => "unknown",
 };
-
