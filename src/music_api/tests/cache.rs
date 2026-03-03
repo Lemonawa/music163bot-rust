@@ -85,6 +85,23 @@
     }
 
     #[test]
+    fn song_detail_deserializes_null_name_fields() {
+        let payload = r#"{"id":1,"name":null,"dt":240000,"ar":[{"id":2,"name":null}],"al":{"id":3,"name":null,"picUrl":null}}"#;
+        let parsed: super::SongDetail =
+            serde_json::from_str(payload).expect("deserialize song detail");
+        assert_eq!(parsed.name, "");
+        assert_eq!(
+            parsed
+                .ar
+                .as_ref()
+                .and_then(|artists| artists.first())
+                .map(|artist| artist.name.as_str()),
+            Some("")
+        );
+        assert_eq!(parsed.al.as_ref().map(|album| album.name.as_str()), Some(""));
+    }
+
+    #[test]
     fn dashmap_cache_insert_and_retrieve() {
         let api = MusicApi::new(None, "http://localhost".to_string());
 

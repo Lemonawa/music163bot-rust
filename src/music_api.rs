@@ -123,6 +123,7 @@ pub struct ProgramMainTrack {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SongDetail {
     pub id: u64,
+    #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub name: String,
     #[serde(alias = "duration")]
     pub dt: Option<u64>, // Duration in milliseconds (may be missing)
@@ -135,12 +136,14 @@ pub struct SongDetail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artist {
     pub id: u64,
+    #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Album {
     pub id: u64,
+    #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub name: String,
     #[serde(rename = "picUrl")]
     pub pic_url: Option<String>,
