@@ -82,6 +82,7 @@ async fn try_send_cached_song(
     msg: &Message,
     state: &Arc<BotState>,
     music_id: u64,
+    preferred_program_id: Option<u64>,
 ) -> ResponseResult<bool> {
     let music_id_i64 = music_id as i64;
 
@@ -120,8 +121,13 @@ async fn try_send_cached_song(
         &state.bot_username,
     );
 
+    let preferred_program_id = preferred_program_id.and_then(|id| i64::try_from(id).ok());
+    let link_target = cached_music_link_target(
+        preferred_program_id.or(cached_song.program_id),
+        music_id,
+    );
     let keyboard = create_music_keyboard_for_target(
-        cached_music_link_target(cached_song.program_id, music_id),
+        link_target,
         music_id,
         &cached_song.song_name,
         &cached_song.song_artists,
@@ -258,6 +264,7 @@ async fn process_music_with_context(
 ) -> ResponseResult<()> {
     let e2e_start = std::time::Instant::now();
     let mut perf_ctx = build_perf_trace_context(state, music_id, "initial");
+    let preferred_program_id = program_context.as_ref().map(|program| program.program_id);
     let media_label = if program_context.is_some() {
         "声音"
     } else {
@@ -270,7 +277,7 @@ async fn process_music_with_context(
     };
 
     let cache_lookup_start = std::time::Instant::now();
-    if try_send_cached_song(bot, msg, state, music_id).await? {
+    if try_send_cached_song(bot, msg, state, music_id, preferred_program_id).await? {
         perf_ctx = perf_ctx.with_cache_path("hit_pre_singleflight");
         perf_ctx.log_stage(PERF_STAGE_CACHE_LOOKUP, cache_lookup_start.elapsed());
         state.runtime_metrics.record_cache_hit();
@@ -289,7 +296,7 @@ async fn process_music_with_context(
         }
         waited_for_existing_leader = true;
 
-        if try_send_cached_song(bot, msg, state, music_id).await? {
+        if try_send_cached_song(bot, msg, state, music_id, preferred_program_id).await? {
             perf_ctx = perf_ctx.with_cache_path("hit_during_singleflight");
             state.runtime_metrics.record_cache_hit();
             perf_ctx.log_stage(
@@ -307,7 +314,7 @@ async fn process_music_with_context(
 
     if waited_for_existing_leader {
         let post_wait_cache_lookup_start = std::time::Instant::now();
-        if try_send_cached_song(bot, msg, state, music_id).await? {
+        if try_send_cached_song(bot, msg, state, music_id, preferred_program_id).await? {
             perf_ctx = perf_ctx.with_cache_path("hit_post_singleflight");
             perf_ctx.log_stage(
                 PERF_STAGE_CACHE_LOOKUP,
