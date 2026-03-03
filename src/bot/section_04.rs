@@ -252,8 +252,13 @@ async fn download_and_send_music(
 
     // Create song info for database
     let now = chrono::Utc::now();
+    let program_id = match link_target {
+        MusicLinkTarget::Program(program_id) => Some(program_id as i64),
+        MusicLinkTarget::Song(_) => None,
+    };
     let mut song_info = SongInfo {
         music_id: song_id as i64,
+        program_id,
         song_name,
         song_artists: artists.to_string(),
         song_album,

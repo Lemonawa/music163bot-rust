@@ -41,13 +41,12 @@ async fn apply_tags_in_blocking(
     .map_err(|e| BotError::Other(anyhow::anyhow!("metadata task join failed: {e}")))
 }
 
-fn create_music_keyboard(music_id: u64, song_name: &str, artists: &str) -> InlineKeyboardMarkup {
-    create_music_keyboard_for_target(
-        MusicLinkTarget::Song(music_id),
-        music_id,
-        song_name,
-        artists,
-    )
+fn cached_music_link_target(program_id: Option<i64>, music_id: u64) -> MusicLinkTarget {
+    if let Some(program_id) = program_id.and_then(|id| u64::try_from(id).ok()) {
+        MusicLinkTarget::Program(program_id)
+    } else {
+        MusicLinkTarget::Song(music_id)
+    }
 }
 
 fn create_music_keyboard_for_target(

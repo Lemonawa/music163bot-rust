@@ -124,6 +124,7 @@ async fn get_song_returns_all_mapped_fields() {
     let song = SongInfo {
         id: 0,
         music_id: 12345,
+        program_id: Some(54321),
         song_name: "Test".to_string(),
         song_artists: "Artist".to_string(),
         song_album: "Album".to_string(),
@@ -145,6 +146,7 @@ async fn get_song_returns_all_mapped_fields() {
     db.save_song_info(&song).await.unwrap();
     let fetched = db.get_song_by_music_id(12345).await.unwrap().unwrap();
     assert_eq!(fetched.music_id, 12345);
+    assert_eq!(fetched.program_id, Some(54321));
     assert_eq!(fetched.song_name, "Test");
     assert_eq!(fetched.file_id, Some("file_abc".to_string()));
     assert_eq!(fetched.bit_rate, 320_000);
@@ -232,6 +234,7 @@ async fn save_song_info_upsert_updates_fields_for_existing_music_id() {
     let mut first = sample_song_info(7_001);
     first.song_name = "Original Song".to_string();
     first.file_ext = "mp3".to_string();
+    first.program_id = Some(333_001);
     first.bit_rate = 128_000;
     first.duration = 180;
     first.file_id = Some("file_old".to_string());
@@ -241,6 +244,7 @@ async fn save_song_info_upsert_updates_fields_for_existing_music_id() {
     let mut second = first.clone();
     second.song_name = "Updated Song".to_string();
     second.file_ext = "flac".to_string();
+    second.program_id = Some(333_002);
     second.bit_rate = 320_000;
     second.duration = 240;
     second.file_id = Some("file_new".to_string());
@@ -255,6 +259,7 @@ async fn save_song_info_upsert_updates_fields_for_existing_music_id() {
 
     assert_eq!(fetched.song_name, "Updated Song");
     assert_eq!(fetched.file_ext, "flac");
+    assert_eq!(fetched.program_id, Some(333_002));
     assert_eq!(fetched.bit_rate, 320_000);
     assert_eq!(fetched.duration, 240);
     assert_eq!(fetched.file_id.as_deref(), Some("file_new"));

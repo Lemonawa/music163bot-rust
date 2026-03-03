@@ -120,8 +120,12 @@ async fn try_send_cached_song(
         &state.bot_username,
     );
 
-    let keyboard =
-        create_music_keyboard(music_id, &cached_song.song_name, &cached_song.song_artists);
+    let keyboard = create_music_keyboard_for_target(
+        cached_music_link_target(cached_song.program_id, music_id),
+        music_id,
+        &cached_song.song_name,
+        &cached_song.song_artists,
+    );
 
     match bot
         .send_audio(msg.chat.id, InputFile::file_id(FileId(file_id.clone())))
@@ -230,7 +234,7 @@ fn apply_program_metadata(
     });
 
     if detail.name.trim().is_empty() {
-        detail.name = format!("Program {}", program.program_id);
+        detail.name = format!("声音 {}", program.program_id);
     }
 
     Arc::new(detail)

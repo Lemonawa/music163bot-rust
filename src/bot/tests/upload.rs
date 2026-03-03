@@ -60,6 +60,18 @@
     }
 
     #[test]
+    fn cached_music_link_target_prefers_program_when_present() {
+        let target = super::cached_music_link_target(Some(3714760479), 1962146519);
+        assert_eq!(target, super::MusicLinkTarget::Program(3714760479));
+    }
+
+    #[test]
+    fn cached_music_link_target_falls_back_to_song() {
+        let target = super::cached_music_link_target(None, 1962146519);
+        assert_eq!(target, super::MusicLinkTarget::Song(1962146519));
+    }
+
+    #[test]
     fn parse_api_url_accepts_valid_base() {
         let url = parse_api_url("https://api.telegram.org/").expect("valid url");
         assert_eq!(url.as_str(), "https://api.telegram.org/");

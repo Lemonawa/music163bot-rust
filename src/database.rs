@@ -11,6 +11,7 @@ use crate::error::Result;
 pub struct SongInfo {
     pub id: i64,
     pub music_id: i64,
+    pub program_id: Option<i64>,
     pub song_name: String,
     pub song_artists: String,
     pub song_album: String,
@@ -76,6 +77,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS song_infos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 music_id INTEGER UNIQUE NOT NULL,
+                program_id INTEGER,
                 song_name TEXT NOT NULL,
                 song_artists TEXT NOT NULL,
                 song_album TEXT NOT NULL,
@@ -99,6 +101,17 @@ impl Database {
         .execute(&pool)
         .await?;
 
+        // Migration for existing databases created before podcast support.
+        if let Err(e) = sqlx::query("ALTER TABLE song_infos ADD COLUMN program_id INTEGER")
+            .execute(&pool)
+            .await
+        {
+            let message = e.to_string();
+            if !message.contains("duplicate column name: program_id") {
+                return Err(e.into());
+            }
+        }
+
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_song_infos_from_user_id ON song_infos(from_user_id)",
         )
@@ -119,6 +132,7 @@ impl Database {
         let query_start = Instant::now();
         let row_result = sqlx::query(
             "SELECT id, music_id, song_name, song_artists, song_album, file_ext, \
+             program_id, \
              music_size, pic_size, emb_pic_size, bit_rate, duration, file_id, \
              thumb_file_id, from_user_id, from_user_name, from_chat_id, \
              from_chat_name, created_at, updated_at \
@@ -140,12 +154,14 @@ impl Database {
             r"
             INSERT INTO song_infos (
                 music_id, song_name, song_artists, song_album, file_ext,
+                program_id,
                 music_size, pic_size, emb_pic_size, bit_rate, duration,
                 file_id, thumb_file_id, from_user_id, from_user_name,
                 from_chat_id, from_chat_name, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(music_id) DO UPDATE SET
+                program_id = excluded.program_id,
                 song_name = excluded.song_name,
                 song_artists = excluded.song_artists,
                 song_album = excluded.song_album,
@@ -165,6 +181,7 @@ impl Database {
         .bind(&song_info.song_artists)
         .bind(&song_info.song_album)
         .bind(&song_info.file_ext)
+        .bind(song_info.program_id)
         .bind(song_info.music_size)
         .bind(song_info.pic_size)
         .bind(song_info.emb_pic_size)
@@ -324,6 +341,7 @@ fn map_song_info_row(row: &SqliteRow) -> SongInfo {
     SongInfo {
         id: row.get("id"),
         music_id: row.get("music_id"),
+        program_id: row.get("program_id"),
         song_name: row.get("song_name"),
         song_artists: row.get("song_artists"),
         song_album: row.get("song_album"),
