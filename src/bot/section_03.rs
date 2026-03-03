@@ -525,13 +525,13 @@ async fn process_djradio_collection(
     {
         Ok(result) => result,
         Err(e) => {
-            send_reply_text(bot, msg, format!("❌ 获取电台声音列表失败: {e}")).await?;
+            send_reply_text(bot, msg, format!("❌ 获取播客声音列表失败: {e}")).await?;
             return Ok(());
         }
     };
 
     if total_programs == 0 || program_tracks.is_empty() {
-        send_reply_text(bot, msg, "❌ 该电台中没有可下载声音").await?;
+        send_reply_text(bot, msg, "❌ 该播客中没有可下载声音").await?;
         return Ok(());
     }
 
@@ -540,7 +540,7 @@ async fn process_djradio_collection(
             bot,
             msg,
             format!(
-                "❌ 该电台包含 {total_programs} 条声音，超过单次下载上限 {max_tracks} 条，已拒绝全部下载",
+                "❌ 该播客包含 {total_programs} 条声音，超过单次下载上限 {max_tracks} 条，已拒绝全部下载",
             ),
         )
         .await?;
@@ -556,7 +556,7 @@ async fn process_djradio_collection(
     }
 
     if unique_tracks.is_empty() {
-        send_reply_text(bot, msg, "❌ 该电台中没有可下载声音").await?;
+        send_reply_text(bot, msg, "❌ 该播客中没有可下载声音").await?;
         return Ok(());
     }
 
@@ -564,7 +564,7 @@ async fn process_djradio_collection(
         bot,
         msg,
         format!(
-            "📻 检测到电台（ID: {radio_id}），共 {} 条声音，开始下载",
+            "📻 检测到播客（ID: {radio_id}），共 {} 条声音，开始下载",
             unique_tracks.len()
         ),
     )
@@ -597,7 +597,7 @@ async fn process_djradio_collection(
         send_reply_text(
             bot,
             msg,
-            format!("⚠️ 电台下载完成，但有 {failed_count} 条声音处理失败"),
+            format!("⚠️ 播客下载完成，但有 {failed_count} 条声音处理失败"),
         )
         .await?;
     }
