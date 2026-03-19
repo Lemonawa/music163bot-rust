@@ -1,8 +1,42 @@
 use std::path::Path;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
 use crate::error::{BotError, Result};
+
+static TELEGRAM_BOT_TOKEN_PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"/bot[^/\s)'"?&]+:[^/\s)'"?&]+/?"#)
+        .expect("telegram bot token regex should be valid")
+});
+
+static URL_CREDENTIALS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(https?://)[^/\s@]+@").expect("url credentials regex should be valid")
+});
+
+static AUTHORIZATION_HEADER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(Authorization:\s*)[^\r\n]+")
+        .expect("authorization header regex should be valid")
+});
+
+static COOKIE_HEADER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(Cookie:\s*)[^\r\n]+").expect("cookie header regex should be valid")
+});
+
+static SET_COOKIE_HEADER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(Set-Cookie:\s*)[^\r\n]+").expect("set-cookie header regex should be valid")
+});
+
+static MUSIC_U_COOKIE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bMUSIC_U=[^;\s)]+").expect("music_u cookie regex should be valid")
+});
+
+static SECRET_QUERY_PARAM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)([?&](?:access_token|token|auth|authtoken|signature|sig|api_key|apikey|key|secret|client_secret|password|pass|x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential|googleaccessid|awsaccesskeyid|wssecret|uct2|credential)=)[^&#\s)]+",
+    )
+    .expect("secret query parameter regex should be valid")
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusicCollectionTarget {
@@ -14,9 +48,29 @@ pub enum MusicCollectionTarget {
 /// Build a reqwest HTTP client from a builder, logging and mapping errors on failure.
 pub fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
     builder.build().map_err(|e| {
-        tracing::error!("Failed to build HTTP client: {}", e);
-        BotError::Network(e)
+        let sanitized = sanitize_sensitive_text(&e.to_string());
+        tracing::error!("Failed to build HTTP client: {}", sanitized);
+        BotError::HttpClientBuild(sanitized)
     })
+}
+
+#[must_use]
+pub fn sanitize_sensitive_text(text: &str) -> String {
+    let sanitized =
+        TELEGRAM_BOT_TOKEN_PATH_REGEX.replace_all(text, |caps: &regex::Captures<'_>| {
+            if caps[0].ends_with('/') {
+                "/bot<redacted>/"
+            } else {
+                "/bot<redacted>"
+            }
+        });
+    let sanitized = URL_CREDENTIALS_REGEX.replace_all(&sanitized, "$1<redacted>@");
+    let sanitized = AUTHORIZATION_HEADER_REGEX.replace_all(&sanitized, "$1<redacted>");
+    let sanitized = COOKIE_HEADER_REGEX.replace_all(&sanitized, "$1<redacted>");
+    let sanitized = SET_COOKIE_HEADER_REGEX.replace_all(&sanitized, "$1<redacted>");
+    let sanitized = MUSIC_U_COOKIE_REGEX.replace_all(&sanitized, "MUSIC_U=<redacted>");
+    let sanitized = SECRET_QUERY_PARAM_REGEX.replace_all(&sanitized, "$1<redacted>");
+    sanitized.into_owned()
 }
 
 /// Global regex patterns for URL parsing
@@ -284,169 +338,4 @@ pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::{
-        MusicCollectionTarget, clean_filename, ensure_dir, parse_music_collection_target,
-        parse_music_id, parse_music_program_id, throughput_mbps, update_peak,
-    };
-
-    #[test]
-    fn parse_music_id_fast_path_detects_direct_numeric() {
-        assert_eq!(super::parse_direct_numeric_id("123456"), Some(123_456));
-        assert_eq!(super::parse_direct_numeric_id("  123456  "), Some(123_456));
-        assert_eq!(super::parse_direct_numeric_id("abc123"), None);
-    }
-
-    #[test]
-    fn parse_music_id_fast_path_handles_canonical_song_url() {
-        assert_eq!(
-            super::extract_music_id_from_canonical_song_url("https://music.163.com/song?id=424242"),
-            Some(424_242)
-        );
-        assert_eq!(
-            super::extract_music_id_from_canonical_song_url(
-                "https://music.163.com/#/song?id=424242&foo=bar"
-            ),
-            Some(424_242)
-        );
-        assert_eq!(
-            super::extract_music_id_from_canonical_song_url("https://example.com/song?id=424242"),
-            None
-        );
-        assert_eq!(
-            super::extract_music_id_from_canonical_song_url(
-                "https://music.163.com/song?userid=123&id=424242"
-            ),
-            Some(424_242)
-        );
-    }
-
-    #[test]
-    fn throughput_mbps_calculates_expected_value() {
-        let bytes = 10 * 1024 * 1024;
-        let duration = Duration::from_secs(2);
-        let value = throughput_mbps(bytes, duration);
-        assert!((value - 5.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn update_peak_tracks_highest_value() {
-        let counter = std::sync::atomic::AtomicU32::new(0);
-        assert_eq!(update_peak(&counter, 1), 1);
-        assert_eq!(update_peak(&counter, 2), 2);
-        assert_eq!(update_peak(&counter, 2), 2);
-        assert_eq!(update_peak(&counter, 1), 2);
-    }
-
-    #[test]
-    fn parse_music_id_handles_direct_numeric_input() {
-        assert_eq!(parse_music_id("123456"), Some(123_456));
-        assert_eq!(parse_music_id("  123456  "), Some(123_456));
-    }
-
-    #[test]
-    fn parse_music_collection_target_detects_playlist_with_optional_uct2() {
-        let url = "https://music.163.com/playlist?id=17607381913&uct2=U2FsdGVkX18AISWPo4dHRIRF8KPygbcmfo67g4xh6S8=";
-        assert_eq!(
-            parse_music_collection_target(url),
-            Some(MusicCollectionTarget::Playlist(17_607_381_913))
-        );
-    }
-
-    #[test]
-    fn parse_music_collection_target_detects_album_without_uct2() {
-        let url = "https://music.163.com/album?id=121344602";
-        assert_eq!(
-            parse_music_collection_target(url),
-            Some(MusicCollectionTarget::Album(121_344_602))
-        );
-    }
-
-    #[test]
-    fn parse_music_collection_target_rejects_song_link() {
-        let url = "https://music.163.com/song?id=424242";
-        assert_eq!(parse_music_collection_target(url), None);
-    }
-
-    #[test]
-    fn parse_music_collection_target_detects_djradio() {
-        let url = "https://music.163.com/djradio?id=985936420";
-        assert_eq!(
-            parse_music_collection_target(url),
-            Some(MusicCollectionTarget::DjRadio(985_936_420))
-        );
-    }
-
-    #[test]
-    fn parse_music_program_id_detects_program_link() {
-        let url = "https://music.163.com/program?id=3714760479&uct2=foo";
-        assert_eq!(parse_music_program_id(url), Some(3_714_760_479));
-    }
-
-    #[test]
-    fn parse_music_program_id_detects_dj_link() {
-        let url = "https://music.163.com/dj?id=3714760479&uct2=foo";
-        assert_eq!(parse_music_program_id(url), Some(3_714_760_479));
-    }
-
-    #[test]
-    fn parse_music_program_id_rejects_song_link() {
-        let url = "https://music.163.com/song?id=3714760479";
-        assert_eq!(parse_music_program_id(url), None);
-    }
-
-    #[test]
-    fn ensure_dir_is_idempotent() {
-        let temp_name = format!(
-            "music163bot_utils_dir_{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        );
-        let temp_path = std::env::temp_dir().join(temp_name);
-        let temp_path_str = temp_path.to_string_lossy().to_string();
-
-        ensure_dir(&temp_path_str).expect("create dir first time");
-        ensure_dir(&temp_path_str).expect("create dir second time");
-
-        std::fs::remove_dir_all(&temp_path).expect("cleanup dir");
-    }
-
-    #[test]
-    fn clean_filename_handles_all_invalid_chars() {
-        let cleaned = clean_filename("/\\?*:|<>\"\n\t\r");
-        assert_eq!(cleaned, "untitled");
-    }
-
-    #[test]
-    fn clean_filename_preserves_valid_names() {
-        assert_eq!(clean_filename("hello world.mp3"), "hello world.mp3");
-        assert_eq!(clean_filename("  spaced  "), "spaced");
-        assert_eq!(clean_filename("a/b"), "a b");
-    }
-
-    #[test]
-    fn clean_filename_handles_unicode() {
-        assert_eq!(clean_filename("你好世界.flac"), "你好世界.flac");
-        assert_eq!(clean_filename("café.mp3"), "café.mp3");
-    }
-
-    #[test]
-    fn is_timeout_error_detects_timeout_message() {
-        let err = std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timeout");
-        assert!(super::is_timeout_error(&err));
-    }
-
-    #[test]
-    fn is_timeout_error_rejects_non_timeout() {
-        let err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        assert!(!super::is_timeout_error(&err));
-    }
-
-    #[test]
-    fn build_http_client_returns_client() {
-        let client =
-            super::build_http_client(reqwest::Client::builder()).expect("client should be built");
-        let _ = client;
-    }
-}
+mod tests;

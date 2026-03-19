@@ -51,7 +51,10 @@ impl MusicApi {
         client_builder = client_builder.user_agent(BROWSER_USER_AGENT);
 
         let client = build_http_client(client_builder).unwrap_or_else(|e| {
-            tracing::error!("Failed to build HTTP client: {e}");
+            tracing::error!(
+                "Failed to build HTTP client: {}",
+                crate::utils::sanitize_sensitive_text(&e.to_string())
+            );
             Client::new()
         });
 

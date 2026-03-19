@@ -25,10 +25,14 @@ async fn process_music_collection(
     let song_ids = match song_ids_result {
         Ok(song_ids) => song_ids,
         Err(e) => {
+            tracing::warn!(
+                "Failed to fetch {collection_name} songs: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
             send_reply_text(
                 bot,
                 msg,
-                format!("❌ 获取{collection_name}歌曲列表失败: {e}"),
+                format!("❌ 获取{collection_name}歌曲列表失败，请稍后重试"),
             )
             .await?;
             return Ok(());
@@ -74,7 +78,7 @@ async fn process_music_collection(
                 song_id,
                 collection_name,
                 collection_id,
-                e
+                sanitize_sensitive_text(&e.to_string())
             );
         }
     }
@@ -106,7 +110,11 @@ async fn process_djradio_collection(
     {
         Ok(result) => result,
         Err(e) => {
-            send_reply_text(bot, msg, format!("❌ 获取播客声音列表失败: {e}")).await?;
+            tracing::warn!(
+                "Failed to fetch djradio program list for {radio_id}: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
+            send_reply_text(bot, msg, "❌ 获取播客声音列表失败，请稍后重试").await?;
             return Ok(());
         }
     };

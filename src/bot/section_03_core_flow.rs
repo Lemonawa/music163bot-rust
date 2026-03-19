@@ -88,7 +88,11 @@ async fn process_program(
     let program = match state.music_api.get_program_main_track(program_id).await {
         Ok(program) => program,
         Err(e) => {
-            send_reply_text(bot, msg, format!("❌ 获取声音详情失败: {e}")).await?;
+            tracing::warn!(
+                "Failed to fetch program detail for {program_id}: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
+            send_reply_text(bot, msg, "❌ 获取声音详情失败，请稍后重试").await?;
             return Ok(());
         }
     };
@@ -275,10 +279,14 @@ async fn process_music_with_context(
     let (song_detail, song_url) = match detail_and_url_result {
         Ok(result) => result,
         Err(e) => {
+            tracing::warn!(
+                "Failed to fetch {media_label} detail/url for {music_id}: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
             bot.edit_message_text(
                 msg.chat.id,
                 status_msg.id,
-                format!("❌ 获取{media_label}信息或下载链接失败: {e}"),
+                format!("❌ 获取{media_label}信息或下载链接失败，请稍后重试"),
             )
             .await?;
             perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
@@ -340,7 +348,11 @@ async fn process_music_with_context(
     {
         Ok(()) => {}
         Err(e) => {
-            bot.edit_message_text(msg.chat.id, status_msg.id, format!("❌ 处理失败: {e}"))
+            tracing::warn!(
+                "Failed to process music {music_id}: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
+            bot.edit_message_text(msg.chat.id, status_msg.id, "❌ 处理失败，请稍后重试")
                 .await?;
         }
     }
@@ -348,4 +360,3 @@ async fn process_music_with_context(
     perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
     Ok(())
 }
-

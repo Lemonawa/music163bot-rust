@@ -1,43 +1,3 @@
-fn build_about_text() -> String {
-    format!(
-        r"🎵 Music163bot-Rust v{} ({})
-
-一个用来下载/分享/搜索网易云歌曲的 Telegram Bot
-
-特性：
-• 🔗 分享链接嗅探
-• 🎵 歌曲搜索与下载
-• 💾 智能缓存系统
-• 🚀 智能存储 (v1.1.0+)
-• 🎤 歌词获取
-• 📊 使用统计
-
-技术栈：
-• 🦀 Rust + Teloxide
-• 🔧 高并发处理
-• 📦 轻量级部署
-
-源码：GitHub | 原版：Music163bot-Go",
-        env!("CARGO_PKG_VERSION"),
-        BUILD_GIT_COMMIT
-    )
-}
-
-async fn handle_about_command(
-    bot: &Bot,
-    msg: &Message,
-    _state: &Arc<BotState>,
-) -> ResponseResult<()> {
-    let about_text = build_about_text();
-
-    bot.send_message(msg.chat.id, about_text)
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .disable_link_preview(true)
-        .await?;
-
-    Ok(())
-}
-
 async fn handle_lyric_command(
     bot: &Bot,
     msg: &Message,
@@ -64,7 +24,8 @@ async fn handle_lyric_command(
                 }
             }
             Err(e) => {
-                send_reply_text(bot, msg, format!("搜索失败: {e}")).await?;
+                tracing::warn!("Lyric search failed: {}", sanitize_sensitive_text(&e.to_string()));
+                send_reply_text(bot, msg, "搜索失败，请稍后重试").await?;
                 return Ok(());
             }
         }
@@ -92,10 +53,14 @@ async fn handle_lyric_command(
             let song_detail = match detail_result {
                 Ok(detail) => detail,
                 Err(e) => {
+                    tracing::warn!(
+                        "Failed to fetch lyric song detail for {music_id}: {}",
+                        sanitize_sensitive_text(&e.to_string())
+                    );
                     bot.edit_message_text(
                         msg.chat.id,
                         status_msg.id,
-                        format!("获取歌曲信息失败: {e}"),
+                        "获取歌曲信息失败，请稍后重试",
                     )
                     .await?;
                     return Ok(());
@@ -115,10 +80,14 @@ async fn handle_lyric_command(
             let (_upload_bot, raw_client, api_base_url) = match client_result {
                 Ok(bundle) => bundle,
                 Err(e) => {
+                    tracing::warn!(
+                        "Failed to initialize lyric upload client: {}",
+                        sanitize_sensitive_text(&e.to_string())
+                    );
                     bot.edit_message_text(
                         msg.chat.id,
                         status_msg.id,
-                        format!("初始化上传客户端失败: {e}"),
+                        "初始化上传客户端失败，请稍后重试",
                     )
                     .await?;
                     return Ok(());
@@ -127,10 +96,14 @@ async fn handle_lyric_command(
             let _upload_permit = match permit_result {
                 Ok(permit) => permit,
                 Err(e) => {
+                    tracing::warn!(
+                        "Failed to acquire lyric upload permit: {}",
+                        sanitize_sensitive_text(&e.to_string())
+                    );
                     bot.edit_message_text(
                         msg.chat.id,
                         status_msg.id,
-                        format!("等待上传通道失败: {e}"),
+                        "等待上传通道失败，请稍后重试",
                     )
                     .await?;
                     return Ok(());
@@ -157,13 +130,15 @@ async fn handle_lyric_command(
                     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
                 }
                 Err(e) => {
-                    bot.edit_message_text(msg.chat.id, status_msg.id, format!("发送歌词失败: {e}"))
+                    tracing::warn!("Failed to upload lyric file: {}", sanitize_sensitive_text(&e.to_string()));
+                    bot.edit_message_text(msg.chat.id, status_msg.id, "发送歌词失败，请稍后重试")
                         .await?;
                 }
             }
         }
         (Err(e), _) => {
-            bot.edit_message_text(msg.chat.id, status_msg.id, format!("获取歌词失败: {e}"))
+            tracing::warn!("Failed to fetch lyric: {}", sanitize_sensitive_text(&e.to_string()));
+            bot.edit_message_text(msg.chat.id, status_msg.id, "获取歌词失败，请稍后重试")
                 .await?;
         }
     }
@@ -254,7 +229,8 @@ async fn handle_rmcache_command(
                     }
                 }
                 Err(e) => {
-                    send_reply_text(bot, msg, format!("删除缓存失败: {e}")).await?;
+                    tracing::warn!("Failed to delete cached song {music_id}: {}", sanitize_sensitive_text(&e.to_string()));
+                    send_reply_text(bot, msg, "删除缓存失败，请稍后重试").await?;
                 }
             }
         } else {
@@ -329,10 +305,10 @@ async fn handle_clearallcache_confirm_command(
             );
         }
         Err(e) => {
-            bot.edit_message_text(msg.chat.id, status_msg.id, format!("❌ 清除缓存失败: {e}"))
+            bot.edit_message_text(msg.chat.id, status_msg.id, "❌ 清除缓存失败，请稍后重试")
                 .await?;
 
-            tracing::error!("Failed to clear all cache: {}", e);
+            tracing::error!("Failed to clear all cache: {}", sanitize_sensitive_text(&e.to_string()));
         }
     }
 
@@ -357,9 +333,12 @@ async fn handle_callback(
                     .await?;
             }
             Err(e) => {
-                tracing::error!("Error processing music from callback: {}", e);
+                tracing::error!(
+                    "Error processing music from callback: {}",
+                    sanitize_sensitive_text(&e.to_string())
+                );
                 bot.answer_callback_query(query.id)
-                    .text(format!("❌ 失败: {e}"))
+                    .text("❌ 处理失败，请稍后重试")
                     .await?;
             }
         }
@@ -436,11 +415,13 @@ async fn handle_inline_query(
                 .await?;
         }
         Err(e) => {
-            tracing::error!("Inline search error: {}", e);
+            tracing::error!("Inline search error: {}", sanitize_sensitive_text(&e.to_string()));
             let error_article = InlineQueryResultArticle::new(
                 "search_error",
                 "搜索失败",
-                InputMessageContent::Text(InputMessageContentText::new(format!("搜索失败: {e}"))),
+                InputMessageContent::Text(InputMessageContentText::new(
+                    "搜索失败，请稍后重试".to_string(),
+                )),
             )
             .description("搜索失败，请稍后重试");
 

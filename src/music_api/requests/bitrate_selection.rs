@@ -66,7 +66,8 @@ impl MusicApi {
                     Err(e) => {
                         primary_attempted_unavailable = true;
                         tracing::warn!(
-                            "Primary bitrate {primary_bitrate} request failed for music_id {song_id}: {e}"
+                            "Primary bitrate {primary_bitrate} request failed for music_id {song_id}: {}",
+                            crate::utils::sanitize_sensitive_text(&e.to_string())
                         );
                     }
                 }
@@ -133,7 +134,7 @@ impl MusicApi {
                         "Bitrate {} request failed for music_id {}: {}",
                         bitrate,
                         song_id,
-                        e
+                        crate::utils::sanitize_sensitive_text(&e.to_string())
                     );
                     last_error = Some(e);
                 }

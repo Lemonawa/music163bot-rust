@@ -132,8 +132,8 @@ impl MusicApi {
                             "Album art download attempt {}/{} failed for {}: {}",
                             attempt,
                             total_attempts,
-                            pic_url,
-                            e
+                            crate::utils::sanitize_sensitive_text(pic_url),
+                            crate::utils::sanitize_sensitive_text(&e.to_string())
                         );
                     }
                     last_error = Some(e);

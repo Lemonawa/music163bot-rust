@@ -116,14 +116,28 @@ async fn raw_send_file(
         .multipart(form)
         .send()
         .await
-        .map_err(|e| BotError::Other(anyhow::anyhow!("Raw upload request failed: {e}")))?;
+        .map_err(|e| {
+            BotError::Other(anyhow::anyhow!(
+                "Raw upload request failed: {}",
+                redact_bot_token_in_error_message(&e.to_string())
+            ))
+        })?;
 
     let status = resp.status();
     let body = resp
         .text()
         .await
-        .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to read upload response: {e}")))?;
+        .map_err(|e| {
+            BotError::Other(anyhow::anyhow!(
+                "Failed to read upload response: {}",
+                sanitize_sensitive_text(&e.to_string())
+            ))
+        })?;
     parse_telegram_api_response(&body, status, "sendAudio")
+}
+
+fn redact_bot_token_in_error_message(message: &str) -> String {
+    sanitize_sensitive_text(message)
 }
 
 fn parse_telegram_api_response(
@@ -132,10 +146,7 @@ fn parse_telegram_api_response(
     method: &str,
 ) -> Result<serde_json::Value> {
     let json: serde_json::Value = serde_json::from_str(body).map_err(|e| {
-        tracing::error!(
-            "Upload response parse error: {e}. Body: {}",
-            &body[..body.len().min(500)]
-        );
+        tracing::error!("Upload response parse error: {e}. Body omitted for safety.");
         BotError::Other(anyhow::anyhow!("Failed to parse upload response: {e}"))
     })?;
 
@@ -144,9 +155,12 @@ fn parse_telegram_api_response(
             .get("description")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error");
-        tracing::error!("Telegram API error ({status}): {description} [method={method}]",);
+        let sanitized_description = sanitize_sensitive_text(description);
+        tracing::error!(
+            "Telegram API error ({status}): {sanitized_description} [method={method}]",
+        );
         return Err(BotError::Other(anyhow::anyhow!(
-            "Telegram API error: {description} (HTTP {status})",
+            "Telegram API error: {sanitized_description} (HTTP {status})",
         )));
     }
 
@@ -189,13 +203,16 @@ fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
         Err(e) => {
             tracing::warn!(
                 "Invalid upload API URL '{}': {}. Using default.",
-                api_url_str,
-                e
+                sanitize_sensitive_text(&api_url_str),
+                sanitize_sensitive_text(&e.to_string())
             );
             match parse_api_url("https://api.telegram.org/") {
                 Ok(url) => url,
                 Err(err) => {
-                    tracing::error!("Failed to parse fallback API URL: {}", err);
+                    tracing::error!(
+                        "Failed to parse fallback API URL: {}",
+                        sanitize_sensitive_text(&err.to_string())
+                    );
                     return Err(BotError::Other(anyhow::anyhow!(
                         "failed to parse fallback API URL"
                     )));
@@ -205,7 +222,10 @@ fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     };
 
     if api_url_str != "https://api.telegram.org/" {
-        tracing::info!("Using custom API for upload: {}", api_url);
+        tracing::info!(
+            "Using custom API for upload: {}",
+            sanitize_sensitive_text(api_url.as_str())
+        );
     }
 
     let mut client_builder = reqwest::Client::builder()
@@ -229,7 +249,7 @@ fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
             config.upload_pool_max_idle_per_host,
             config.upload_pool_idle_timeout_secs,
             config.upload_timeout_secs,
-            api_url
+            sanitize_sensitive_text(api_url.as_str())
         );
     }
 
@@ -336,7 +356,10 @@ where
             true
         }
         Err(e) => {
-            tracing::warn!("Upload prewarm failed, continuing startup: {}", e);
+            tracing::warn!(
+                "Upload prewarm failed, continuing startup: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
             false
         }
     }
@@ -371,116 +394,3 @@ async fn acquire_upload_permit_owned(
 
 #[cfg(test)]
 mod tests;
-
-async fn handle_music_url(
-    bot: &Bot,
-    msg: &Message,
-    state: &Arc<BotState>,
-    text: &str,
-) -> ResponseResult<()> {
-    if let Some(music_id) = parse_music_id(text) {
-        return process_music(bot, msg, state, music_id).await;
-    }
-
-    if let Some(program_id) = parse_music_program_id(text) {
-        return process_program(bot, msg, state, program_id).await;
-    }
-
-    if let Some(target) = parse_music_collection_target(text) {
-        return process_music_collection(bot, msg, state, target).await;
-    }
-
-    let Some(url) = extract_first_url(text) else {
-        send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
-        return Ok(());
-    };
-
-    if let Some(music_id) = parse_music_id(&url) {
-        return process_music(bot, msg, state, music_id).await;
-    }
-    if let Some(program_id) = parse_music_program_id(&url) {
-        return process_program(bot, msg, state, program_id).await;
-    }
-    if let Some(target) = parse_music_collection_target(&url) {
-        return process_music_collection(bot, msg, state, target).await;
-    }
-
-    let final_url = match state.music_api.resolve_share_link(&url).await {
-        Ok(final_url) => final_url.to_string(),
-        Err(e) => {
-            tracing::warn!("Failed to resolve share link: {}", e);
-            send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
-            return Ok(());
-        }
-    };
-
-    if let Some(music_id) = parse_music_id(&final_url) {
-        process_music(bot, msg, state, music_id).await
-    } else if let Some(program_id) = parse_music_program_id(&final_url) {
-        process_program(bot, msg, state, program_id).await
-    } else if let Some(target) = parse_music_collection_target(&final_url) {
-        process_music_collection(bot, msg, state, target).await
-    } else {
-        send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
-        Ok(())
-    }
-}
-
-async fn handle_search_command(
-    bot: &Bot,
-    msg: &Message,
-    state: &Arc<BotState>,
-    args: Option<String>,
-) -> ResponseResult<()> {
-    let keyword = match args {
-        Some(kw) if !kw.is_empty() => kw,
-        _ => {
-            send_reply_text(bot, msg, "请输入搜索关键词").await?;
-            return Ok(());
-        }
-    };
-
-    let search_msg = bot
-        .send_message(msg.chat.id, "🔍 搜索中...")
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
-
-    match state.music_api.search_songs(&keyword, 10).await {
-        Ok(songs) => {
-            if songs.is_empty() {
-                bot.edit_message_text(msg.chat.id, search_msg.id, "未找到相关歌曲")
-                    .await?;
-                return Ok(());
-            }
-
-            let mut results = String::new();
-            let mut buttons = Vec::with_capacity(songs.len().min(8));
-
-            for (i, song) in songs.iter().take(8).enumerate() {
-                let artists = format_artists(&song.artists);
-                append_search_result_line(&mut results, i + 1, &song.name, &artists);
-                buttons.push(InlineKeyboardButton::callback(
-                    (i + 1).to_string(),
-                    format!("music {}", song.id),
-                ));
-            }
-
-            let keyboard = InlineKeyboardMarkup::new(vec![buttons]);
-
-            bot.edit_message_text(msg.chat.id, search_msg.id, results)
-                .reply_markup(keyboard)
-                .await?;
-        }
-        Err(e) => {
-            bot.edit_message_text(msg.chat.id, search_msg.id, format!("搜索失败: {e}"))
-                .await?;
-        }
-    }
-
-    Ok(())
-}
-
-const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
-    Some(value) => value,
-    None => "unknown",
-};

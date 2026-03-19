@@ -1,5 +1,15 @@
 
     #[test]
+    fn redact_bot_token_in_error_message_masks_bot_path_segment() {
+        let raw = "error sending request for url (http://127.0.0.1:8081/bot123456789:fake_test_token/sendAudio)";
+
+        let redacted = super::redact_bot_token_in_error_message(raw);
+
+        assert!(!redacted.contains("123456789:fake_test_token"));
+        assert!(redacted.contains("/bot<redacted>/sendAudio"));
+    }
+
+    #[test]
     fn parse_telegram_api_response_returns_error_when_http_200_ok_false() {
         let body = r#"{"ok": false, "description": "chat not found"}"#;
         let err = super::parse_telegram_api_response(body, reqwest::StatusCode::OK, "sendAudio")
@@ -59,6 +69,17 @@
 
         assert!(err_msg.contains("unknown error"));
         assert!(err_msg.contains("HTTP 200"));
+    }
+
+    #[test]
+    fn parse_telegram_api_response_redacts_sensitive_description_text() {
+        let body = r#"{"ok": false, "description": "proxy said http://127.0.0.1:8081/bot123456789:fake_test_token/sendAudio failed"}"#;
+        let err = super::parse_telegram_api_response(body, reqwest::StatusCode::BAD_GATEWAY, "sendAudio")
+            .expect_err("sensitive description should still return an error");
+        let err_msg = err.to_string();
+
+        assert!(!err_msg.contains("123456789:fake_test_token"));
+        assert!(err_msg.contains("/bot<redacted>/sendAudio"));
     }
 
     #[test]
@@ -182,4 +203,3 @@
         let data = tagged.get_data().await.expect("read tagged data");
         assert!(data.starts_with(b"ID3"));
     }
-

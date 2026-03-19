@@ -71,9 +71,9 @@ async fn handle_music_command(
             }
         }
         Err(e) => {
-            send_reply_text(bot, msg, format!("搜索失败: {e}")).await?;
+            tracing::warn!("Music command search failed: {}", sanitize_sensitive_text(&e.to_string()));
+            send_reply_text(bot, msg, "搜索失败，请稍后重试").await?;
             Ok(())
         }
     }
 }
-

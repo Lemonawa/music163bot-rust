@@ -160,7 +160,10 @@ pub async fn run(config: Config) -> Result<()> {
 
         match reqwest::Url::parse(&api_url_str) {
             Ok(api_url) => {
-                tracing::info!("Using custom Telegram API URL: {}", api_url);
+                tracing::info!(
+                    "Using custom Telegram API URL: {}",
+                    sanitize_sensitive_text(api_url.as_str())
+                );
 
                 // Create a custom HTTP client tuned for Cloudflare compatibility (mimic Go http client)
                 // pool_max_idle_per_host(2) keeps reasonable connection pool for API efficiency
@@ -180,7 +183,10 @@ pub async fn run(config: Config) -> Result<()> {
                 tracing::info!("Testing custom API connection...");
                 match tokio::time::timeout(std::time::Duration::from_secs(15), bot.get_me()).await {
                     Ok(Ok(_)) => {
-                        tracing::info!("✅ Custom API connection successful: {}", api_url);
+                        tracing::info!(
+                            "✅ Custom API connection successful: {}",
+                            sanitize_sensitive_text(api_url.as_str())
+                        );
                         bot
                     }
                     Ok(Err(e)) => {
@@ -196,7 +202,7 @@ pub async fn run(config: Config) -> Result<()> {
                         } else {
                             tracing::warn!(
                                 "❌ Custom API connection failed: {}. Falling back to official API.",
-                                e
+                                sanitize_sensitive_text(&e.to_string())
                             );
                         }
                         tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
@@ -214,8 +220,8 @@ pub async fn run(config: Config) -> Result<()> {
             Err(e) => {
                 tracing::error!(
                     "Invalid custom API URL '{}': {}. Using official API.",
-                    config.bot_api,
-                    e
+                    sanitize_sensitive_text(&config.bot_api),
+                    sanitize_sensitive_text(&e.to_string())
                 );
                 tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
                 Bot::new(&config.bot_token)
@@ -234,7 +240,10 @@ pub async fn run(config: Config) -> Result<()> {
     };
 
     // Log the API configuration
-    tracing::info!("Music API configured: {}", &config.music_api);
+    tracing::info!(
+        "Music API configured: {}",
+        sanitize_sensitive_text(&config.music_api)
+    );
 
     let me = bot.get_me().await?;
     let bot_username = me
@@ -314,7 +323,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
         let permit = match state.message_task_semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,
             Err(e) => {
-                tracing::error!("Message task semaphore closed: {}", e);
+                tracing::error!("Message task semaphore closed: {}", sanitize_sensitive_text(&e.to_string()));
                 return Ok(());
             }
         };
@@ -331,14 +340,14 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
             // Handle commands
             if is_command_text(&text) {
                 if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
-                    tracing::error!("Error handling command: {}", e);
+                    tracing::error!("Error handling command: {}", sanitize_sensitive_text(&e.to_string()));
                 }
             }
             // Handle music URLs
             else if contains_music_link_hint(&text)
                 && let Err(e) = handle_music_url(&bot, &msg, &state, &text).await
             {
-                tracing::error!("Error handling music URL: {}", e);
+                tracing::error!("Error handling music URL: {}", sanitize_sensitive_text(&e.to_string()));
             }
         });
     }
@@ -446,4 +455,3 @@ async fn handle_start_command(
 
     Ok(())
 }
-

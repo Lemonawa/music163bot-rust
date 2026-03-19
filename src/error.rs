@@ -8,6 +8,9 @@ pub enum BotError {
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
 
+    #[error("Failed to build HTTP client: {0}")]
+    HttpClientBuild(String),
+
     #[error("Telegram error: {0}")]
     Telegram(#[from] teloxide::RequestError),
 

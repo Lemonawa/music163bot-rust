@@ -413,7 +413,7 @@ async fn download_and_send_music(
             in_flight_after,
             peak_in_flight
         );
-        tracing::warn!("Upload failed: {}", e);
+        tracing::warn!("Upload failed: {}", sanitize_sensitive_text(&e.to_string()));
 
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;

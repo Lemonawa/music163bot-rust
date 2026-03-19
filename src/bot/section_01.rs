@@ -27,8 +27,8 @@ use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
 use crate::utils::{
     MusicCollectionTarget, build_http_client, clean_filename, ensure_dir, extract_first_url,
-    parse_music_collection_target, parse_music_id, parse_music_program_id, throughput_mbps,
-    update_peak,
+    parse_music_collection_target, parse_music_id, parse_music_program_id,
+    sanitize_sensitive_text, throughput_mbps, update_peak,
 };
 
 pub struct BotState {
