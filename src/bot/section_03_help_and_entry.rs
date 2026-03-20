@@ -47,17 +47,8 @@ async fn handle_music_command(
         return Ok(());
     }
 
-    // Try to parse as music ID first
-    if let Some(music_id) = parse_music_id(&args) {
-        return process_music(bot, msg, state, music_id).await;
-    }
-
-    if let Some(program_id) = parse_music_program_id(&args) {
-        return process_program(bot, msg, state, program_id).await;
-    }
-
-    if let Some(target) = parse_music_collection_target(&args) {
-        return process_music_collection(bot, msg, state, target).await;
+    if let Some(target) = parse_direct_music_target(&args) {
+        return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
 
     // If not a number, search for the song

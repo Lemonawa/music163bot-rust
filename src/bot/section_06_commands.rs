@@ -4,16 +4,8 @@ async fn handle_music_url(
     state: &Arc<BotState>,
     text: &str,
 ) -> ResponseResult<()> {
-    if let Some(music_id) = parse_music_id(text) {
-        return process_music(bot, msg, state, music_id).await;
-    }
-
-    if let Some(program_id) = parse_music_program_id(text) {
-        return process_program(bot, msg, state, program_id).await;
-    }
-
-    if let Some(target) = parse_music_collection_target(text) {
-        return process_music_collection(bot, msg, state, target).await;
+    if let Some(target) = parse_direct_music_target(text) {
+        return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
 
     let Some(url) = extract_first_url(text) else {
@@ -21,14 +13,8 @@ async fn handle_music_url(
         return Ok(());
     };
 
-    if let Some(music_id) = parse_music_id(&url) {
-        return process_music(bot, msg, state, music_id).await;
-    }
-    if let Some(program_id) = parse_music_program_id(&url) {
-        return process_program(bot, msg, state, program_id).await;
-    }
-    if let Some(target) = parse_music_collection_target(&url) {
-        return process_music_collection(bot, msg, state, target).await;
+    if let Some(target) = parse_direct_music_target(&url) {
+        return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
 
     let final_url = match state.music_api.resolve_share_link(&url).await {
@@ -43,12 +29,8 @@ async fn handle_music_url(
         }
     };
 
-    if let Some(music_id) = parse_music_id(&final_url) {
-        process_music(bot, msg, state, music_id).await
-    } else if let Some(program_id) = parse_music_program_id(&final_url) {
-        process_program(bot, msg, state, program_id).await
-    } else if let Some(target) = parse_music_collection_target(&final_url) {
-        process_music_collection(bot, msg, state, target).await
+    if let Some(target) = parse_direct_music_target(&final_url) {
+        dispatch_parsed_music_target(bot, msg, state, target).await
     } else {
         send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
         Ok(())

@@ -49,6 +49,38 @@ fn cached_music_link_target(program_id: Option<i64>, music_id: u64) -> MusicLink
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParsedMusicTarget {
+    Song(u64),
+    Program(u64),
+    Collection(MusicCollectionTarget),
+}
+
+fn parse_direct_music_target(text: &str) -> Option<ParsedMusicTarget> {
+    if let Some(music_id) = parse_music_id(text) {
+        Some(ParsedMusicTarget::Song(music_id))
+    } else if let Some(program_id) = parse_music_program_id(text) {
+        Some(ParsedMusicTarget::Program(program_id))
+    } else {
+        parse_music_collection_target(text).map(ParsedMusicTarget::Collection)
+    }
+}
+
+async fn dispatch_parsed_music_target(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    target: ParsedMusicTarget,
+) -> ResponseResult<()> {
+    match target {
+        ParsedMusicTarget::Song(music_id) => process_music(bot, msg, state, music_id).await,
+        ParsedMusicTarget::Program(program_id) => process_program(bot, msg, state, program_id).await,
+        ParsedMusicTarget::Collection(collection_target) => {
+            process_music_collection(bot, msg, state, collection_target).await
+        }
+    }
+}
+
 fn create_music_keyboard_for_target(
     link_target: MusicLinkTarget,
     music_id: u64,
