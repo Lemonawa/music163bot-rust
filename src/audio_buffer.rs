@@ -85,32 +85,25 @@ impl AudioBuffer {
                 filename,
             })
         } else {
-            let file_path = PathBuf::from(cache_dir).join(&filename);
-
-            tracing::debug!(
-                "AudioBuffer: using disk mode (path: {})",
-                file_path.display()
-            );
-
-            let file = File::create(&file_path)
-                .await
-                .with_context(|| format!("Failed to create file: {}", file_path.display()))?;
-
-            Ok(Self::Disk {
-                path: file_path,
-                file: Some(file),
-                filename,
-                written_bytes: 0,
-            })
+            Self::create_disk_buffer(filename, cache_dir, "using disk mode").await
         }
     }
 
     /// Force creation of a disk-based buffer (for fallback scenarios)
     pub async fn new_disk(filename: String, cache_dir: &str) -> Result<Self> {
+        Self::create_disk_buffer(filename, cache_dir, "forced disk mode").await
+    }
+
+    async fn create_disk_buffer(
+        filename: String,
+        cache_dir: &str,
+        mode_label: &str,
+    ) -> Result<Self> {
         let file_path = PathBuf::from(cache_dir).join(&filename);
 
         tracing::debug!(
-            "AudioBuffer: forced disk mode (path: {})",
+            "AudioBuffer: {} (path: {})",
+            mode_label,
             file_path.display()
         );
 

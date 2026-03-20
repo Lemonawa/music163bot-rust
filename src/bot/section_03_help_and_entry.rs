@@ -51,20 +51,12 @@ async fn handle_music_command(
         return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
 
-    // If not a number, search for the song
-    match state.music_api.search_songs(&args, 1).await {
-        Ok(songs) => {
-            if let Some(song) = songs.first() {
-                process_music(bot, msg, state, song.id).await
-            } else {
-                send_reply_text(bot, msg, "未找到相关歌曲").await?;
-                Ok(())
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Music command search failed: {}", sanitize_sensitive_text(&e.to_string()));
-            send_reply_text(bot, msg, "搜索失败，请稍后重试").await?;
-            Ok(())
-        }
+    if let Some(music_id) =
+        search_first_song_id_or_reply(bot, msg, state, &args, "Music command search failed")
+            .await?
+    {
+        process_music(bot, msg, state, music_id).await
+    } else {
+        Ok(())
     }
 }

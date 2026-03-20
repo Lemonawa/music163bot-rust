@@ -26,27 +26,5 @@ async fn raw_send_document_bytes(
     }
 
     let url = format!("{api_base_url}sendDocument");
-    let resp = client
-        .post(&url)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| {
-            BotError::Other(anyhow::anyhow!(
-                "Raw upload request failed: {}",
-                redact_bot_token_in_error_message(&e.to_string())
-            ))
-        })?;
-
-    let status = resp.status();
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| {
-            BotError::Other(anyhow::anyhow!(
-                "Failed to read upload response: {}",
-                sanitize_sensitive_text(&e.to_string())
-            ))
-        })?;
-    parse_telegram_api_response(&body, status, "sendDocument")
+    send_raw_upload_form(client, &url, form, "sendDocument").await
 }

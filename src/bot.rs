@@ -3,6 +3,7 @@ include!("bot/section_02.rs");
 include!("bot/section_03.rs");
 include!("bot/section_04.rs");
 include!("bot/section_05.rs");
+include!("bot/section_05_target_resolution.rs");
 include!("bot/section_05_upload_document.rs");
 include!("bot/section_06.rs");
 include!("bot/section_06_commands.rs");

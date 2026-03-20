@@ -14,21 +14,12 @@ async fn handle_lyric_command(
     let music_id = if let Some(id) = parse_music_id(&args) {
         id
     } else {
-        match state.music_api.search_songs(&args, 1).await {
-            Ok(songs) => {
-                if let Some(song) = songs.first() {
-                    song.id
-                } else {
-                    send_reply_text(bot, msg, "未找到相关歌曲").await?;
-                    return Ok(());
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Lyric search failed: {}", sanitize_sensitive_text(&e.to_string()));
-                send_reply_text(bot, msg, "搜索失败，请稍后重试").await?;
-                return Ok(());
-            }
-        }
+        let Some(song_id) =
+            search_first_song_id_or_reply(bot, msg, state, &args, "Lyric search failed").await?
+        else {
+            return Ok(());
+        };
+        song_id
     };
 
     let status_msg = bot
@@ -190,18 +181,15 @@ async fn handle_rmcache_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    // Check if user is admin
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let Some(user_id) = ensure_admin_user_id(bot, msg, &state.config).await? else {
+        return Ok(());
+    };
 
     tracing::info!(
         "rmcache command from user_id: {}, configured admins: {:?}",
         user_id,
         state.config.bot_admin
     );
-
-    if !ensure_admin(bot, msg, &state.config).await? {
-        return Ok(());
-    }
 
     let args = args.unwrap_or_default();
 
@@ -248,8 +236,9 @@ async fn handle_clearallcache_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    // Check if user is admin
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let Some(user_id) = ensure_admin_user_id(bot, msg, &state.config).await? else {
+        return Ok(());
+    };
 
     tracing::info!(
         "clearallcache command from user_id: {}, configured admins: {:?}",
@@ -257,11 +246,6 @@ async fn handle_clearallcache_command(
         state.config.bot_admin
     );
 
-    if !ensure_admin(bot, msg, &state.config).await? {
-        return Ok(());
-    }
-
-    // Send confirmation message
     send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
 
     Ok(())
@@ -272,12 +256,9 @@ async fn handle_clearallcache_confirm_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    // Check if user is admin
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
-
-    if !ensure_admin(bot, msg, &state.config).await? {
+    let Some(user_id) = ensure_admin_user_id(bot, msg, &state.config).await? else {
         return Ok(());
-    }
+    };
 
     let status_msg = bot
         .send_message(msg.chat.id, "🗑️ 正在清除所有缓存...")
@@ -313,6 +294,19 @@ async fn handle_clearallcache_confirm_command(
     }
 
     Ok(())
+}
+
+async fn ensure_admin_user_id(
+    bot: &Bot,
+    msg: &Message,
+    config: &Config,
+) -> ResponseResult<Option<i64>> {
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    if ensure_admin(bot, msg, config).await? {
+        Ok(Some(user_id))
+    } else {
+        Ok(None)
+    }
 }
 
 async fn handle_callback(

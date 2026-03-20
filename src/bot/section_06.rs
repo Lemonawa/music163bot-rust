@@ -1,3 +1,34 @@
+async fn send_raw_upload_form(
+    client: &reqwest::Client,
+    url: &str,
+    form: reqwest::multipart::Form,
+    method: &str,
+) -> Result<serde_json::Value> {
+    let resp = client
+        .post(url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| {
+            BotError::Other(anyhow::anyhow!(
+                "Raw upload request failed: {}",
+                redact_bot_token_in_error_message(&e.to_string())
+            ))
+        })?;
+
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| {
+            BotError::Other(anyhow::anyhow!(
+                "Failed to read upload response: {}",
+                sanitize_sensitive_text(&e.to_string())
+            ))
+        })?;
+    parse_telegram_api_response(&body, status, method)
+}
+
 /// Upload a file via raw reqwest multipart with pre-computed Content-Length
 /// and 256 KiB streaming chunks — bypasses teloxide's 8 KiB FramedRead + chunked encoding.
 async fn raw_send_file(
@@ -111,29 +142,7 @@ async fn raw_send_file(
     }
 
     let url = format!("{api_base_url}sendAudio");
-    let resp = client
-        .post(&url)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| {
-            BotError::Other(anyhow::anyhow!(
-                "Raw upload request failed: {}",
-                redact_bot_token_in_error_message(&e.to_string())
-            ))
-        })?;
-
-    let status = resp.status();
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| {
-            BotError::Other(anyhow::anyhow!(
-                "Failed to read upload response: {}",
-                sanitize_sensitive_text(&e.to_string())
-            ))
-        })?;
-    parse_telegram_api_response(&body, status, "sendAudio")
+    send_raw_upload_form(client, &url, form, "sendAudio").await
 }
 
 fn redact_bot_token_in_error_message(message: &str) -> String {
@@ -368,19 +377,23 @@ where
 async fn acquire_download_permit(
     semaphore: &tokio::sync::Semaphore,
 ) -> Result<tokio::sync::SemaphorePermit<'_>> {
+    acquire_semaphore_permit(semaphore, "download").await
+}
+
+async fn acquire_semaphore_permit<'a>(
+    semaphore: &'a tokio::sync::Semaphore,
+    label: &str,
+) -> Result<tokio::sync::SemaphorePermit<'a>> {
     semaphore.acquire().await.map_err(|e| {
-        tracing::error!("Download semaphore closed: {}", e);
-        BotError::Other(anyhow::anyhow!("download semaphore closed"))
+        tracing::error!("{} semaphore closed: {}", label, e);
+        BotError::Other(anyhow::anyhow!("{label} semaphore closed"))
     })
 }
 
 async fn acquire_upload_permit(
     semaphore: &tokio::sync::Semaphore,
 ) -> Result<tokio::sync::SemaphorePermit<'_>> {
-    semaphore.acquire().await.map_err(|e| {
-        tracing::error!("Upload semaphore closed: {}", e);
-        BotError::Other(anyhow::anyhow!("upload semaphore closed"))
-    })
+    acquire_semaphore_permit(semaphore, "upload").await
 }
 
 async fn acquire_upload_permit_owned(
