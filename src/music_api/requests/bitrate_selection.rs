@@ -110,15 +110,10 @@ impl MusicApi {
 
             match fetched_url {
                 Ok(song_url) if song_url_has_download_url(&song_url) => {
-                    if let Some(start) = fallback_url_start {
-                        let fallback_duration = start.elapsed();
-                        tracing::debug!("[fallback_url] {}ms", fallback_duration.as_millis());
-                        log_music_api_perf(song_id, "fallback_url", fallback_duration);
-                    }
-                    log_music_api_perf(
+                    log_url_selection_completion(
                         song_id,
-                        "select_url_total",
-                        select_url_total_start.elapsed(),
+                        fallback_url_start,
+                        select_url_total_start,
                     );
                     return Ok((Arc::clone(&detail), song_url));
                 }
@@ -141,21 +136,25 @@ impl MusicApi {
             }
         }
 
-        if let Some(start) = fallback_url_start {
-            let fallback_duration = start.elapsed();
-            tracing::debug!("[fallback_url] {}ms", fallback_duration.as_millis());
-            log_music_api_perf(song_id, "fallback_url", fallback_duration);
-        }
-
-        log_music_api_perf(
-            song_id,
-            "select_url_total",
-            select_url_total_start.elapsed(),
-        );
+        log_url_selection_completion(song_id, fallback_url_start, select_url_total_start);
         if let Some(e) = last_error {
             Err(e)
         } else {
             Err(BotError::MusicApi("No download URL found".to_string()))
         }
     }
+}
+
+fn log_url_selection_completion(
+    song_id: u64,
+    fallback_url_start: Option<Instant>,
+    select_url_total_start: Instant,
+) {
+    if let Some(start) = fallback_url_start {
+        let fallback_duration = start.elapsed();
+        tracing::debug!("[fallback_url] {}ms", fallback_duration.as_millis());
+        log_music_api_perf(song_id, "fallback_url", fallback_duration);
+    }
+
+    log_music_api_perf(song_id, "select_url_total", select_url_total_start.elapsed());
 }

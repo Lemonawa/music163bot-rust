@@ -53,3 +53,17 @@ async fn search_first_song_id_or_reply(
         }
     }
 }
+
+async fn parse_song_id_or_search_first_result(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    text: &str,
+    log_context: &str,
+) -> ResponseResult<Option<u64>> {
+    if let Some(music_id) = parse_music_id(text) {
+        Ok(Some(music_id))
+    } else {
+        search_first_song_id_or_reply(bot, msg, state, text, log_context).await
+    }
+}

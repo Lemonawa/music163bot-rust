@@ -40,23 +40,21 @@ async fn handle_music_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let args = args.unwrap_or_default();
-
-    if args.is_empty() {
-        send_reply_text(bot, msg, "请输入歌曲ID或歌曲关键词").await?;
+    let Some(args) = require_command_args_or_reply(bot, msg, args, "请输入歌曲ID或歌曲关键词").await?
+    else {
         return Ok(());
-    }
+    };
 
     if let Some(target) = parse_direct_music_target(&args) {
         return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
 
-    if let Some(music_id) =
-        search_first_song_id_or_reply(bot, msg, state, &args, "Music command search failed")
+    let Some(music_id) =
+        parse_song_id_or_search_first_result(bot, msg, state, &args, "Music command search failed")
             .await?
-    {
-        process_music(bot, msg, state, music_id).await
-    } else {
-        Ok(())
-    }
+    else {
+        return Ok(());
+    };
+
+    process_music(bot, msg, state, music_id).await
 }

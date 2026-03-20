@@ -30,6 +30,65 @@ async fn send_multipart_form(client: &reqwest::Client, url: &str, form: Form) ->
     Ok(resp.json().await?)
 }
 
+async fn send_audio_upload(
+    client: &reqwest::Client,
+    url: &str,
+    file_path: &std::path::Path,
+    file_size: u64,
+    chat_id: &str,
+    caption: &str,
+    body: reqwest::Body,
+) -> BenchResult {
+    let part = Part::stream_with_length(body, file_size)
+        .file_name(filename(file_path))
+        .mime_str(mime_for_file(file_path))?;
+
+    let form = base_form(chat_id, caption).part("audio", part);
+    send_multipart_form(client, url, form).await
+}
+
+async fn send_memory_audio_upload(
+    client: &reqwest::Client,
+    url: &str,
+    file_path: &std::path::Path,
+    file_size: u64,
+    chat_id: &str,
+    caption: &str,
+    bytes: Bytes,
+) -> BenchResult {
+    send_audio_upload(
+        client,
+        url,
+        file_path,
+        file_size,
+        chat_id,
+        caption,
+        reqwest::Body::from(bytes),
+    )
+    .await
+}
+
+async fn upload_memory_mode(
+    client: &reqwest::Client,
+    url: &str,
+    file_path: &std::path::Path,
+    file_size: u64,
+    chat_id: &str,
+    caption: &str,
+    clone_before_send: bool,
+) -> BenchResult {
+    let data = tokio::fs::read(file_path).await?;
+    let bytes = if clone_before_send {
+        let bytes = Bytes::from(data.clone());
+        drop(data);
+        bytes
+    } else {
+        Bytes::from(data)
+    };
+
+    send_memory_audio_upload(client, url, file_path, file_size, chat_id, caption, bytes).await
+}
+
 fn upload_response_ok(json: &serde_json::Value) -> bool {
     json.get("ok").and_then(|v| v.as_bool()) == Some(true)
 }
@@ -46,6 +105,11 @@ pub(crate) struct DeleteContext<'a> {
     pub(crate) token: &'a str,
     pub(crate) chat_id: &'a str,
     pub(crate) enabled: bool,
+}
+
+pub(crate) enum MemoryUploadMode {
+    Move,
+    Clone,
 }
 
 pub(crate) async fn record_upload_result(
@@ -113,50 +177,42 @@ pub(crate) async fn upload_stream(
     let file = tokio::fs::File::open(file_path).await?;
     let stream = ReaderStream::with_capacity(file, chunk_size);
     let body = reqwest::Body::wrap_stream(stream);
-    let part = Part::stream_with_length(body, file_size)
-        .file_name(filename(file_path))
-        .mime_str(mime_for_file(file_path))?;
-
-    let form = base_form(chat_id, &format!("bench-stream-{chunk_size}")).part("audio", part);
-    send_multipart_form(client, url, form).await
+    send_audio_upload(
+        client,
+        url,
+        file_path,
+        file_size,
+        chat_id,
+        &format!("bench-stream-{chunk_size}"),
+        body,
+    )
+    .await
 }
 
-/// Mode: read file to memory, then move Vec into Bytes (zero-copy)
-pub(crate) async fn upload_memory_move(
+/// Mode: read file to memory and upload it.
+pub(crate) async fn upload_memory(
     client: &reqwest::Client,
     url: &str,
     file_path: &std::path::Path,
     file_size: u64,
     chat_id: &str,
+    mode: MemoryUploadMode,
 ) -> BenchResult {
-    let data = tokio::fs::read(file_path).await?;
-    let bytes = Bytes::from(data);
-    let part = Part::stream_with_length(bytes, file_size)
-        .file_name(filename(file_path))
-        .mime_str(mime_for_file(file_path))?;
+    let (caption, clone_before_send) = match mode {
+        MemoryUploadMode::Move => ("bench-memory-move", false),
+        MemoryUploadMode::Clone => ("bench-memory-clone", true),
+    };
 
-    let form = base_form(chat_id, "bench-memory-move").part("audio", part);
-    send_multipart_form(client, url, form).await
-}
-
-/// Mode: read file to memory, clone the Vec, send the clone
-/// Simulates AudioBuffer::Memory where we keep the original
-pub(crate) async fn upload_memory_clone(
-    client: &reqwest::Client,
-    url: &str,
-    file_path: &std::path::Path,
-    file_size: u64,
-    chat_id: &str,
-) -> BenchResult {
-    let data = tokio::fs::read(file_path).await?;
-    let bytes = Bytes::from(data.clone());
-    drop(data);
-    let part = Part::stream_with_length(bytes, file_size)
-        .file_name(filename(file_path))
-        .mime_str(mime_for_file(file_path))?;
-
-    let form = base_form(chat_id, "bench-memory-clone").part("audio", part);
-    send_multipart_form(client, url, form).await
+    upload_memory_mode(
+        client,
+        url,
+        file_path,
+        file_size,
+        chat_id,
+        caption,
+        clone_before_send,
+    )
+    .await
 }
 
 /// Mode: pre-build the multipart body bytes manually (like Python benchmark)

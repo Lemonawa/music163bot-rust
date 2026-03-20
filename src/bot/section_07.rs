@@ -4,28 +4,19 @@ async fn handle_lyric_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let args = args.unwrap_or_default();
-
-    if args.is_empty() {
-        send_reply_text(bot, msg, "请输入歌曲ID或关键词").await?;
+    let Some(args) = require_command_args_or_reply(bot, msg, args, "请输入歌曲ID或关键词").await?
+    else {
         return Ok(());
-    }
-
-    let music_id = if let Some(id) = parse_music_id(&args) {
-        id
-    } else {
-        let Some(song_id) =
-            search_first_song_id_or_reply(bot, msg, state, &args, "Lyric search failed").await?
-        else {
-            return Ok(());
-        };
-        song_id
     };
 
-    let status_msg = bot
-        .send_message(msg.chat.id, "🎵 正在获取歌词...")
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    let Some(music_id) =
+        parse_song_id_or_search_first_result(bot, msg, state, &args, "Lyric search failed")
+            .await?
+    else {
+        return Ok(());
+    };
+
+    let status_msg = send_reply_message(bot, msg, "🎵 正在获取歌词...").await?;
 
     match join_futures(
         state.music_api.get_song_lyric(music_id),
@@ -181,15 +172,9 @@ async fn handle_rmcache_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let Some(user_id) = ensure_admin_user_id(bot, msg, &state.config).await? else {
+    let Some(_user_id) = authorize_admin_command(bot, msg, &state.config, "rmcache").await? else {
         return Ok(());
     };
-
-    tracing::info!(
-        "rmcache command from user_id: {}, configured admins: {:?}",
-        user_id,
-        state.config.bot_admin
-    );
 
     let args = args.unwrap_or_default();
 
@@ -236,15 +221,10 @@ async fn handle_clearallcache_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let Some(user_id) = ensure_admin_user_id(bot, msg, &state.config).await? else {
+    let Some(_user_id) = authorize_admin_command(bot, msg, &state.config, "clearallcache").await?
+    else {
         return Ok(());
     };
-
-    tracing::info!(
-        "clearallcache command from user_id: {}, configured admins: {:?}",
-        user_id,
-        state.config.bot_admin
-    );
 
     send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
 
@@ -256,14 +236,12 @@ async fn handle_clearallcache_confirm_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let Some(user_id) = ensure_admin_user_id(bot, msg, &state.config).await? else {
+    let Some(user_id) = authorize_admin_command(bot, msg, &state.config, "clearallcache confirm").await?
+    else {
         return Ok(());
     };
 
-    let status_msg = bot
-        .send_message(msg.chat.id, "🗑️ 正在清除所有缓存...")
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    let status_msg = send_reply_message(bot, msg, "🗑️ 正在清除所有缓存...").await?;
 
     match state.database.clear_all_songs().await {
         Ok(count) => {
@@ -307,6 +285,26 @@ async fn ensure_admin_user_id(
     } else {
         Ok(None)
     }
+}
+
+async fn authorize_admin_command(
+    bot: &Bot,
+    msg: &Message,
+    config: &Config,
+    command_name: &str,
+) -> ResponseResult<Option<i64>> {
+    let Some(user_id) = ensure_admin_user_id(bot, msg, config).await? else {
+        return Ok(None);
+    };
+
+    tracing::info!(
+        "{} command from user_id: {}, configured admins: {:?}",
+        command_name,
+        user_id,
+        config.bot_admin
+    );
+
+    Ok(Some(user_id))
 }
 
 async fn handle_callback(

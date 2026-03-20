@@ -7,10 +7,7 @@ fn percentile_95(samples: &VecDeque<f64>) -> f64 {
 }
 
 fn sample_resource_snapshot() -> ResourceSnapshot {
-    let mut guard = match STATUS_RESOURCE_CACHE.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut guard = lock_unpoisoned(&STATUS_RESOURCE_CACHE);
     let (system, last_refresh, snapshot) = &mut *guard;
     if last_refresh.elapsed() >= STATUS_RESOURCE_REFRESH_INTERVAL {
         system.refresh_cpu_usage();

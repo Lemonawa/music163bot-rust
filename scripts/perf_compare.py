@@ -202,6 +202,16 @@ def time_loop(rounds: int, fn: Callable[[], None]) -> list[float]:
     return samples
 
 
+def run_thread_round(fanout: int, worker: Callable[[], None]) -> float:
+    threads = [threading.Thread(target=worker) for _ in range(fanout)]
+    start = time.perf_counter()
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return (time.perf_counter() - start) * 1000.0
+
+
 def bench_status(rows: int, rounds: int, roundtrip_overhead_us: int) -> StatusBench:
     conn = sqlite3.connect(":memory:")
     cur = conn.cursor()
@@ -470,13 +480,7 @@ def bench_singleflight(
                 with counter_lock:
                     call_count += 1
 
-        threads = [threading.Thread(target=worker) for _ in range(fanout)]
-        start = time.perf_counter()
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        elapsed_ms = run_thread_round(fanout, worker)
         return elapsed_ms, call_count
 
     def after_round() -> tuple[float, int]:
@@ -501,13 +505,7 @@ def bench_singleflight(
             else:
                 leader_ready.wait()
 
-        threads = [threading.Thread(target=worker) for _ in range(fanout)]
-        start = time.perf_counter()
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        elapsed_ms = run_thread_round(fanout, worker)
         return elapsed_ms, call_count
 
     before_samples: list[float] = []
@@ -571,7 +569,9 @@ def bench_api_cache(rounds: int, upstream_latency_ms: float) -> ApiCacheBench:
     after = to_stats(after_samples)
     speedup = before.mean_ms / after.mean_ms if after.mean_ms else 0.0
 
-    return ApiCacheBench(rounds=loop_rounds, before=before, after=after, speedup_x=speedup)
+    return ApiCacheBench(
+        rounds=loop_rounds, before=before, after=after, speedup_x=speedup
+    )
 
 
 def make_cache_payload(payload_kb: int) -> tuple[dict, dict]:

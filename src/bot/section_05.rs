@@ -223,11 +223,34 @@ fn clearallcache_confirmation_prompt() -> &'static str {
     "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 <code>/clearallcache confirm</code> 确认操作。"
 }
 
-async fn send_reply_text(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+async fn send_reply_message(
+    bot: &Bot,
+    msg: &Message,
+    text: impl Into<String>,
+) -> ResponseResult<Message> {
     bot.send_message(msg.chat.id, text)
         .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+        .await
+}
+
+async fn send_reply_text(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+    send_reply_message(bot, msg, text).await?;
     Ok(())
+}
+
+async fn require_command_args_or_reply(
+    bot: &Bot,
+    msg: &Message,
+    args: Option<String>,
+    prompt: &str,
+) -> ResponseResult<Option<String>> {
+    let args = args.unwrap_or_default();
+    if args.is_empty() {
+        send_reply_text(bot, msg, prompt).await?;
+        Ok(None)
+    } else {
+        Ok(Some(args))
+    }
 }
 
 async fn send_reply_html(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {

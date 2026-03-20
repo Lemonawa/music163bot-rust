@@ -282,23 +282,14 @@ async fn acquire_upload_client(state: &Arc<BotState>) -> Result<(Bot, reqwest::C
         let mut upload_state = state.upload_client_state.lock().await;
 
         if !should_refresh_upload_client(&upload_state, reuse_limit) {
-            let next_reuse_count = upload_state.reuse_count.saturating_add(1);
             if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
                 tracing::debug!(
                     "Upload diag: reusing client (reuse_count: {}, reuse_limit: {})",
                     upload_state.reuse_count,
                     reuse_limit
                 );
-                tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
             }
-            upload_state.reuse_count = next_reuse_count;
-            let bot = get_upload_bot(&upload_state)?;
-            let raw_client = upload_state
-                .raw_client
-                .clone()
-                .unwrap_or_else(reqwest::Client::new);
-            let api_url = upload_state.upload_api_url.clone();
-            return Ok((bot, raw_client, api_url));
+            return checkout_upload_client(&mut upload_state, &state.config);
         }
 
         let reason = if upload_state.bot.is_none() {
@@ -337,17 +328,21 @@ async fn acquire_upload_client(state: &Arc<BotState>) -> Result<(Bot, reqwest::C
         tracing::debug!("Upload diag: client refreshed by another task");
     }
 
+    checkout_upload_client(&mut upload_state, &state.config)
+}
+
+fn checkout_upload_client(
+    upload_state: &mut UploadClientState,
+    config: &Config,
+) -> Result<(Bot, reqwest::Client, String)> {
     let next_reuse_count = upload_state.reuse_count.saturating_add(1);
-    if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+    if upload_log_enabled(config, UploadLogLevel::Debug) {
         tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
     }
     upload_state.reuse_count = next_reuse_count;
 
-    let bot = get_upload_bot(&upload_state)?;
-    let raw_client = upload_state
-        .raw_client
-        .clone()
-        .unwrap_or_else(reqwest::Client::new);
+    let bot = get_upload_bot(upload_state)?;
+    let raw_client = upload_state.raw_client.clone().unwrap_or_default();
     let api_url = upload_state.upload_api_url.clone();
     Ok((bot, raw_client, api_url))
 }

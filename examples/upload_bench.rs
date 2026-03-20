@@ -16,7 +16,7 @@ use std::time::Instant;
 mod upload_bench_support;
 
 use upload_bench_support::{
-    DeleteContext, record_upload_result, upload_memory_clone, upload_memory_move, upload_prebuilt,
+    DeleteContext, MemoryUploadMode, record_upload_result, upload_memory, upload_prebuilt,
     upload_stream,
 };
 
@@ -273,10 +273,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await
                 }
                 "memory-move" => {
-                    upload_memory_move(&client, &url, &args.file, file_size, &args.chat_id).await
+                    upload_memory(
+                        &client,
+                        &url,
+                        &args.file,
+                        file_size,
+                        &args.chat_id,
+                        MemoryUploadMode::Move,
+                    )
+                    .await
                 }
                 "memory-clone" => {
-                    upload_memory_clone(&client, &url, &args.file, file_size, &args.chat_id).await
+                    upload_memory(
+                        &client,
+                        &url,
+                        &args.file,
+                        file_size,
+                        &args.chat_id,
+                        MemoryUploadMode::Clone,
+                    )
+                    .await
                 }
                 "prebuilt" => {
                     upload_prebuilt(&client, &url, &args.file, file_size, &args.chat_id).await

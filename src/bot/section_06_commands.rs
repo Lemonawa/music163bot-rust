@@ -51,10 +51,7 @@ async fn handle_search_command(
         }
     };
 
-    let search_msg = bot
-        .send_message(msg.chat.id, "🔍 搜索中...")
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    let search_msg = send_reply_message(bot, msg, "🔍 搜索中...").await?;
 
     match state.music_api.search_songs(&keyword, 10).await {
         Ok(songs) => {

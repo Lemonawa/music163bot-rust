@@ -59,20 +59,42 @@ where
     String::from_utf8_lossy(&buffer).to_string()
 }
 
+fn sample_artist() -> crate::music_api::Artist {
+    crate::music_api::Artist {
+        id: 1,
+        name: "Artist".to_string(),
+    }
+}
+
+fn sample_album() -> crate::music_api::Album {
+    crate::music_api::Album {
+        id: 1,
+        name: "Album".to_string(),
+        pic_url: None,
+    }
+}
+
 fn sample_song_detail() -> SongDetail {
     SongDetail {
         id: 7,
         name: "Sample Song".to_string(),
         dt: Some(123_000),
-        ar: Some(vec![crate::music_api::Artist {
-            id: 1,
-            name: "Artist".to_string(),
-        }]),
-        al: Some(crate::music_api::Album {
-            id: 1,
-            name: "Album".to_string(),
-            pic_url: None,
-        }),
+        ar: Some(vec![sample_artist()]),
+        al: Some(sample_album()),
+    }
+}
+
+fn memory_buffer(data: Vec<u8>, filename: &str) -> AudioBuffer {
+    AudioBuffer::Memory {
+        data,
+        filename: filename.to_string(),
+    }
+}
+
+fn into_memory_data(buffer: AudioBuffer) -> Vec<u8> {
+    match buffer {
+        AudioBuffer::Memory { data, .. } => data,
+        AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
     }
 }
 
@@ -213,14 +235,8 @@ async fn thumbnail_buffer_memory_bytes_roundtrip() {
 fn mp3_tagging_is_byte_identical_for_same_input() {
     let detail = sample_song_detail();
     let cover = sample_cover_jpeg();
-    let mut first = AudioBuffer::Memory {
-        data: vec![0xFF, 0xFB, 0x90, 0x64],
-        filename: "a.mp3".to_string(),
-    };
-    let mut second = AudioBuffer::Memory {
-        data: vec![0xFF, 0xFB, 0x90, 0x64],
-        filename: "b.mp3".to_string(),
-    };
+    let mut first = memory_buffer(vec![0xFF, 0xFB, 0x90, 0x64], "a.mp3");
+    let mut second = memory_buffer(vec![0xFF, 0xFB, 0x90, 0x64], "b.mp3");
 
     first
         .add_id3_tags(&detail, Some(&cover))
@@ -229,14 +245,8 @@ fn mp3_tagging_is_byte_identical_for_same_input() {
         .add_id3_tags(&detail, Some(&cover))
         .expect("second mp3 tagging");
 
-    let first_data = match first {
-        AudioBuffer::Memory { data, .. } => data,
-        AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
-    };
-    let second_data = match second {
-        AudioBuffer::Memory { data, .. } => data,
-        AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
-    };
+    let first_data = into_memory_data(first);
+    let second_data = into_memory_data(second);
 
     assert_eq!(first_data, second_data);
 }
@@ -246,14 +256,8 @@ fn flac_tagging_keeps_equivalent_metadata_and_audio_payload() {
     let detail = sample_song_detail();
     let cover = sample_cover_jpeg();
     let source = sample_flac_bytes();
-    let mut first = AudioBuffer::Memory {
-        data: source.clone(),
-        filename: "a.flac".to_string(),
-    };
-    let mut second = AudioBuffer::Memory {
-        data: source,
-        filename: "b.flac".to_string(),
-    };
+    let mut first = memory_buffer(source.clone(), "a.flac");
+    let mut second = memory_buffer(source, "b.flac");
 
     first
         .add_flac_metadata(&detail, Some(&cover))
@@ -262,14 +266,8 @@ fn flac_tagging_keeps_equivalent_metadata_and_audio_payload() {
         .add_flac_metadata(&detail, Some(&cover))
         .expect("second flac tagging");
 
-    let first_data = match first {
-        AudioBuffer::Memory { data, .. } => data,
-        AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
-    };
-    let second_data = match second {
-        AudioBuffer::Memory { data, .. } => data,
-        AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
-    };
+    let first_data = into_memory_data(first);
+    let second_data = into_memory_data(second);
 
     let mut first_cursor = std::io::Cursor::new(first_data.as_slice());
     let first_tag = metaflac::Tag::read_from(&mut first_cursor).expect("parse first flac tag");
@@ -325,10 +323,7 @@ fn flac_memory_rebuild_does_not_reallocate_with_artwork() {
     // Build a large fake artwork (~200KB) to simulate real album covers
     let large_artwork = vec![0xFFu8; 200 * 1024];
 
-    let mut buffer = AudioBuffer::Memory {
-        data: source,
-        filename: "capacity_test.flac".to_string(),
-    };
+    let mut buffer = memory_buffer(source, "capacity_test.flac");
 
     // This should succeed without panic and produce valid output
     buffer
@@ -358,20 +353,14 @@ fn flac_memory_rebuild_does_not_reallocate_with_artwork() {
 
     // Also verify small artwork path works
     let source2 = sample_flac_bytes();
-    let mut buffer2 = AudioBuffer::Memory {
-        data: source2,
-        filename: "small_art.flac".to_string(),
-    };
+    let mut buffer2 = memory_buffer(source2, "small_art.flac");
     buffer2
         .add_flac_metadata(&detail, Some(&cover))
         .expect("flac tagging with small artwork");
 
     // And no-artwork path
     let source3 = sample_flac_bytes();
-    let mut buffer3 = AudioBuffer::Memory {
-        data: source3,
-        filename: "no_art.flac".to_string(),
-    };
+    let mut buffer3 = memory_buffer(source3, "no_art.flac");
     buffer3
         .add_flac_metadata(&detail, None)
         .expect("flac tagging without artwork");
@@ -404,10 +393,7 @@ fn flac_disk_logs_warning_on_tag_read_failure() {
 fn flac_memory_logs_warning_on_tag_read_failure() {
     let detail = sample_song_detail();
     let data = sample_flac_bytes_with_invalid_vorbis();
-    let mut buffer = AudioBuffer::Memory {
-        data,
-        filename: "bad.flac".to_string(),
-    };
+    let mut buffer = memory_buffer(data, "bad.flac");
 
     let logs = capture_warn_logs(|| {
         let _ = buffer.add_flac_metadata(&detail, None);
@@ -418,10 +404,7 @@ fn flac_memory_logs_warning_on_tag_read_failure() {
 
 #[test]
 fn memory_buffer_take_bytes_moves_data_without_copy() {
-    let mut buffer = AudioBuffer::Memory {
-        data: vec![1, 2, 3, 4, 5],
-        filename: "sample.mp3".to_string(),
-    };
+    let mut buffer = memory_buffer(vec![1, 2, 3, 4, 5], "sample.mp3");
 
     let original_ptr = match &buffer {
         AudioBuffer::Memory { data, .. } => data.as_ptr(),

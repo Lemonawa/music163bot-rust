@@ -155,48 +155,26 @@ async fn get_song_returns_all_mapped_fields() {
 
 #[tokio::test]
 async fn get_song_by_music_id_parses_sqlite_timestamp() {
-    let temp_name = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time")
-        .as_nanos();
-    let temp_path =
-        std::env::temp_dir().join(format!("music163bot_timestamp_parse_{temp_name}.db"));
-    let temp_path_str = temp_path.to_string_lossy().to_string();
+    let (db, temp_path) = create_temp_db("music163bot_timestamp_parse").await;
 
-    let db = Database::new(&temp_path_str).await.expect("create db");
+    let mut song = sample_song_info(42);
+    song.song_name = "Song Timestamp".to_string();
+    song.song_artists = "Artist Timestamp".to_string();
+    song.song_album = "Album Timestamp".to_string();
+    song.file_id = None;
+    song.thumb_file_id = None;
+    song.from_user_name = "user-timestamp".to_string();
+    song.from_chat_name = "chat-timestamp".to_string();
 
-    sqlx::query(
-        r"
-            INSERT INTO song_infos (
-                music_id, song_name, song_artists, song_album, file_ext,
-                music_size, pic_size, emb_pic_size, bit_rate, duration,
-                file_id, thumb_file_id, from_user_id, from_user_name,
-                from_chat_id, from_chat_name, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ",
-    )
-    .bind(42_i64)
-    .bind("Song Timestamp")
-    .bind("Artist Timestamp")
-    .bind("Album Timestamp")
-    .bind("mp3")
-    .bind(2048_i64)
-    .bind(0_i64)
-    .bind(0_i64)
-    .bind(128_000_i64)
-    .bind(200_i64)
-    .bind::<Option<String>>(None)
-    .bind::<Option<String>>(None)
-    .bind(100_i64)
-    .bind("user-timestamp")
-    .bind(200_i64)
-    .bind("chat-timestamp")
-    .bind("2024-02-01 12:34:56")
-    .bind("2024-02-01 12:34:56")
-    .execute(&db.pool)
-    .await
-    .expect("insert row");
+    db.save_song_info(&song).await.expect("insert row");
+
+    sqlx::query("UPDATE song_infos SET created_at = ?, updated_at = ? WHERE music_id = ?")
+        .bind("2024-02-01 12:34:56")
+        .bind("2024-02-01 12:34:56")
+        .bind(song.music_id)
+        .execute(&db.pool)
+        .await
+        .expect("set sqlite timestamps");
 
     let song = db
         .get_song_by_music_id(42)

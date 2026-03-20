@@ -318,6 +318,13 @@ impl InflightEntry {
     }
 }
 
+fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 #[cfg(test)]
 static INFLIGHT_WAIT_HOOK: std::sync::OnceLock<
     std::sync::Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
@@ -326,20 +333,14 @@ static INFLIGHT_WAIT_HOOK: std::sync::OnceLock<
 #[cfg(test)]
 fn set_inflight_wait_hook(hook: impl FnOnce() + Send + 'static) {
     let slot = INFLIGHT_WAIT_HOOK.get_or_init(|| std::sync::Mutex::new(None));
-    let mut guard = match slot.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut guard = lock_unpoisoned(slot);
     *guard = Some(Box::new(hook));
 }
 
 #[cfg(test)]
 fn take_inflight_wait_hook() -> Option<Box<dyn FnOnce() + Send + 'static>> {
     let slot = INFLIGHT_WAIT_HOOK.get_or_init(|| std::sync::Mutex::new(None));
-    let mut guard = match slot.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut guard = lock_unpoisoned(slot);
     guard.take()
 }
 
@@ -411,10 +412,7 @@ impl RuntimeMetrics {
     }
 
     fn record_speed(&self, direction: Direction, bytes: u64, duration: std::time::Duration) {
-        let mut guard = match self.speed_metrics.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = lock_unpoisoned(&self.speed_metrics);
         match direction {
             Direction::Download => guard.download.record(bytes, duration),
             Direction::Upload => guard.upload.record(bytes, duration),
@@ -422,10 +420,7 @@ impl RuntimeMetrics {
     }
 
     fn speed_snapshots(&self) -> (Option<SpeedSnapshot>, Option<SpeedSnapshot>) {
-        let guard = match self.speed_metrics.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = lock_unpoisoned(&self.speed_metrics);
         (guard.download.snapshot(), guard.upload.snapshot())
     }
 

@@ -1,4 +1,21 @@
 
+    async fn join_futures_with_parallel_assert<T, U, E, Left, Right>(
+        left: Left,
+        right: Right,
+    ) -> (Result<T, E>, Result<U, E>)
+    where
+        Left: std::future::Future<Output = Result<T, E>>,
+        Right: std::future::Future<Output = Result<U, E>>,
+    {
+        let start = std::time::Instant::now();
+        let results = super::join_futures(left, right).await;
+        assert!(
+            start.elapsed() < Duration::from_millis(90),
+            "Should run in parallel"
+        );
+        results
+    }
+
     #[tokio::test]
     async fn inflight_entry_wait_returns_after_finish() {
         let entry = super::InflightEntry::new();
@@ -23,8 +40,7 @@
 
     #[tokio::test]
     async fn lyric_parallel_fetch() {
-        let start = std::time::Instant::now();
-        let (res1, res2) = super::join_futures(
+        let (res1, res2) = join_futures_with_parallel_assert(
             async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 Ok::<_, ()>("lyric")
@@ -36,19 +52,13 @@
         )
         .await;
 
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed < Duration::from_millis(90),
-            "Should run in parallel"
-        );
         assert_eq!(res1, Ok("lyric"));
         assert_eq!(res2, Ok("detail"));
     }
 
     #[tokio::test]
     async fn lyric_upload_resource_parallel() {
-        let start = std::time::Instant::now();
-        let (res1, res2) = super::join_futures(
+        let (res1, res2) = join_futures_with_parallel_assert(
             async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 Ok::<_, ()>("client")
@@ -60,12 +70,6 @@
         )
         .await;
 
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed < Duration::from_millis(90),
-            "Should run in parallel"
-        );
         assert_eq!(res1, Ok("client"));
         assert_eq!(res2, Ok("permit"));
     }
-
