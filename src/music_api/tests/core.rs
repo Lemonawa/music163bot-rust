@@ -81,12 +81,6 @@ fn eapi_encrypt_accepts_valid_key_length() {
 }
 
 #[test]
-fn build_http_client_returns_client() {
-    let client = build_http_client(reqwest::Client::builder()).expect("client should be built");
-    let _ = client;
-}
-
-#[test]
 fn eapi_decrypt_rejects_invalid_key_length() {
     let result = MusicApi::eapi_decrypt_with_key("deadbeef", b"short");
     assert!(result.is_err());

@@ -16,7 +16,6 @@ use super::{
 };
 use crate::config::Config;
 use crate::error::BotError;
-use crate::utils::build_http_client;
 use image::{DynamicImage, GenericImageView};
 
 #[derive(Clone, Debug)]

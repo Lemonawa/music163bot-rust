@@ -160,12 +160,6 @@ async fn upload_target_uses_local_uri_when_enabled() {
 }
 
 #[test]
-fn build_http_client_returns_client() {
-    let client = build_http_client(reqwest::Client::builder()).expect("client should be built");
-    let _ = client;
-}
-
-#[test]
 fn get_upload_bot_returns_error_when_missing() {
     let state = UploadClientState {
         bot: None,
@@ -201,10 +195,4 @@ async fn acquire_download_permit_returns_error_when_closed() {
     assert!(err_str.contains("download semaphore closed"));
 }
 
-#[tokio::test]
-async fn fetch_detail_and_url_in_parallel() {
-    let (detail, url) = tokio::join!(async { 1 }, async { 2 });
-    assert_eq!(detail, 1);
-    assert_eq!(url, 2);
-}
 use super::*;

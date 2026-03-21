@@ -8,7 +8,6 @@ use std::time::Duration;
 use crate::config::Config;
 use crate::config::CoverMode;
 use crate::config::UploadLogLevel;
-use crate::utils::build_http_client;
 use teloxide::Bot;
 use uuid::Uuid;
 
