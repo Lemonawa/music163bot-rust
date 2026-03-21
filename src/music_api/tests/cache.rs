@@ -1,4 +1,3 @@
-
 fn sample_png_bytes() -> Vec<u8> {
     let mut image = image::RgbImage::new(2, 2);
     for pixel in image.pixels_mut() {
@@ -46,14 +45,14 @@ fn song_url_cache_key_includes_bitrate() {
 #[test]
 fn fallback_candidates_skip_primary_after_attempt() {
     let candidates = [320_000, 192_000, 128_000];
-    let fallback = super::fallback_bitrate_candidates(&candidates, true);
+    let fallback = super::requests::fallback_bitrate_candidates(&candidates, true);
     assert_eq!(fallback, &[192_000, 128_000]);
 }
 
 #[test]
 fn fallback_candidates_keep_primary_when_not_attempted() {
     let candidates = [320_000, 192_000, 128_000];
-    let fallback = super::fallback_bitrate_candidates(&candidates, false);
+    let fallback = super::requests::fallback_bitrate_candidates(&candidates, false);
     assert_eq!(fallback, &[320_000, 192_000, 128_000]);
 }
 
@@ -75,6 +74,12 @@ fn song_url_deserializes_null_fields() {
     assert_eq!(parsed.url, "");
     assert_eq!(parsed.md5, "");
     assert_eq!(parsed.format, "");
+}
+
+#[test]
+fn shared_song_url_helper_rejects_empty_urls() {
+    let song_url = sample_song_url(42, 320_000, "");
+    assert!(!super::shared::song_url_has_download_url(&song_url));
 }
 
 #[test]
@@ -237,15 +242,18 @@ fn prune_expired_cache_entries_removes_stale_entries_only() {
     );
     assert_eq!(stats.total_removed(), 3);
     assert!(api.song_detail_cache.get(&1).is_none());
-    assert!(api
-        .song_url_cache
-        .get(&super::song_url_cache_key(1, 320_000))
-        .is_none());
+    assert!(
+        api.song_url_cache
+            .get(&super::song_url_cache_key(1, 320_000))
+            .is_none()
+    );
     assert!(api.song_lyric_cache.get(&1).is_none());
     assert!(api.song_detail_cache.get(&2).is_some());
-    assert!(api
-        .song_url_cache
-        .get(&super::song_url_cache_key(2, 320_000))
-        .is_some());
+    assert!(
+        api.song_url_cache
+            .get(&super::song_url_cache_key(2, 320_000))
+            .is_some()
+    );
     assert!(api.song_lyric_cache.get(&2).is_some());
 }
+use super::*;

@@ -1,3 +1,9 @@
+use super::super::{
+    AlbumSongsResponse, DjProgramDetailResponse, DjProgramListResponse, MusicApi,
+    PlaylistDetailResponse, ProgramMainTrack, Result,
+};
+use crate::error::BotError;
+
 impl MusicApi {
     pub async fn get_playlist_song_ids(&self, playlist_id: u64) -> Result<Vec<u64>> {
         let url = format!("{}/api/v6/playlist/detail", self.base_url);

@@ -1,4 +1,12 @@
-fn rewrite_media_url(url: &str) -> Cow<'_, str> {
+use std::borrow::Cow;
+use std::io::Cursor;
+
+use image::{DynamicImage, GenericImageView, ImageFormat};
+
+use super::{Artist, MEDIA_URL_REWRITE_RULES, Result};
+use crate::error::BotError;
+
+pub(super) fn rewrite_media_url(url: &str) -> Cow<'_, str> {
     for (from_prefix, to_prefix) in MEDIA_URL_REWRITE_RULES {
         if let Some(rest) = url.strip_prefix(from_prefix) {
             return Cow::Owned(format!("{to_prefix}{rest}"));
@@ -21,14 +29,6 @@ pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(cursor.into_inner())
 }
 
-fn deserialize_string_or_null<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
-}
-
-
 /// Parse artists into a formatted string
 #[must_use]
 pub fn format_artists(artists: &[Artist]) -> String {
@@ -49,7 +49,7 @@ pub fn format_artists(artists: &[Artist]) -> String {
 }
 
 /// Resize image with black padding to maintain aspect ratio (like the original Go project)
-fn resize_image_with_padding(
+pub(super) fn resize_image_with_padding(
     img: DynamicImage,
     target_width: u32,
     target_height: u32,

@@ -1,3 +1,26 @@
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use aes::Aes128;
+use cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, block_padding::Pkcs7};
+use dashmap::DashMap;
+use ecb::{Decryptor, Encryptor};
+use hex::encode_upper;
+use md5::compute as md5_compute;
+use reqwest::Client;
+use tokio::time::Duration;
+use uuid::Uuid;
+
+use super::shared::song_url_has_download_url;
+use super::{
+    BROWSER_USER_AGENT, CachePruneStats, DEFAULT_AUTO_RETRY, DEFAULT_MAX_RETRY_TIMES, MusicApi,
+    SHORT_USER_AGENT, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL, SONG_URL_CACHE_TTL, SongDetail,
+    SongUrl, TimedCacheEntry, song_url_cache_key,
+};
+use crate::config::Config;
+use crate::error::{BotError, Result};
+use crate::utils::build_http_client;
+
 impl MusicApi {
     #[must_use]
     pub fn new(music_u: Option<String>, base_url: String) -> Self {
@@ -75,7 +98,7 @@ impl MusicApi {
         }
     }
 
-    fn album_art_total_attempts(&self) -> u32 {
+    pub(super) fn album_art_total_attempts(&self) -> u32 {
         if self.auto_retry {
             self.max_retry_times.saturating_add(1)
         } else {
@@ -83,7 +106,7 @@ impl MusicApi {
         }
     }
 
-    fn get_cached_song_detail(&self, song_id: u64) -> Option<Arc<SongDetail>> {
+    pub(super) fn get_cached_song_detail(&self, song_id: u64) -> Option<Arc<SongDetail>> {
         let now = Instant::now();
         let entry = self.song_detail_cache.get(&song_id)?;
         if entry.is_fresh_at(now) {
@@ -96,16 +119,16 @@ impl MusicApi {
     }
 
     #[cfg(test)]
-    fn cache_song_detail(&self, song_id: u64, detail: SongDetail) {
+    pub(super) fn cache_song_detail(&self, song_id: u64, detail: SongDetail) {
         self.cache_song_detail_shared(song_id, Arc::new(detail));
     }
 
-    fn cache_song_detail_shared(&self, song_id: u64, detail: Arc<SongDetail>) {
+    pub(super) fn cache_song_detail_shared(&self, song_id: u64, detail: Arc<SongDetail>) {
         self.song_detail_cache
             .insert(song_id, TimedCacheEntry::new(detail, SONG_DETAIL_CACHE_TTL));
     }
 
-    fn get_cached_song_url(&self, song_id: u64, br: u64) -> Option<Arc<SongUrl>> {
+    pub(super) fn get_cached_song_url(&self, song_id: u64, br: u64) -> Option<Arc<SongUrl>> {
         let key = song_url_cache_key(song_id, br);
         let now = Instant::now();
         let entry = self.song_url_cache.get(&key)?;
@@ -118,7 +141,7 @@ impl MusicApi {
         }
     }
 
-    fn get_first_cached_song_url(
+    pub(super) fn get_first_cached_song_url(
         &self,
         song_id: u64,
         bitrate_candidates: &[u64],
@@ -134,17 +157,17 @@ impl MusicApi {
     }
 
     #[cfg(test)]
-    fn cache_song_url(&self, song_id: u64, br: u64, song_url: SongUrl) {
+    pub(super) fn cache_song_url(&self, song_id: u64, br: u64, song_url: SongUrl) {
         self.cache_song_url_shared(song_id, br, Arc::new(song_url));
     }
 
-    fn cache_song_url_shared(&self, song_id: u64, br: u64, song_url: Arc<SongUrl>) {
+    pub(super) fn cache_song_url_shared(&self, song_id: u64, br: u64, song_url: Arc<SongUrl>) {
         let key = song_url_cache_key(song_id, br);
         self.song_url_cache
             .insert(key, TimedCacheEntry::new(song_url, SONG_URL_CACHE_TTL));
     }
 
-    fn get_cached_song_lyric(&self, song_id: u64) -> Option<String> {
+    pub(super) fn get_cached_song_lyric(&self, song_id: u64) -> Option<String> {
         let now = Instant::now();
         let entry = self.song_lyric_cache.get(&song_id)?;
         if entry.is_fresh_at(now) {
@@ -156,7 +179,7 @@ impl MusicApi {
         }
     }
 
-    fn cache_song_lyric(&self, song_id: u64, lyric: String) {
+    pub(super) fn cache_song_lyric(&self, song_id: u64, lyric: String) {
         self.song_lyric_cache
             .insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
     }
@@ -211,12 +234,15 @@ impl MusicApi {
         cookie_parts.join("; ")
     }
 
-    fn build_eapi_cookie(&self) -> &str {
+    pub(super) fn build_eapi_cookie(&self) -> &str {
         &self.eapi_cookie
     }
 
     /// Conditionally add the pre-computed MUSIC_U cookie header to a request.
-    fn apply_music_u_cookie(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(super) fn apply_music_u_cookie(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
         if let Some(cookie) = &self.music_u_cookie {
             request.header("Cookie", cookie)
         } else {
@@ -225,7 +251,9 @@ impl MusicApi {
     }
 
     /// Build common headers for image downloads (album art).
-    fn apply_image_download_headers(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(super) fn apply_image_download_headers(
+        request: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
         request
             .header("User-Agent", SHORT_USER_AGENT)
             .header("Referer", "https://music.163.com/")
@@ -236,7 +264,9 @@ impl MusicApi {
     }
 
     /// Build common headers for audio file downloads.
-    fn apply_audio_download_headers(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(super) fn apply_audio_download_headers(
+        request: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
         request
             .header("User-Agent", BROWSER_USER_AGENT)
             .header("Referer", "https://music.163.com/")
@@ -267,7 +297,7 @@ impl MusicApi {
         Self::eapi_encrypt_with_key(data, b"e82ckenh8dichen8")
     }
 
-    fn eapi_encrypt_with_key(data: &str, key: &[u8]) -> Result<String> {
+    pub(super) fn eapi_encrypt_with_key(data: &str, key: &[u8]) -> Result<String> {
         let block_size = 16;
         let data_len = data.len();
         let padded_len = ((data_len + block_size) / block_size) * block_size;
@@ -280,11 +310,11 @@ impl MusicApi {
         Ok(encode_upper(encrypted))
     }
 
-    fn eapi_decrypt(hex_data: &str) -> Result<String> {
+    pub(super) fn eapi_decrypt(hex_data: &str) -> Result<String> {
         Self::eapi_decrypt_with_key(hex_data, b"e82ckenh8dichen8")
     }
 
-    fn eapi_decrypt_with_key(hex_data: &str, key: &[u8]) -> Result<String> {
+    pub(super) fn eapi_decrypt_with_key(hex_data: &str, key: &[u8]) -> Result<String> {
         let mut bytes = hex::decode(hex_data).map_err(|e| BotError::MusicApi(e.to_string()))?;
         let decrypted = Decryptor::<Aes128>::new_from_slice(key)
             .map_err(|_| BotError::MusicApi("Invalid eapi key length".to_string()))?
@@ -293,13 +323,13 @@ impl MusicApi {
         String::from_utf8(decrypted.to_vec()).map_err(|e| BotError::MusicApi(e.to_string()))
     }
 
-    fn eapi_params(path: &str, json: &str) -> Result<String> {
+    pub(super) fn eapi_params(path: &str, json: &str) -> Result<String> {
         let data = Self::eapi_splice(path, json);
         let encrypted = Self::eapi_encrypt(&data)?;
         Ok(format!("params={encrypted}"))
     }
 
-    fn choose_eapi_user_agent() -> &'static str {
+    pub(super) fn choose_eapi_user_agent() -> &'static str {
         "NeteaseMusic/9.3.40.1753206443(164);Dalvik/2.1.0 (Linux; U; Android 9; MIX 2 MIUI/V12.0.1.0.PDECNXM)"
     }
 }

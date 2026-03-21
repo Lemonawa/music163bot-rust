@@ -1,3 +1,36 @@
+use std::sync::Arc;
+use std::time::Instant;
+
+use tokio::time::Duration;
+
+use super::super::{MusicApi, PERF_API_LOG_PREFIX, Result, SongDetail, SongUrl};
+use super::{
+    fallback_bitrate_candidates as request_fallback_bitrate_candidates,
+    log_music_api_perf as request_log_music_api_perf,
+    song_url_has_download_url as request_song_url_has_download_url,
+};
+use crate::error::BotError;
+
+pub(super) fn fallback_bitrate_candidates_impl(
+    bitrate_candidates: &[u64],
+    primary_attempted_unavailable: bool,
+) -> &[u64] {
+    if primary_attempted_unavailable {
+        bitrate_candidates
+            .split_first()
+            .map_or(bitrate_candidates, |(_, tail)| tail)
+    } else {
+        bitrate_candidates
+    }
+}
+
+pub(super) fn log_music_api_perf_impl(song_id: u64, stage: &str, duration: Duration) {
+    tracing::debug!(
+        "{PERF_API_LOG_PREFIX}|music_id={song_id}|stage={stage}|elapsed_ms={}",
+        duration.as_millis()
+    );
+}
+
 impl MusicApi {
     pub async fn get_song_detail_and_best_url(
         &self,
@@ -15,7 +48,7 @@ impl MusicApi {
         if let Some(ref detail) = cached_detail
             && let Some(song_url) = self.get_first_cached_song_url(song_id, bitrate_candidates)
         {
-            log_music_api_perf(
+            request_log_music_api_perf(
                 song_id,
                 "select_url_total",
                 select_url_total_start.elapsed(),
@@ -54,7 +87,7 @@ impl MusicApi {
             }
             if let Some(result) = url_result {
                 match result {
-                    Ok(song_url) if song_url_has_download_url(&song_url) => {
+                    Ok(song_url) if request_song_url_has_download_url(&song_url) => {
                         primary_url = Some(song_url);
                     }
                     Ok(_) => {
@@ -77,11 +110,11 @@ impl MusicApi {
                 "[parallel_fetch] {}ms (detail={need_detail}, url={need_url})",
                 parallel_start.elapsed().as_millis()
             );
-            log_music_api_perf(song_id, "parallel_fetch", parallel_start.elapsed());
+            request_log_music_api_perf(song_id, "parallel_fetch", parallel_start.elapsed());
         }
 
         let Some(detail) = cached_detail else {
-            log_music_api_perf(
+            request_log_music_api_perf(
                 song_id,
                 "select_url_total",
                 select_url_total_start.elapsed(),
@@ -94,7 +127,7 @@ impl MusicApi {
         let mut last_error = None;
         let mut fallback_url_start = None;
         for &bitrate in
-            fallback_bitrate_candidates(bitrate_candidates, primary_attempted_unavailable)
+            request_fallback_bitrate_candidates(bitrate_candidates, primary_attempted_unavailable)
         {
             let fetched_url = if bitrate == primary_bitrate {
                 if let Some(song_url) = primary_url.take() {
@@ -109,7 +142,7 @@ impl MusicApi {
             };
 
             match fetched_url {
-                Ok(song_url) if song_url_has_download_url(&song_url) => {
+                Ok(song_url) if request_song_url_has_download_url(&song_url) => {
                     log_url_selection_completion(
                         song_id,
                         fallback_url_start,
@@ -153,8 +186,12 @@ fn log_url_selection_completion(
     if let Some(start) = fallback_url_start {
         let fallback_duration = start.elapsed();
         tracing::debug!("[fallback_url] {}ms", fallback_duration.as_millis());
-        log_music_api_perf(song_id, "fallback_url", fallback_duration);
+        request_log_music_api_perf(song_id, "fallback_url", fallback_duration);
     }
 
-    log_music_api_perf(song_id, "select_url_total", select_url_total_start.elapsed());
+    request_log_music_api_perf(
+        song_id,
+        "select_url_total",
+        select_url_total_start.elapsed(),
+    );
 }

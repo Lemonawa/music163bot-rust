@@ -6,7 +6,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
+#[cfg(test)]
+use super::resize_image_with_padding;
 use super::{Album, Artist, MusicApi, SongDetail, SongUrl};
+use super::{
+    CachePruneStats, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL, SONG_URL_CACHE_TTL,
+    TimedCacheEntry, cache_entry_is_fresh, format_artists, requests, resize_album_art_to_thumbnail,
+    rewrite_media_url, shared, song_url_cache_key,
+};
 use crate::config::Config;
 use crate::error::BotError;
 use crate::utils::build_http_client;
@@ -337,7 +344,7 @@ fn sample_song_url(song_id: u64, bitrate: u64, url: &str) -> SongUrl {
     }
 }
 
-include!("tests/core.rs");
-include!("tests/cache.rs");
-include!("tests/fallback.rs");
-include!("tests/formatting.rs");
+mod cache;
+mod core;
+mod fallback;
+mod formatting;

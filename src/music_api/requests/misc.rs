@@ -1,3 +1,11 @@
+use serde::Serialize;
+
+use super::super::{
+    EapiSearchResponse, LyricResponse, MusicApi, Result, SHORT_USER_AGENT, SearchSong,
+    resize_album_art_to_thumbnail, rewrite_media_url,
+};
+use crate::error::BotError;
+
 impl MusicApi {
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
         if let Some(cached) = self.get_cached_song_lyric(song_id) {

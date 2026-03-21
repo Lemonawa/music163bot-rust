@@ -1,5 +1,13 @@
+use std::sync::Arc;
+
+use super::super::{
+    DjProgramItem, MusicApi, ProgramMainTrack, Result, SongDetail, SongDetailResponse, SongUrl,
+    SongUrlResponse,
+};
+use crate::error::BotError;
+
 impl MusicApi {
-    fn map_program_main_track(program: DjProgramItem) -> Result<ProgramMainTrack> {
+    pub(super) fn map_program_main_track(program: DjProgramItem) -> Result<ProgramMainTrack> {
         let main_track_id = program
             .main_track_id
             .filter(|id| *id > 0)
@@ -23,7 +31,7 @@ impl MusicApi {
         })
     }
 
-    async fn get_song_detail_shared(&self, song_id: u64) -> Result<Arc<SongDetail>> {
+    pub(super) async fn get_song_detail_shared(&self, song_id: u64) -> Result<Arc<SongDetail>> {
         if let Some(cached) = self.get_cached_song_detail(song_id) {
             return Ok(cached);
         }
@@ -59,7 +67,7 @@ impl MusicApi {
         Ok(detail)
     }
 
-    async fn get_song_url_shared(&self, song_id: u64, br: u64) -> Result<Arc<SongUrl>> {
+    pub(super) async fn get_song_url_shared(&self, song_id: u64, br: u64) -> Result<Arc<SongUrl>> {
         if let Some(cached) = self.get_cached_song_url(song_id, br) {
             return Ok(cached);
         }
