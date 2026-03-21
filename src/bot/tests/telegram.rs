@@ -203,3 +203,4 @@
         let data = tagged.get_data().await.expect("read tagged data");
         assert!(data.starts_with(b"ID3"));
     }
+use super::*;

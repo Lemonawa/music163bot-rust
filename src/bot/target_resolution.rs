@@ -1,11 +1,13 @@
+use super::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParsedMusicTarget {
+pub(super) enum ParsedMusicTarget {
     Song(u64),
     Program(u64),
     Collection(MusicCollectionTarget),
 }
 
-fn parse_direct_music_target(text: &str) -> Option<ParsedMusicTarget> {
+pub(super) fn parse_direct_music_target(text: &str) -> Option<ParsedMusicTarget> {
     if let Some(music_id) = parse_music_id(text) {
         Some(ParsedMusicTarget::Song(music_id))
     } else if let Some(program_id) = parse_music_program_id(text) {
@@ -15,7 +17,7 @@ fn parse_direct_music_target(text: &str) -> Option<ParsedMusicTarget> {
     }
 }
 
-async fn dispatch_parsed_music_target(
+pub(super) async fn dispatch_parsed_music_target(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -30,7 +32,7 @@ async fn dispatch_parsed_music_target(
     }
 }
 
-async fn search_first_song_id_or_reply(
+pub(super) async fn search_first_song_id_or_reply(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -54,7 +56,7 @@ async fn search_first_song_id_or_reply(
     }
 }
 
-async fn parse_song_id_or_search_first_result(
+pub(super) async fn parse_song_id_or_search_first_result(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,

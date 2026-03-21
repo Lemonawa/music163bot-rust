@@ -1,9 +1,11 @@
-const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
+use super::*;
+
+pub(super) const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
     Some(value) => value,
     None => "unknown",
 };
 
-fn build_about_text() -> String {
+pub(super) fn build_about_text() -> String {
     format!(
         r"🎵 Music163bot-Rust v{} ({})
 
@@ -28,7 +30,7 @@ fn build_about_text() -> String {
     )
 }
 
-async fn handle_about_command(
+pub(super) async fn handle_about_command(
     bot: &Bot,
     msg: &Message,
     _state: &Arc<BotState>,

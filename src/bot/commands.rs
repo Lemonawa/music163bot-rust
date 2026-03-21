@@ -1,4 +1,6 @@
-async fn handle_music_url(
+use super::*;
+
+pub(super) async fn handle_music_url(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -37,7 +39,7 @@ async fn handle_music_url(
     }
 }
 
-async fn handle_search_command(
+pub(super) async fn handle_search_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,

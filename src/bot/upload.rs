@@ -1,4 +1,6 @@
-async fn apply_tags_in_blocking(
+use super::*;
+
+pub(super) async fn apply_tags_in_blocking(
     mut audio_buffer: AudioBuffer,
     file_ext: &str,
     song_detail: Arc<crate::music_api::SongDetail>,
@@ -41,7 +43,7 @@ async fn apply_tags_in_blocking(
     .map_err(|e| BotError::Other(anyhow::anyhow!("metadata task join failed: {e}")))
 }
 
-fn cached_music_link_target(program_id: Option<i64>, music_id: u64) -> MusicLinkTarget {
+pub(super) fn cached_music_link_target(program_id: Option<i64>, music_id: u64) -> MusicLinkTarget {
     if let Some(program_id) = program_id.and_then(|id| u64::try_from(id).ok()) {
         MusicLinkTarget::Program(program_id)
     } else {
@@ -49,7 +51,7 @@ fn cached_music_link_target(program_id: Option<i64>, music_id: u64) -> MusicLink
     }
 }
 
-fn create_music_keyboard_for_target(
+pub(super) fn create_music_keyboard_for_target(
     link_target: MusicLinkTarget,
     music_id: u64,
     song_name: &str,
@@ -85,7 +87,7 @@ fn create_music_keyboard_for_target(
     InlineKeyboardMarkup::new(rows)
 }
 
-fn build_music_url(
+pub(super) fn build_music_url(
     base_url: &str,
     music_id: u64,
 ) -> std::result::Result<reqwest::Url, url::ParseError> {
@@ -95,7 +97,7 @@ fn build_music_url(
     Ok(url)
 }
 
-fn build_program_url(
+pub(super) fn build_program_url(
     base_url: &str,
     program_id: u64,
 ) -> std::result::Result<reqwest::Url, url::ParseError> {
@@ -105,16 +107,16 @@ fn build_program_url(
     Ok(url)
 }
 
-fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseError> {
+pub(super) fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseError> {
     reqwest::Url::parse(api_url)
 }
 
-fn is_admin(msg: &Message, config: &Config) -> bool {
+pub(super) fn is_admin(msg: &Message, config: &Config) -> bool {
     let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
     config.bot_admin.contains(&user_id)
 }
 
-async fn ensure_admin(bot: &Bot, msg: &Message, config: &Config) -> ResponseResult<bool> {
+pub(super) async fn ensure_admin(bot: &Bot, msg: &Message, config: &Config) -> ResponseResult<bool> {
     if is_admin(msg, config) {
         Ok(true)
     } else {
@@ -123,7 +125,7 @@ async fn ensure_admin(bot: &Bot, msg: &Message, config: &Config) -> ResponseResu
     }
 }
 
-fn is_official_telegram_api(api_url: &str) -> bool {
+pub(super) fn is_official_telegram_api(api_url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(api_url) else {
         return false;
     };
@@ -132,14 +134,14 @@ fn is_official_telegram_api(api_url: &str) -> bool {
         .is_some_and(|host| host.eq_ignore_ascii_case("api.telegram.org"))
 }
 
-async fn local_file_uri_from_path(path: &std::path::Path) -> Option<String> {
+pub(super) async fn local_file_uri_from_path(path: &std::path::Path) -> Option<String> {
     let canonical = tokio::fs::canonicalize(path).await.ok()?;
     url::Url::from_file_path(canonical)
         .ok()
         .map(|url| url.to_string())
 }
 
-async fn maybe_local_file_uri(
+pub(super) async fn maybe_local_file_uri(
     config: &Config,
     is_official_api: bool,
     path: &std::path::Path,
@@ -156,12 +158,12 @@ async fn maybe_local_file_uri(
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum UploadFileTarget {
+pub(super) enum UploadFileTarget {
     LocalUri(String),
     Multipart,
 }
 
-async fn select_local_upload_target(
+pub(super) async fn select_local_upload_target(
     config: &Config,
     is_official_api: bool,
     path: &std::path::Path,
@@ -171,7 +173,7 @@ async fn select_local_upload_target(
         .map_or(UploadFileTarget::Multipart, UploadFileTarget::LocalUri)
 }
 
-fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
+pub(super) fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
     if has_music_u {
         &[999_000, 320_000, 128_000]
     } else {
@@ -179,51 +181,67 @@ fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
     }
 }
 
-fn should_remove_song_cache_after_partial_failure(cover_retry_exhausted: bool) -> bool {
+pub(super) fn should_remove_song_cache_after_partial_failure(cover_retry_exhausted: bool) -> bool {
     cover_retry_exhausted
 }
 
-const MESSAGE_TASK_LINK_HINTS: [&str; 3] = ["music.163.com", "163cn.tv", "163cn.link"];
-const MUSIC_ID_EXTRACT_FAILED_TEXT: &str = "无法从链接中提取音乐ID";
+pub(super) const MESSAGE_TASK_LINK_HINTS: [&str; 3] = ["music.163.com", "163cn.tv", "163cn.link"];
+pub(super) const MUSIC_ID_EXTRACT_FAILED_TEXT: &str = "无法从链接中提取音乐ID";
 
-fn contains_music_link_hint(text: &str) -> bool {
+pub(super) fn contains_music_link_hint(text: &str) -> bool {
     MESSAGE_TASK_LINK_HINTS
         .iter()
         .any(|hint| text.contains(hint))
 }
 
-fn is_spawnable_command_text(text: &str) -> bool {
+pub(super) fn is_spawnable_command_text(text: &str) -> bool {
     text.starts_with('/')
 }
 
-fn is_command_text(text: &str) -> bool {
+pub(super) fn is_command_text(text: &str) -> bool {
     text.starts_with('/')
 }
 
-fn should_spawn_message_task(text: &str) -> bool {
+pub(super) fn should_spawn_message_task(text: &str) -> bool {
     is_spawnable_command_text(text) || contains_music_link_hint(text)
 }
 
-fn should_log_command(command: &str) -> bool {
+pub(super) fn should_log_command(command: &str) -> bool {
     matches!(
         command,
         "music" | "netease" | "search" | "rmcache" | "clearallcache"
     )
 }
 
-fn is_clearallcache_confirm(args: Option<&str>) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MessageTaskRoute {
+    Command,
+    MusicLink,
+}
+
+pub(super) fn classify_message_task(text: &str) -> Option<MessageTaskRoute> {
+    if is_command_text(text) {
+        Some(MessageTaskRoute::Command)
+    } else if contains_music_link_hint(text) {
+        Some(MessageTaskRoute::MusicLink)
+    } else {
+        None
+    }
+}
+
+pub(super) fn is_clearallcache_confirm(args: Option<&str>) -> bool {
     matches!(args.map(str::trim), Some("confirm"))
 }
 
-fn rmcache_usage_prompt() -> &'static str {
+pub(super) fn rmcache_usage_prompt() -> &'static str {
     "请输入要删除缓存的歌曲ID\n\n用法: <code>/rmcache &lt;音乐ID&gt;</code>"
 }
 
-fn clearallcache_confirmation_prompt() -> &'static str {
+pub(super) fn clearallcache_confirmation_prompt() -> &'static str {
     "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 <code>/clearallcache confirm</code> 确认操作。"
 }
 
-async fn send_reply_message(
+pub(super) async fn send_reply_message(
     bot: &Bot,
     msg: &Message,
     text: impl Into<String>,
@@ -233,12 +251,12 @@ async fn send_reply_message(
         .await
 }
 
-async fn send_reply_text(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+pub(super) async fn send_reply_text(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
     send_reply_message(bot, msg, text).await?;
     Ok(())
 }
 
-async fn require_command_args_or_reply(
+pub(super) async fn require_command_args_or_reply(
     bot: &Bot,
     msg: &Message,
     args: Option<String>,
@@ -253,7 +271,7 @@ async fn require_command_args_or_reply(
     }
 }
 
-async fn send_reply_html(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+pub(super) async fn send_reply_html(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
     bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::Html)
         .reply_parameters(ReplyParameters::new(msg.id))
@@ -261,25 +279,25 @@ async fn send_reply_html(bot: &Bot, msg: &Message, text: impl Into<String>) -> R
     Ok(())
 }
 
-fn message_task_limit(max_concurrent_downloads: u32) -> usize {
+pub(super) fn message_task_limit(max_concurrent_downloads: u32) -> usize {
     (max_concurrent_downloads as usize)
         .saturating_mul(4)
         .clamp(8, 256)
 }
 
-fn exceeds_batch_download_limit(track_count: usize, max_batch_download_tracks: u32) -> bool {
+pub(super) fn exceeds_batch_download_limit(track_count: usize, max_batch_download_tracks: u32) -> bool {
     track_count > max_batch_download_tracks.max(1) as usize
 }
 
-fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
+pub(super) fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
     (max_concurrent_uploads as usize).clamp(1, 64)
 }
 
-fn should_refresh_upload_client(upload_state: &UploadClientState, reuse_limit: u32) -> bool {
+pub(super) fn should_refresh_upload_client(upload_state: &UploadClientState, reuse_limit: u32) -> bool {
     upload_state.bot.is_none() || (reuse_limit != 0 && upload_state.reuse_count >= reuse_limit)
 }
 
-fn collect_maintenance_signals(
+pub(super) fn collect_maintenance_signals(
     counters: &MaintenanceCounters,
     config: &Config,
 ) -> Vec<MaintenanceSignal> {
@@ -309,7 +327,7 @@ fn collect_maintenance_signals(
     signals
 }
 
-async fn join_futures<F1, F2, T1, T2, E>(
+pub(super) async fn join_futures<F1, F2, T1, T2, E>(
     f1: F1,
     f2: F2,
 ) -> (std::result::Result<T1, E>, std::result::Result<T2, E>)
@@ -320,7 +338,7 @@ where
     tokio::join!(f1, f2)
 }
 
-async fn acquire_download_leader(
+pub(super) async fn acquire_download_leader(
     inflight: &Arc<InflightDownloads>,
     music_id: u64,
 ) -> Option<InflightLeaderGuard> {
@@ -333,7 +351,7 @@ async fn acquire_download_leader(
     }
 }
 
-async fn maintenance_worker(
+pub(super) async fn maintenance_worker(
     mut rx: tokio::sync::mpsc::Receiver<MaintenanceSignal>,
     database: Database,
     music_api: Arc<MusicApi>,
@@ -370,35 +388,35 @@ async fn maintenance_worker(
     }
 }
 
-const PERF_STAGE_SELECT_URL: &str = "select_url";
-const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
+pub(super) const PERF_STAGE_SELECT_URL: &str = "select_url";
+pub(super) const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
 
-fn log_perf(label: &str, duration: std::time::Duration) {
+pub(super) fn log_perf(label: &str, duration: std::time::Duration) {
     tracing::debug!("[{label}] {}ms", duration.as_millis());
     tracing::debug!("PERF_RAW|stage={label}|elapsed_ms={}", duration.as_millis());
 }
 
 #[cfg(test)]
-fn format_perf(label: &str, duration: std::time::Duration) -> String {
+pub(super) fn format_perf(label: &str, duration: std::time::Duration) -> String {
     format!("[{label}] {}ms", duration.as_millis())
 }
 
-fn upload_log_enabled(config: &Config, level: UploadLogLevel) -> bool {
+pub(super) fn upload_log_enabled(config: &Config, level: UploadLogLevel) -> bool {
     config.upload_log_level.allows(level)
 }
 
-fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
+pub(super) fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
 }
 
-fn download_chunk_bytes(config: &Config) -> usize {
+pub(super) fn download_chunk_bytes(config: &Config) -> usize {
     config
         .download_chunk_size_kb
         .saturating_mul(1024)
         .max(MIN_DOWNLOAD_CHUNK_BYTES)
 }
 
-fn append_search_result_line(results: &mut String, index: usize, song_name: &str, artists: &str) {
+pub(super) fn append_search_result_line(results: &mut String, index: usize, song_name: &str, artists: &str) {
     use std::fmt::Write;
 
     if let Err(e) = writeln!(results, "{index}.「{song_name}」 - {artists}") {
@@ -406,7 +424,7 @@ fn append_search_result_line(results: &mut String, index: usize, song_name: &str
     }
 }
 
-fn resource_availability_status(download_enabled: bool, is_available: bool) -> &'static str {
+pub(super) fn resource_availability_status(download_enabled: bool, is_available: bool) -> &'static str {
     match (download_enabled, is_available) {
         (false, _) => "Skipped",
         (true, true) => "Available",
@@ -414,13 +432,13 @@ fn resource_availability_status(download_enabled: bool, is_available: bool) -> &
     }
 }
 
-async fn cleanup_audio_buffer(buffer: AudioBuffer) {
+pub(super) async fn cleanup_audio_buffer(buffer: AudioBuffer) {
     if let Err(e) = buffer.cleanup().await {
         tracing::warn!("Audio buffer cleanup failed: {}", e);
     }
 }
 
-async fn cleanup_thumbnail_buffer(buffer: Option<ThumbnailBuffer>) {
+pub(super) async fn cleanup_thumbnail_buffer(buffer: Option<ThumbnailBuffer>) {
     if let Some(thumbnail) = buffer
         && let Err(e) = thumbnail.cleanup().await
     {
@@ -428,7 +446,7 @@ async fn cleanup_thumbnail_buffer(buffer: Option<ThumbnailBuffer>) {
     }
 }
 
-fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
+pub(super) fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
     if let Some(bot) = upload_state.bot.clone() {
         Ok(bot)
     } else {
@@ -439,35 +457,35 @@ fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
     }
 }
 
-struct UploadBotBundle {
-    bot: Bot,
-    raw_client: reqwest::Client,
+pub(super) struct UploadBotBundle {
+    pub(super) bot: Bot,
+    pub(super) raw_client: reqwest::Client,
     /// Full API base URL including bot token, e.g. "http://host:port/bot<TOKEN>/"
-    api_base_url: String,
+    pub(super) api_base_url: String,
 }
 
 /// Streaming chunk size for raw uploads (256 KiB).
 /// Matches the benchmark script's chunk size that achieves ~14 MB/s.
-const RAW_UPLOAD_CHUNK_SIZE: usize = 256 * 1024;
+pub(super) const RAW_UPLOAD_CHUNK_SIZE: usize = 256 * 1024;
 
 /// Parameters for raw Telegram file upload.
-struct RawUploadParams<'a> {
-    chat_id: i64,
-    caption: &'a str,
-    reply_to_message_id: i32,
-    reply_markup_json: Option<String>,
+pub(super) struct RawUploadParams<'a> {
+    pub(super) chat_id: i64,
+    pub(super) caption: &'a str,
+    pub(super) reply_to_message_id: i32,
+    pub(super) reply_markup_json: Option<String>,
     /// sendAudio-specific fields
-    title: Option<&'a str>,
-    performer: Option<&'a str>,
-    duration: Option<u32>,
+    pub(super) title: Option<&'a str>,
+    pub(super) performer: Option<&'a str>,
+    pub(super) duration: Option<u32>,
     /// Thumbnail data (already in memory as bytes)
-    thumbnail: Option<&'a ThumbnailBuffer>,
+    pub(super) thumbnail: Option<&'a ThumbnailBuffer>,
 }
 
 /// Parameters for raw Telegram document upload.
-struct RawDocumentParams<'a> {
-    chat_id: i64,
-    caption: Option<&'a str>,
-    reply_to_message_id: i32,
-    reply_markup_json: Option<String>,
+pub(super) struct RawDocumentParams<'a> {
+    pub(super) chat_id: i64,
+    pub(super) caption: Option<&'a str>,
+    pub(super) reply_to_message_id: i32,
+    pub(super) reply_markup_json: Option<String>,
 }

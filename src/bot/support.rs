@@ -1,4 +1,6 @@
-async fn handle_lyric_command(
+use super::*;
+
+pub(super) async fn handle_lyric_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -128,7 +130,7 @@ async fn handle_lyric_command(
     Ok(())
 }
 
-async fn handle_status_command(
+pub(super) async fn handle_status_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -166,7 +168,7 @@ async fn handle_status_command(
     Ok(())
 }
 
-async fn handle_rmcache_command(
+pub(super) async fn handle_rmcache_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -216,7 +218,7 @@ async fn handle_rmcache_command(
     Ok(())
 }
 
-async fn handle_clearallcache_command(
+pub(super) async fn handle_clearallcache_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -231,7 +233,7 @@ async fn handle_clearallcache_command(
     Ok(())
 }
 
-async fn handle_clearallcache_confirm_command(
+pub(super) async fn handle_clearallcache_confirm_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -274,7 +276,7 @@ async fn handle_clearallcache_confirm_command(
     Ok(())
 }
 
-async fn ensure_admin_user_id(
+pub(super) async fn ensure_admin_user_id(
     bot: &Bot,
     msg: &Message,
     config: &Config,
@@ -287,7 +289,7 @@ async fn ensure_admin_user_id(
     }
 }
 
-async fn authorize_admin_command(
+pub(super) async fn authorize_admin_command(
     bot: &Bot,
     msg: &Message,
     config: &Config,
@@ -307,7 +309,7 @@ async fn authorize_admin_command(
     Ok(Some(user_id))
 }
 
-async fn handle_callback(
+pub(super) async fn handle_callback(
     bot: Bot,
     query: CallbackQuery,
     state: Arc<BotState>,
@@ -344,7 +346,7 @@ async fn handle_callback(
     Ok(())
 }
 
-async fn handle_inline_query(
+pub(super) async fn handle_inline_query(
     bot: Bot,
     query: InlineQuery,
     state: Arc<BotState>,
@@ -430,7 +432,7 @@ async fn handle_inline_query(
 /// 专辑: Album
 /// #网易云音乐 #ext {sizeMB}MB {kbps}kbps
 /// via @`BotName`
-fn build_caption(
+pub(super) fn build_caption(
     title: &str,
     artists: &str,
     album: &str,
@@ -447,7 +449,7 @@ fn build_caption(
 }
 
 #[must_use]
-fn format_bitrate_kbps(bitrate_bps: i64) -> String {
+pub(super) fn format_bitrate_kbps(bitrate_bps: i64) -> String {
     let bitrate_bps = bitrate_bps.max(0) as f64;
     format!("{:.2}", bitrate_bps / 1000.0)
 }

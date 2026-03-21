@@ -1,4 +1,6 @@
-async fn download_and_send_music(
+use super::*;
+
+pub(super) async fn download_and_send_music(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,

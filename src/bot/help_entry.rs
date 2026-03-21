@@ -1,4 +1,6 @@
-async fn handle_help_command(
+use super::*;
+
+pub(super) async fn handle_help_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -34,7 +36,7 @@ async fn handle_help_command(
     Ok(())
 }
 
-async fn handle_music_command(
+pub(super) async fn handle_music_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,

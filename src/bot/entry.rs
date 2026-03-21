@@ -1,4 +1,6 @@
-fn percentile_95(samples: &VecDeque<f64>) -> f64 {
+use super::*;
+
+pub(super) fn percentile_95(samples: &VecDeque<f64>) -> f64 {
     let mut values: Vec<f64> = samples.iter().copied().collect();
     values.sort_by(f64::total_cmp);
     let len = values.len();
@@ -6,7 +8,7 @@ fn percentile_95(samples: &VecDeque<f64>) -> f64 {
     values[idx.min(len.saturating_sub(1))]
 }
 
-fn sample_resource_snapshot() -> ResourceSnapshot {
+pub(super) fn sample_resource_snapshot() -> ResourceSnapshot {
     let mut guard = lock_unpoisoned(&STATUS_RESOURCE_CACHE);
     let (system, last_refresh, snapshot) = &mut *guard;
     if last_refresh.elapsed() >= STATUS_RESOURCE_REFRESH_INTERVAL {
@@ -24,7 +26,7 @@ fn sample_resource_snapshot() -> ResourceSnapshot {
     *snapshot
 }
 
-fn sample_current_process_memory_mb(system: &mut System) -> Option<u64> {
+pub(super) fn sample_current_process_memory_mb(system: &mut System) -> Option<u64> {
     let current_pid = get_current_pid().ok()?;
     let pids = [current_pid];
     system.refresh_processes_specifics(
@@ -37,11 +39,11 @@ fn sample_current_process_memory_mb(system: &mut System) -> Option<u64> {
         .map(|process| process.memory() / (1024 * 1024))
 }
 
-fn format_bot_memory(bot_memory_mb: Option<u64>) -> String {
+pub(super) fn format_bot_memory(bot_memory_mb: Option<u64>) -> String {
     bot_memory_mb.map_or_else(|| "n/a".to_string(), |mb| format!("{mb} MB"))
 }
 
-fn build_status_text(
+pub(super) fn build_status_text(
     total_count: i64,
     user_count: i64,
     chat_count: i64,
@@ -80,7 +82,7 @@ fn build_status_text(
     )
 }
 
-fn format_uptime(duration: std::time::Duration) -> String {
+pub(super) fn format_uptime(duration: std::time::Duration) -> String {
     let secs = duration.as_secs();
     let hours = secs / 3600;
     let minutes = (secs % 3600) / 60;
@@ -88,7 +90,7 @@ fn format_uptime(duration: std::time::Duration) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
-fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) -> String {
+pub(super) fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) -> String {
     if let Some(snapshot) = snapshot {
         format!(
             "{label}: 实时 <code>{last:.2}</code> MB/s | 平均 <code>{avg:.2}</code> MB/s | P95 <code>{p95:.2}</code> MB/s | 样本 <code>{total}</code> (窗口 <code>{window}</code>)",
@@ -104,14 +106,14 @@ fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CoverPolicy {
-    download_original: bool,
-    download_thumbnail: bool,
-    embed_tags: bool,
-    embed_cover: bool,
+pub(super) struct CoverPolicy {
+    pub(super) download_original: bool,
+    pub(super) download_thumbnail: bool,
+    pub(super) embed_tags: bool,
+    pub(super) embed_cover: bool,
 }
 
-fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
+pub(super) fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
     let download_original = matches!(cover_mode, CoverMode::Original | CoverMode::Both);
     let download_thumbnail = matches!(cover_mode, CoverMode::Thumbnail | CoverMode::Both);
 
@@ -124,11 +126,11 @@ fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
 }
 
 #[must_use]
-fn should_download_cover(policy: CoverPolicy) -> bool {
+pub(super) fn should_download_cover(policy: CoverPolicy) -> bool {
     policy.embed_cover || policy.download_thumbnail
 }
 
-pub async fn run(config: Config) -> Result<()> {
+pub(super) async fn run(config: Config) -> Result<()> {
     tracing::info!("Starting Telegram bot...");
 
     // Ensure cache directory exists
@@ -308,7 +310,7 @@ pub async fn run(config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> ResponseResult<()> {
+pub(super) async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> ResponseResult<()> {
     if let MessageKind::Common(common) = &msg.kind
         && let teloxide::types::MediaKind::Text(text_content) = &common.media_kind
     {
@@ -334,24 +336,25 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> Respons
         tokio::spawn(async move {
             let _permit = permit;
 
-            // Handle commands
-            if is_command_text(&text) {
-                if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
-                    tracing::error!("Error handling command: {}", sanitize_sensitive_text(&e.to_string()));
+            match classify_message_task(&text) {
+                Some(MessageTaskRoute::Command) => {
+                    if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
+                        tracing::error!("Error handling command: {}", sanitize_sensitive_text(&e.to_string()));
+                    }
                 }
-            }
-            // Handle music URLs
-            else if contains_music_link_hint(&text)
-                && let Err(e) = handle_music_url(&bot, &msg, &state, &text).await
-            {
-                tracing::error!("Error handling music URL: {}", sanitize_sensitive_text(&e.to_string()));
+                Some(MessageTaskRoute::MusicLink) => {
+                    if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
+                        tracing::error!("Error handling music URL: {}", sanitize_sensitive_text(&e.to_string()));
+                    }
+                }
+                None => {}
             }
         });
     }
     Ok(())
 }
 
-async fn handle_command(
+pub(super) async fn handle_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -387,7 +390,7 @@ async fn handle_command(
     }
 }
 
-fn parse_command_and_args(text: &str) -> (&str, Option<String>) {
+pub(super) fn parse_command_and_args(text: &str) -> (&str, Option<String>) {
     let (command_part, args) = if let Some((cmd, rest)) = text.split_once(char::is_whitespace) {
         (cmd, Some(rest.trim_start().to_string()))
     } else {
@@ -401,11 +404,11 @@ fn parse_command_and_args(text: &str) -> (&str, Option<String>) {
     (command, args)
 }
 
-fn parse_start_music_id(args: Option<&str>) -> Option<u64> {
+pub(super) fn parse_start_music_id(args: Option<&str>) -> Option<u64> {
     args.and_then(|arg| arg.trim().parse::<u64>().ok())
 }
 
-fn parse_inline_query_keyword(text: &str) -> (&str, bool) {
+pub(super) fn parse_inline_query_keyword(text: &str) -> (&str, bool) {
     let trimmed = text.trim();
 
     if let Some(prefix) = trimmed.get(..7)
@@ -422,7 +425,7 @@ fn parse_inline_query_keyword(text: &str) -> (&str, bool) {
     }
 }
 
-async fn handle_start_command(
+pub(super) async fn handle_start_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,

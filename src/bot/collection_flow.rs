@@ -1,4 +1,6 @@
-async fn process_music_collection(
+use super::*;
+
+pub(super) async fn process_music_collection(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -95,7 +97,7 @@ async fn process_music_collection(
     Ok(())
 }
 
-async fn process_djradio_collection(
+pub(super) async fn process_djradio_collection(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -194,7 +196,7 @@ async fn process_djradio_collection(
     Ok(())
 }
 
-async fn download_cover_assets(
+pub(super) async fn download_cover_assets(
     state: &Arc<BotState>,
     song_detail: &crate::music_api::SongDetail,
     song_id: u64,

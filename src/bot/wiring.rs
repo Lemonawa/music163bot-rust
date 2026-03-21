@@ -1,41 +1,10 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::LazyLock;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::time::Instant;
+use super::*;
 
-use anyhow::Context;
-use bytes::Bytes;
-use dashmap::DashMap;
-use futures_util::{StreamExt, TryStreamExt};
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
-use teloxide::prelude::*;
-use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::{
-    CallbackQuery, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery,
-    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMessageContent,
-    InputMessageContentText, MaybeInaccessibleMessage, Message, MessageKind, ParseMode,
-    ReplyParameters,
-};
-use tokio::sync::{Mutex, Notify};
-use tokio_util::io::{ReaderStream, StreamReader};
-
-use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
-use crate::config::{Config, CoverMode, UploadLogLevel};
-use crate::database::{Database, SongInfo};
-use crate::error::{BotError, Result};
-use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
-use crate::utils::{
-    MusicCollectionTarget, build_http_client, clean_filename, ensure_dir, extract_first_url,
-    parse_music_collection_target, parse_music_id, parse_music_program_id,
-    sanitize_sensitive_text, throughput_mbps, update_peak,
-};
-
-pub struct BotState {
+pub(super) struct BotState {
     pub config: Config,
     pub database: Database,
     pub music_api: Arc<MusicApi>,
-    inflight_downloads: Arc<InflightDownloads>,
+    pub(super) inflight_downloads: Arc<InflightDownloads>,
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
     pub upload_semaphore: Arc<tokio::sync::Semaphore>,
     pub message_task_semaphore: Arc<tokio::sync::Semaphore>,
@@ -49,7 +18,7 @@ pub struct BotState {
 }
 
 #[derive(Debug)]
-pub struct UploadClientState {
+pub(super) struct UploadClientState {
     pub bot: Option<Bot>,
     pub raw_client: Option<reqwest::Client>,
     pub upload_api_url: String,
@@ -57,37 +26,37 @@ pub struct UploadClientState {
 }
 
 #[derive(Debug, Default)]
-pub struct UploadCounters {
+pub(super) struct UploadCounters {
     pub in_flight: AtomicU32,
     pub peak_in_flight: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MusicLinkTarget {
+pub(super) enum MusicLinkTarget {
     Song(u64),
     Program(u64),
 }
 
-const SPEED_SAMPLE_WINDOW: usize = 20;
-const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
-const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
-const MAINTENANCE_QUEUE_CAPACITY: usize = 32;
-const CACHE_PRUNE_INTERVAL_REQUESTS: u32 = 50;
-const PERF_LOG_PREFIX: &str = "PERF";
-const PERF_STAGE_CACHE_LOOKUP: &str = "cache_lookup";
-const PERF_STAGE_SINGLEFLIGHT_WAIT: &str = "singleflight_wait";
-const PERF_STAGE_COVER_DOWNLOAD: &str = "cover_download";
-const PERF_STAGE_DOWNLOAD_AUDIO: &str = "download_audio";
-const PERF_STAGE_UPLOAD_PERMIT_WAIT: &str = "upload_permit_wait";
-const PERF_STAGE_UPLOAD_CLIENT_ACQUIRE: &str = "upload_client_acquire";
-const PERF_STAGE_UPLOAD_SEND: &str = "upload_send";
-const PERF_STAGE_TAG_PROCESS: &str = "tag_process";
-const PERF_STAGE_DB_SAVE: &str = "db_save";
-const PERF_STAGE_E2E_TOTAL: &str = "e2e_total";
-static PERF_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
+pub(super) const SPEED_SAMPLE_WINDOW: usize = 20;
+pub(super) const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+pub(super) const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
+pub(super) const MAINTENANCE_QUEUE_CAPACITY: usize = 32;
+pub(super) const CACHE_PRUNE_INTERVAL_REQUESTS: u32 = 50;
+pub(super) const PERF_LOG_PREFIX: &str = "PERF";
+pub(super) const PERF_STAGE_CACHE_LOOKUP: &str = "cache_lookup";
+pub(super) const PERF_STAGE_SINGLEFLIGHT_WAIT: &str = "singleflight_wait";
+pub(super) const PERF_STAGE_COVER_DOWNLOAD: &str = "cover_download";
+pub(super) const PERF_STAGE_DOWNLOAD_AUDIO: &str = "download_audio";
+pub(super) const PERF_STAGE_UPLOAD_PERMIT_WAIT: &str = "upload_permit_wait";
+pub(super) const PERF_STAGE_UPLOAD_CLIENT_ACQUIRE: &str = "upload_client_acquire";
+pub(super) const PERF_STAGE_UPLOAD_SEND: &str = "upload_send";
+pub(super) const PERF_STAGE_TAG_PROCESS: &str = "tag_process";
+pub(super) const PERF_STAGE_DB_SAVE: &str = "db_save";
+pub(super) const PERF_STAGE_E2E_TOTAL: &str = "e2e_total";
+pub(super) static PERF_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
-struct PerfTraceContext {
+pub(super) struct PerfTraceContext {
     trace_id: String,
     music_id: u64,
     topology: &'static str,
@@ -104,14 +73,14 @@ impl PerfTraceContext {
         }
     }
 
-    fn with_cache_path(&self, cache_path: &'static str) -> Self {
+    pub(super) fn with_cache_path(&self, cache_path: &'static str) -> Self {
         Self {
             cache_path,
             ..self.clone()
         }
     }
 
-    fn log_stage(&self, stage: &str, duration: std::time::Duration) {
+    pub(super) fn log_stage(&self, stage: &str, duration: std::time::Duration) {
         tracing::info!(
             "{}",
             format_perf_stage_line(
@@ -126,7 +95,7 @@ impl PerfTraceContext {
     }
 }
 
-fn build_perf_trace_context(
+pub(super) fn build_perf_trace_context(
     state: &BotState,
     music_id: u64,
     cache_path: &'static str,
@@ -138,13 +107,13 @@ fn build_perf_trace_context(
     )
 }
 
-fn next_perf_trace_id() -> String {
+pub(super) fn next_perf_trace_id() -> String {
     let ts_millis = chrono::Utc::now().timestamp_millis();
     let seq = PERF_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{ts_millis:x}-{seq:x}")
 }
 
-fn format_perf_stage_line(
+pub(super) fn format_perf_stage_line(
     trace_id: &str,
     music_id: u64,
     topology: &str,
@@ -158,7 +127,7 @@ fn format_perf_stage_line(
     )
 }
 
-fn upload_topology_label(config: &Config, is_official_api: bool) -> &'static str {
+pub(super) fn upload_topology_label(config: &Config, is_official_api: bool) -> &'static str {
     if is_official_api {
         "official_api"
     } else if config.upload_local_file_uri {
@@ -169,7 +138,7 @@ fn upload_topology_label(config: &Config, is_official_api: bool) -> &'static str
 }
 
 #[derive(Debug)]
-pub struct RuntimeMetrics {
+pub(super) struct RuntimeMetrics {
     started_at: Instant,
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
@@ -177,44 +146,44 @@ pub struct RuntimeMetrics {
 }
 
 #[derive(Debug, Default)]
-struct SpeedMetrics {
+pub(super) struct SpeedMetrics {
     download: DirectionSpeedMetrics,
     upload: DirectionSpeedMetrics,
 }
 
 #[derive(Debug, Default)]
-struct DirectionSpeedMetrics {
+pub(super) struct DirectionSpeedMetrics {
     recent_mbps: VecDeque<f64>,
     total_bytes: u128,
     total_nanos: u128,
-    samples: u64,
+    pub(super) samples: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CacheSnapshot {
-    hits: u64,
-    misses: u64,
-    hit_rate_percent: f64,
+pub(super) struct CacheSnapshot {
+    pub(super) hits: u64,
+    pub(super) misses: u64,
+    pub(super) hit_rate_percent: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SpeedSnapshot {
-    last_mbps: f64,
-    avg_mbps: f64,
-    p95_mbps: f64,
-    samples: u64,
-    recent_samples: usize,
+pub(super) struct SpeedSnapshot {
+    pub(super) last_mbps: f64,
+    pub(super) avg_mbps: f64,
+    pub(super) p95_mbps: f64,
+    pub(super) samples: u64,
+    pub(super) recent_samples: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct ResourceSnapshot {
-    cpu_percent: f32,
-    system_used_memory_mb: u64,
-    system_total_memory_mb: u64,
-    bot_memory_mb: Option<u64>,
+pub(super) struct ResourceSnapshot {
+    pub(super) cpu_percent: f32,
+    pub(super) system_used_memory_mb: u64,
+    pub(super) system_total_memory_mb: u64,
+    pub(super) bot_memory_mb: Option<u64>,
 }
 
-static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, ResourceSnapshot)>> =
+pub(super) static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, ResourceSnapshot)>> =
     LazyLock::new(|| {
         let mut system = System::new();
         system.refresh_cpu_usage();
@@ -230,44 +199,44 @@ static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, Resour
     });
 
 #[derive(Debug)]
-pub struct MaintenanceCounters {
+pub(super) struct MaintenanceCounters {
     pub memory_release_requests: AtomicU32,
     pub db_analyze_requests: AtomicU32,
     pub api_cache_prune_requests: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MaintenanceSignal {
+pub(super) enum MaintenanceSignal {
     AnalyzeDb,
     ReleaseMemory,
     PruneApiCache,
 }
 
 #[derive(Debug, Default)]
-struct InflightDownloads {
+pub(super) struct InflightDownloads {
     entries: DashMap<u64, Arc<InflightEntry>>,
 }
 
 #[derive(Debug)]
-struct InflightEntry {
+pub(super) struct InflightEntry {
     notify: Notify,
     done: AtomicBool,
 }
 
 #[derive(Debug)]
-enum InflightClaim {
+pub(super) enum InflightClaim {
     Leader(InflightLeaderGuard),
     Follower(Arc<InflightEntry>),
 }
 
 #[derive(Debug)]
-struct InflightLeaderGuard {
+pub(super) struct InflightLeaderGuard {
     music_id: u64,
     inflight: Arc<InflightDownloads>,
 }
 
 impl InflightDownloads {
-    fn begin(self: &Arc<Self>, music_id: u64) -> InflightClaim {
+    pub(super) fn begin(self: &Arc<Self>, music_id: u64) -> InflightClaim {
         match self.entries.entry(music_id) {
             dashmap::mapref::entry::Entry::Occupied(existing) => {
                 InflightClaim::Follower(Arc::clone(existing.get()))
@@ -282,7 +251,7 @@ impl InflightDownloads {
         }
     }
 
-    fn finish(&self, music_id: u64) {
+    pub(super) fn finish(&self, music_id: u64) {
         if let Some((_, entry)) = self.entries.remove(&music_id) {
             entry.finish();
         }
@@ -290,14 +259,14 @@ impl InflightDownloads {
 }
 
 impl InflightEntry {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             notify: Notify::new(),
             done: AtomicBool::new(false),
         }
     }
 
-    async fn wait(&self) {
+    pub(super) async fn wait(&self) {
         let notified = self.notify.notified();
 
         #[cfg(test)]
@@ -312,13 +281,13 @@ impl InflightEntry {
         notified.await;
     }
 
-    fn finish(&self) {
+    pub(super) fn finish(&self) {
         self.done.store(true, Ordering::Release);
         self.notify.notify_waiters();
     }
 }
 
-fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(super) fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -326,19 +295,19 @@ fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
 }
 
 #[cfg(test)]
-static INFLIGHT_WAIT_HOOK: std::sync::OnceLock<
+pub(super) static INFLIGHT_WAIT_HOOK: std::sync::OnceLock<
     std::sync::Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
 > = std::sync::OnceLock::new();
 
 #[cfg(test)]
-fn set_inflight_wait_hook(hook: impl FnOnce() + Send + 'static) {
+pub(super) fn set_inflight_wait_hook(hook: impl FnOnce() + Send + 'static) {
     let slot = INFLIGHT_WAIT_HOOK.get_or_init(|| std::sync::Mutex::new(None));
     let mut guard = lock_unpoisoned(slot);
     *guard = Some(Box::new(hook));
 }
 
 #[cfg(test)]
-fn take_inflight_wait_hook() -> Option<Box<dyn FnOnce() + Send + 'static>> {
+pub(super) fn take_inflight_wait_hook() -> Option<Box<dyn FnOnce() + Send + 'static>> {
     let slot = INFLIGHT_WAIT_HOOK.get_or_init(|| std::sync::Mutex::new(None));
     let mut guard = lock_unpoisoned(slot);
     guard.take()
@@ -351,7 +320,7 @@ impl Drop for InflightLeaderGuard {
 }
 
 impl MaintenanceCounters {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             memory_release_requests: AtomicU32::new(0),
             db_analyze_requests: AtomicU32::new(0),
@@ -359,7 +328,7 @@ impl MaintenanceCounters {
         }
     }
 
-    fn should_run(counter: &AtomicU32, interval: u32) -> bool {
+    pub(super) fn should_run(counter: &AtomicU32, interval: u32) -> bool {
         if interval == 0 {
             return false;
         }
@@ -369,7 +338,7 @@ impl MaintenanceCounters {
 }
 
 impl RuntimeMetrics {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             started_at: Instant::now(),
             cache_hits: AtomicU64::new(0),
@@ -378,15 +347,15 @@ impl RuntimeMetrics {
         }
     }
 
-    fn record_cache_hit(&self) {
+    pub(super) fn record_cache_hit(&self) {
         self.cache_hits.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_cache_miss(&self) {
+    pub(super) fn record_cache_miss(&self) {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn cache_snapshot(&self) -> CacheSnapshot {
+    pub(super) fn cache_snapshot(&self) -> CacheSnapshot {
         let hits = self.cache_hits.load(Ordering::Relaxed);
         let misses = self.cache_misses.load(Ordering::Relaxed);
         let total = hits.saturating_add(misses);
@@ -403,11 +372,11 @@ impl RuntimeMetrics {
         }
     }
 
-    fn record_download_speed(&self, bytes: u64, duration: std::time::Duration) {
+    pub(super) fn record_download_speed(&self, bytes: u64, duration: std::time::Duration) {
         self.record_speed(Direction::Download, bytes, duration);
     }
 
-    fn record_upload_speed(&self, bytes: u64, duration: std::time::Duration) {
+    pub(super) fn record_upload_speed(&self, bytes: u64, duration: std::time::Duration) {
         self.record_speed(Direction::Upload, bytes, duration);
     }
 
@@ -419,18 +388,18 @@ impl RuntimeMetrics {
         }
     }
 
-    fn speed_snapshots(&self) -> (Option<SpeedSnapshot>, Option<SpeedSnapshot>) {
+    pub(super) fn speed_snapshots(&self) -> (Option<SpeedSnapshot>, Option<SpeedSnapshot>) {
         let guard = lock_unpoisoned(&self.speed_metrics);
         (guard.download.snapshot(), guard.upload.snapshot())
     }
 
-    fn uptime(&self) -> std::time::Duration {
+    pub(super) fn uptime(&self) -> std::time::Duration {
         self.started_at.elapsed()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
+pub(super) enum Direction {
     Download,
     Upload,
 }

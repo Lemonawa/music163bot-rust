@@ -1,3 +1,4 @@
+use super::*;
 
 #[test]
 fn inline_query_search_prefix_parsed_once() {
@@ -179,4 +180,16 @@ fn is_command_text_requires_leading_slash() {
     assert!(super::is_command_text("/start"));
     assert!(!super::is_command_text("  /start"));
     assert!(!super::is_command_text("hello"));
+}
+
+#[test]
+fn message_task_route_prefers_commands_over_music_links() {
+    assert_eq!(
+        super::classify_message_task("/music https://music.163.com/song?id=1"),
+        Some(super::MessageTaskRoute::Command)
+    );
+    assert_eq!(
+        super::classify_message_task("https://music.163.com/song?id=1"),
+        Some(super::MessageTaskRoute::MusicLink)
+    );
 }

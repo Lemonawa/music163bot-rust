@@ -1,5 +1,7 @@
+use super::*;
+
 /// Upload an in-memory document via raw reqwest multipart.
-async fn raw_send_document_bytes(
+pub(super) async fn raw_send_document_bytes(
     client: &reqwest::Client,
     api_base_url: &str,
     filename: &str,

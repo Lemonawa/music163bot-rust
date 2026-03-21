@@ -1,4 +1,6 @@
-async fn try_send_cached_song(
+use super::*;
+
+pub(super) async fn try_send_cached_song(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -79,7 +81,7 @@ async fn try_send_cached_song(
     }
 }
 
-async fn process_program(
+pub(super) async fn process_program(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -100,7 +102,7 @@ async fn process_program(
     process_music_with_context(bot, msg, state, program.main_track_id, Some(program)).await
 }
 
-fn apply_program_metadata(
+pub(super) fn apply_program_metadata(
     song_detail: Arc<crate::music_api::SongDetail>,
     program: &ProgramMainTrack,
 ) -> Arc<crate::music_api::SongDetail> {
@@ -171,7 +173,7 @@ fn apply_program_metadata(
     Arc::new(detail)
 }
 
-async fn process_music(
+pub(super) async fn process_music(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
@@ -180,7 +182,7 @@ async fn process_music(
     process_music_with_context(bot, msg, state, music_id, None).await
 }
 
-async fn process_music_with_context(
+pub(super) async fn process_music_with_context(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,

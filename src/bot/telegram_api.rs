@@ -1,4 +1,6 @@
-async fn send_raw_upload_form(
+use super::*;
+
+pub(super) async fn send_raw_upload_form(
     client: &reqwest::Client,
     url: &str,
     form: reqwest::multipart::Form,
@@ -31,7 +33,7 @@ async fn send_raw_upload_form(
 
 /// Upload a file via raw reqwest multipart with pre-computed Content-Length
 /// and 256 KiB streaming chunks — bypasses teloxide's 8 KiB FramedRead + chunked encoding.
-async fn raw_send_file(
+pub(super) async fn raw_send_file(
     client: &reqwest::Client,
     api_base_url: &str,
     config: &Config,
@@ -50,7 +52,7 @@ async fn raw_send_file(
 
     let audio_target = match audio_buffer {
         AudioBuffer::Disk { path, .. } => {
-            select_local_upload_target(config, is_official_api, path).await
+            select_local_upload_target(config, is_official_api, &path).await
         }
         AudioBuffer::Memory { .. } => UploadFileTarget::Multipart,
     };
@@ -114,7 +116,7 @@ async fn raw_send_file(
                 form = form.part("thumbnail", thumb_part);
             }
             ThumbnailBuffer::Disk { path } => {
-                match select_local_upload_target(config, is_official_api, path).await {
+                match select_local_upload_target(config, is_official_api, &path).await {
                     UploadFileTarget::LocalUri(uri) => {
                         form = form.text("thumbnail", uri);
                     }
@@ -145,11 +147,11 @@ async fn raw_send_file(
     send_raw_upload_form(client, &url, form, "sendAudio").await
 }
 
-fn redact_bot_token_in_error_message(message: &str) -> String {
+pub(super) fn redact_bot_token_in_error_message(message: &str) -> String {
     sanitize_sensitive_text(message)
 }
 
-fn parse_telegram_api_response(
+pub(super) fn parse_telegram_api_response(
     body: &str,
     status: reqwest::StatusCode,
     method: &str,
@@ -177,7 +179,7 @@ fn parse_telegram_api_response(
 }
 
 /// Extract file_id from a raw Telegram API sendAudio response.
-fn extract_file_id_from_response(json: &serde_json::Value) -> Option<String> {
+pub(super) fn extract_file_id_from_response(json: &serde_json::Value) -> Option<String> {
     let result = json.get("result")?;
     result
         .get("audio")
@@ -187,7 +189,7 @@ fn extract_file_id_from_response(json: &serde_json::Value) -> Option<String> {
 }
 
 /// Map filename extension to MIME type string.
-fn mime_for_filename(filename: &str) -> &'static str {
+pub(super) fn mime_for_filename(filename: &str) -> &'static str {
     let path = std::path::Path::new(filename);
     match path.extension().and_then(|e| e.to_str()) {
         Some(ext) if ext.eq_ignore_ascii_case("flac") => "audio/flac",
@@ -196,7 +198,7 @@ fn mime_for_filename(filename: &str) -> &'static str {
     }
 }
 
-fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
+pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     // API URL must match teloxide's internal format: base URL without "/bot" suffix
     // teloxide automatically appends "bot<TOKEN>/" to the path
     let api_url_str = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org"
@@ -275,7 +277,7 @@ fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     })
 }
 
-async fn acquire_upload_client(state: &Arc<BotState>) -> Result<(Bot, reqwest::Client, String)> {
+pub(super) async fn acquire_upload_client(state: &Arc<BotState>) -> Result<(Bot, reqwest::Client, String)> {
     let reuse_limit = state.config.upload_client_reuse_requests;
 
     let (reason, reuse_count_before) = {
@@ -331,7 +333,7 @@ async fn acquire_upload_client(state: &Arc<BotState>) -> Result<(Bot, reqwest::C
     checkout_upload_client(&mut upload_state, &state.config)
 }
 
-fn checkout_upload_client(
+pub(super) fn checkout_upload_client(
     upload_state: &mut UploadClientState,
     config: &Config,
 ) -> Result<(Bot, reqwest::Client, String)> {
@@ -347,7 +349,7 @@ fn checkout_upload_client(
     Ok((bot, raw_client, api_url))
 }
 
-async fn run_upload_prewarm<T, F, Fut>(config: &Config, warmup: F) -> bool
+pub(super) async fn run_upload_prewarm<T, F, Fut>(config: &Config, warmup: F) -> bool
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
@@ -369,13 +371,13 @@ where
     }
 }
 
-async fn acquire_download_permit(
+pub(super) async fn acquire_download_permit(
     semaphore: &tokio::sync::Semaphore,
 ) -> Result<tokio::sync::SemaphorePermit<'_>> {
     acquire_semaphore_permit(semaphore, "download").await
 }
 
-async fn acquire_semaphore_permit<'a>(
+pub(super) async fn acquire_semaphore_permit<'a>(
     semaphore: &'a tokio::sync::Semaphore,
     label: &str,
 ) -> Result<tokio::sync::SemaphorePermit<'a>> {
@@ -385,13 +387,13 @@ async fn acquire_semaphore_permit<'a>(
     })
 }
 
-async fn acquire_upload_permit(
+pub(super) async fn acquire_upload_permit(
     semaphore: &tokio::sync::Semaphore,
 ) -> Result<tokio::sync::SemaphorePermit<'_>> {
     acquire_semaphore_permit(semaphore, "upload").await
 }
 
-async fn acquire_upload_permit_owned(
+pub(super) async fn acquire_upload_permit_owned(
     semaphore: Arc<tokio::sync::Semaphore>,
 ) -> Result<tokio::sync::OwnedSemaphorePermit> {
     semaphore.acquire_owned().await.map_err(|e| {
@@ -399,6 +401,3 @@ async fn acquire_upload_permit_owned(
         BotError::Other(anyhow::anyhow!("upload semaphore closed"))
     })
 }
-
-#[cfg(test)]
-mod tests;
