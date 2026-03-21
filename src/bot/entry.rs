@@ -310,7 +310,11 @@ pub(super) async fn run(config: Config) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>) -> ResponseResult<()> {
+pub(super) async fn handle_message(
+    bot: Bot,
+    msg: Message,
+    state: Arc<BotState>,
+) -> ResponseResult<()> {
     if let MessageKind::Common(common) = &msg.kind
         && let teloxide::types::MediaKind::Text(text_content) = &common.media_kind
     {
@@ -322,7 +326,10 @@ pub(super) async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>)
         let permit = match state.message_task_semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,
             Err(e) => {
-                tracing::error!("Message task semaphore closed: {}", sanitize_sensitive_text(&e.to_string()));
+                tracing::error!(
+                    "Message task semaphore closed: {}",
+                    sanitize_sensitive_text(&e.to_string())
+                );
                 return Ok(());
             }
         };
@@ -339,12 +346,18 @@ pub(super) async fn handle_message(bot: Bot, msg: Message, state: Arc<BotState>)
             match classify_message_task(&text) {
                 Some(MessageTaskRoute::Command) => {
                     if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
-                        tracing::error!("Error handling command: {}", sanitize_sensitive_text(&e.to_string()));
+                        tracing::error!(
+                            "Error handling command: {}",
+                            sanitize_sensitive_text(&e.to_string())
+                        );
                     }
                 }
                 Some(MessageTaskRoute::MusicLink) => {
                     if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
-                        tracing::error!("Error handling music URL: {}", sanitize_sensitive_text(&e.to_string()));
+                        tracing::error!(
+                            "Error handling music URL: {}",
+                            sanitize_sensitive_text(&e.to_string())
+                        );
                     }
                 }
                 None => {}

@@ -6,28 +6,20 @@ pub(super) async fn send_raw_upload_form(
     form: reqwest::multipart::Form,
     method: &str,
 ) -> Result<serde_json::Value> {
-    let resp = client
-        .post(url)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| {
-            BotError::Other(anyhow::anyhow!(
-                "Raw upload request failed: {}",
-                redact_bot_token_in_error_message(&e.to_string())
-            ))
-        })?;
+    let resp = client.post(url).multipart(form).send().await.map_err(|e| {
+        BotError::Other(anyhow::anyhow!(
+            "Raw upload request failed: {}",
+            redact_bot_token_in_error_message(&e.to_string())
+        ))
+    })?;
 
     let status = resp.status();
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| {
-            BotError::Other(anyhow::anyhow!(
-                "Failed to read upload response: {}",
-                sanitize_sensitive_text(&e.to_string())
-            ))
-        })?;
+    let body = resp.text().await.map_err(|e| {
+        BotError::Other(anyhow::anyhow!(
+            "Failed to read upload response: {}",
+            sanitize_sensitive_text(&e.to_string())
+        ))
+    })?;
     parse_telegram_api_response(&body, status, method)
 }
 
@@ -52,7 +44,7 @@ pub(super) async fn raw_send_file(
 
     let audio_target = match audio_buffer {
         AudioBuffer::Disk { path, .. } => {
-            select_local_upload_target(config, is_official_api, &path).await
+            select_local_upload_target(config, is_official_api, path).await
         }
         AudioBuffer::Memory { .. } => UploadFileTarget::Multipart,
     };
@@ -116,7 +108,7 @@ pub(super) async fn raw_send_file(
                 form = form.part("thumbnail", thumb_part);
             }
             ThumbnailBuffer::Disk { path } => {
-                match select_local_upload_target(config, is_official_api, &path).await {
+                match select_local_upload_target(config, is_official_api, path).await {
                     UploadFileTarget::LocalUri(uri) => {
                         form = form.text("thumbnail", uri);
                     }
@@ -167,9 +159,7 @@ pub(super) fn parse_telegram_api_response(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error");
         let sanitized_description = sanitize_sensitive_text(description);
-        tracing::error!(
-            "Telegram API error ({status}): {sanitized_description} [method={method}]",
-        );
+        tracing::error!("Telegram API error ({status}): {sanitized_description} [method={method}]",);
         return Err(BotError::Other(anyhow::anyhow!(
             "Telegram API error: {sanitized_description} (HTTP {status})",
         )));
@@ -277,7 +267,9 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     })
 }
 
-pub(super) async fn acquire_upload_client(state: &Arc<BotState>) -> Result<(Bot, reqwest::Client, String)> {
+pub(super) async fn acquire_upload_client(
+    state: &Arc<BotState>,
+) -> Result<(Bot, reqwest::Client, String)> {
     let reuse_limit = state.config.upload_client_reuse_requests;
 
     let (reason, reuse_count_before) = {

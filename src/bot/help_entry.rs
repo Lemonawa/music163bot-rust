@@ -42,7 +42,8 @@ pub(super) async fn handle_music_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let Some(args) = require_command_args_or_reply(bot, msg, args, "请输入歌曲ID或歌曲关键词").await?
+    let Some(args) =
+        require_command_args_or_reply(bot, msg, args, "请输入歌曲ID或歌曲关键词").await?
     else {
         return Ok(());
     };

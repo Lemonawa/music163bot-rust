@@ -20,7 +20,10 @@ fn create_temp_file() -> PathBuf {
 }
 
 fn critical_path_stage_labels() -> [&'static str; 2] {
-    [super::PERF_STAGE_SELECT_URL, super::PERF_STAGE_PRE_UPLOAD_PATH]
+    [
+        super::PERF_STAGE_SELECT_URL,
+        super::PERF_STAGE_PRE_UPLOAD_PATH,
+    ]
 }
 
 mod command_ui;

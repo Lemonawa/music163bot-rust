@@ -59,8 +59,12 @@ pub(super) fn create_music_keyboard_for_target(
 ) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     let primary_url_result = match link_target {
-        MusicLinkTarget::Song(link_music_id) => build_music_url("https://music.163.com", link_music_id),
-        MusicLinkTarget::Program(program_id) => build_program_url("https://music.163.com", program_id),
+        MusicLinkTarget::Song(link_music_id) => {
+            build_music_url("https://music.163.com", link_music_id)
+        }
+        MusicLinkTarget::Program(program_id) => {
+            build_program_url("https://music.163.com", program_id)
+        }
     };
 
     match primary_url_result {
@@ -76,8 +80,12 @@ pub(super) fn create_music_keyboard_for_target(
     }
 
     let switch_inline_query_url = match link_target {
-        MusicLinkTarget::Song(link_music_id) => format!("https://music.163.com/song?id={link_music_id}"),
-        MusicLinkTarget::Program(program_id) => format!("https://music.163.com/program?id={program_id}"),
+        MusicLinkTarget::Song(link_music_id) => {
+            format!("https://music.163.com/song?id={link_music_id}")
+        }
+        MusicLinkTarget::Program(program_id) => {
+            format!("https://music.163.com/program?id={program_id}")
+        }
     };
     rows.push(vec![InlineKeyboardButton::switch_inline_query(
         "分享给朋友",
@@ -116,7 +124,11 @@ pub(super) fn is_admin(msg: &Message, config: &Config) -> bool {
     config.bot_admin.contains(&user_id)
 }
 
-pub(super) async fn ensure_admin(bot: &Bot, msg: &Message, config: &Config) -> ResponseResult<bool> {
+pub(super) async fn ensure_admin(
+    bot: &Bot,
+    msg: &Message,
+    config: &Config,
+) -> ResponseResult<bool> {
     if is_admin(msg, config) {
         Ok(true)
     } else {
@@ -251,7 +263,11 @@ pub(super) async fn send_reply_message(
         .await
 }
 
-pub(super) async fn send_reply_text(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+pub(super) async fn send_reply_text(
+    bot: &Bot,
+    msg: &Message,
+    text: impl Into<String>,
+) -> ResponseResult<()> {
     send_reply_message(bot, msg, text).await?;
     Ok(())
 }
@@ -271,7 +287,11 @@ pub(super) async fn require_command_args_or_reply(
     }
 }
 
-pub(super) async fn send_reply_html(bot: &Bot, msg: &Message, text: impl Into<String>) -> ResponseResult<()> {
+pub(super) async fn send_reply_html(
+    bot: &Bot,
+    msg: &Message,
+    text: impl Into<String>,
+) -> ResponseResult<()> {
     bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::Html)
         .reply_parameters(ReplyParameters::new(msg.id))
@@ -285,7 +305,10 @@ pub(super) fn message_task_limit(max_concurrent_downloads: u32) -> usize {
         .clamp(8, 256)
 }
 
-pub(super) fn exceeds_batch_download_limit(track_count: usize, max_batch_download_tracks: u32) -> bool {
+pub(super) fn exceeds_batch_download_limit(
+    track_count: usize,
+    max_batch_download_tracks: u32,
+) -> bool {
     track_count > max_batch_download_tracks.max(1) as usize
 }
 
@@ -293,7 +316,10 @@ pub(super) fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
     (max_concurrent_uploads as usize).clamp(1, 64)
 }
 
-pub(super) fn should_refresh_upload_client(upload_state: &UploadClientState, reuse_limit: u32) -> bool {
+pub(super) fn should_refresh_upload_client(
+    upload_state: &UploadClientState,
+    reuse_limit: u32,
+) -> bool {
     upload_state.bot.is_none() || (reuse_limit != 0 && upload_state.reuse_count >= reuse_limit)
 }
 
@@ -304,17 +330,17 @@ pub(super) fn collect_maintenance_signals(
     let mut signals = Vec::with_capacity(3);
     for (counter, interval, signal) in [
         (
-            &counters.db_analyze_requests,
+            &counters.db_analyze,
             config.db_analyze_interval_requests,
             MaintenanceSignal::AnalyzeDb,
         ),
         (
-            &counters.memory_release_requests,
+            &counters.memory_release,
             config.memory_release_interval_requests,
             MaintenanceSignal::ReleaseMemory,
         ),
         (
-            &counters.api_cache_prune_requests,
+            &counters.api_cache_prune,
             CACHE_PRUNE_INTERVAL_REQUESTS,
             MaintenanceSignal::PruneApiCache,
         ),
@@ -416,7 +442,12 @@ pub(super) fn download_chunk_bytes(config: &Config) -> usize {
         .max(MIN_DOWNLOAD_CHUNK_BYTES)
 }
 
-pub(super) fn append_search_result_line(results: &mut String, index: usize, song_name: &str, artists: &str) {
+pub(super) fn append_search_result_line(
+    results: &mut String,
+    index: usize,
+    song_name: &str,
+    artists: &str,
+) {
     use std::fmt::Write;
 
     if let Err(e) = writeln!(results, "{index}.「{song_name}」 - {artists}") {
@@ -424,7 +455,10 @@ pub(super) fn append_search_result_line(results: &mut String, index: usize, song
     }
 }
 
-pub(super) fn resource_availability_status(download_enabled: bool, is_available: bool) -> &'static str {
+pub(super) fn resource_availability_status(
+    download_enabled: bool,
+    is_available: bool,
+) -> &'static str {
     match (download_enabled, is_available) {
         (false, _) => "Skipped",
         (true, true) => "Available",

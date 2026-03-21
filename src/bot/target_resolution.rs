@@ -25,7 +25,9 @@ pub(super) async fn dispatch_parsed_music_target(
 ) -> ResponseResult<()> {
     match target {
         ParsedMusicTarget::Song(music_id) => process_music(bot, msg, state, music_id).await,
-        ParsedMusicTarget::Program(program_id) => process_program(bot, msg, state, program_id).await,
+        ParsedMusicTarget::Program(program_id) => {
+            process_program(bot, msg, state, program_id).await
+        }
         ParsedMusicTarget::Collection(collection_target) => {
             process_music_collection(bot, msg, state, collection_target).await
         }
@@ -49,7 +51,11 @@ pub(super) async fn search_first_song_id_or_reply(
             }
         }
         Err(e) => {
-            tracing::warn!("{}: {}", log_context, sanitize_sensitive_text(&e.to_string()));
+            tracing::warn!(
+                "{}: {}",
+                log_context,
+                sanitize_sensitive_text(&e.to_string())
+            );
             send_reply_text(bot, msg, "搜索失败，请稍后重试").await?;
             Ok(None)
         }

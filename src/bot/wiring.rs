@@ -38,7 +38,8 @@ pub(super) enum MusicLinkTarget {
 }
 
 pub(super) const SPEED_SAMPLE_WINDOW: usize = 20;
-pub(super) const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+pub(super) const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(2);
 pub(super) const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 pub(super) const MAINTENANCE_QUEUE_CAPACITY: usize = 32;
 pub(super) const CACHE_PRUNE_INTERVAL_REQUESTS: u32 = 50;
@@ -183,26 +184,27 @@ pub(super) struct ResourceSnapshot {
     pub(super) bot_memory_mb: Option<u64>,
 }
 
-pub(super) static STATUS_RESOURCE_CACHE: LazyLock<std::sync::Mutex<(System, Instant, ResourceSnapshot)>> =
-    LazyLock::new(|| {
-        let mut system = System::new();
-        system.refresh_cpu_usage();
-        system.refresh_memory();
-        let bot_memory_mb = sample_current_process_memory_mb(&mut system);
-        let snapshot = ResourceSnapshot {
-            cpu_percent: system.global_cpu_usage(),
-            system_used_memory_mb: system.used_memory() / (1024 * 1024),
-            system_total_memory_mb: system.total_memory() / (1024 * 1024),
-            bot_memory_mb,
-        };
-        std::sync::Mutex::new((system, Instant::now(), snapshot))
-    });
+pub(super) static STATUS_RESOURCE_CACHE: LazyLock<
+    std::sync::Mutex<(System, Instant, ResourceSnapshot)>,
+> = LazyLock::new(|| {
+    let mut system = System::new();
+    system.refresh_cpu_usage();
+    system.refresh_memory();
+    let bot_memory_mb = sample_current_process_memory_mb(&mut system);
+    let snapshot = ResourceSnapshot {
+        cpu_percent: system.global_cpu_usage(),
+        system_used_memory_mb: system.used_memory() / (1024 * 1024),
+        system_total_memory_mb: system.total_memory() / (1024 * 1024),
+        bot_memory_mb,
+    };
+    std::sync::Mutex::new((system, Instant::now(), snapshot))
+});
 
 #[derive(Debug)]
 pub(super) struct MaintenanceCounters {
-    pub memory_release_requests: AtomicU32,
-    pub db_analyze_requests: AtomicU32,
-    pub api_cache_prune_requests: AtomicU32,
+    pub memory_release: AtomicU32,
+    pub db_analyze: AtomicU32,
+    pub api_cache_prune: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,9 +324,9 @@ impl Drop for InflightLeaderGuard {
 impl MaintenanceCounters {
     pub(super) fn new() -> Self {
         Self {
-            memory_release_requests: AtomicU32::new(0),
-            db_analyze_requests: AtomicU32::new(0),
-            api_cache_prune_requests: AtomicU32::new(0),
+            memory_release: AtomicU32::new(0),
+            db_analyze: AtomicU32::new(0),
+            api_cache_prune: AtomicU32::new(0),
         }
     }
 

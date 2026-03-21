@@ -128,15 +128,15 @@ fn status_text_uses_section_layout_and_split_memory_fields() {
         bot_memory_mb: Some(12),
     };
     let text = super::build_status_text(
-            100,
-            20,
-            8,
-            cache_snapshot,
-            resource_snapshot,
-            "00:10:00",
-            "下载: 实时 <code>6.00</code> MB/s | 平均 <code>4.00</code> MB/s | P95 <code>5.00</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
-            "上传: 实时 <code>2.00</code> MB/s | 平均 <code>1.50</code> MB/s | P95 <code>1.80</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
-        );
+        100,
+        20,
+        8,
+        cache_snapshot,
+        resource_snapshot,
+        "00:10:00",
+        "下载: 实时 <code>6.00</code> MB/s | 平均 <code>4.00</code> MB/s | P95 <code>5.00</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
+        "上传: 实时 <code>2.00</code> MB/s | 平均 <code>1.50</code> MB/s | P95 <code>1.80</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
+    );
     assert!(text.contains("<b>系统状态</b>"));
     assert!(text.contains("<b>实时运行指标</b>"));
     assert!(text.contains("<b>💾 缓存</b>"));

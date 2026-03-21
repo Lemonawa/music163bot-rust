@@ -12,8 +12,7 @@ pub(super) async fn handle_lyric_command(
     };
 
     let Some(music_id) =
-        parse_song_id_or_search_first_result(bot, msg, state, &args, "Lyric search failed")
-            .await?
+        parse_song_id_or_search_first_result(bot, msg, state, &args, "Lyric search failed").await?
     else {
         return Ok(());
     };
@@ -114,14 +113,20 @@ pub(super) async fn handle_lyric_command(
                     bot.delete_message(msg.chat.id, status_msg.id).await.ok();
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to upload lyric file: {}", sanitize_sensitive_text(&e.to_string()));
+                    tracing::warn!(
+                        "Failed to upload lyric file: {}",
+                        sanitize_sensitive_text(&e.to_string())
+                    );
                     bot.edit_message_text(msg.chat.id, status_msg.id, "发送歌词失败，请稍后重试")
                         .await?;
                 }
             }
         }
         (Err(e), _) => {
-            tracing::warn!("Failed to fetch lyric: {}", sanitize_sensitive_text(&e.to_string()));
+            tracing::warn!(
+                "Failed to fetch lyric: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
             bot.edit_message_text(msg.chat.id, status_msg.id, "获取歌词失败，请稍后重试")
                 .await?;
         }
@@ -204,7 +209,10 @@ pub(super) async fn handle_rmcache_command(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to delete cached song {music_id}: {}", sanitize_sensitive_text(&e.to_string()));
+                    tracing::warn!(
+                        "Failed to delete cached song {music_id}: {}",
+                        sanitize_sensitive_text(&e.to_string())
+                    );
                     send_reply_text(bot, msg, "删除缓存失败，请稍后重试").await?;
                 }
             }
@@ -238,7 +246,8 @@ pub(super) async fn handle_clearallcache_confirm_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let Some(user_id) = authorize_admin_command(bot, msg, &state.config, "clearallcache confirm").await?
+    let Some(user_id) =
+        authorize_admin_command(bot, msg, &state.config, "clearallcache confirm").await?
     else {
         return Ok(());
     };
@@ -269,7 +278,10 @@ pub(super) async fn handle_clearallcache_confirm_command(
             bot.edit_message_text(msg.chat.id, status_msg.id, "❌ 清除缓存失败，请稍后重试")
                 .await?;
 
-            tracing::error!("Failed to clear all cache: {}", sanitize_sensitive_text(&e.to_string()));
+            tracing::error!(
+                "Failed to clear all cache: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
         }
     }
 
@@ -409,7 +421,10 @@ pub(super) async fn handle_inline_query(
                 .await?;
         }
         Err(e) => {
-            tracing::error!("Inline search error: {}", sanitize_sensitive_text(&e.to_string()));
+            tracing::error!(
+                "Inline search error: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
             let error_article = InlineQueryResultArticle::new(
                 "search_error",
                 "搜索失败",

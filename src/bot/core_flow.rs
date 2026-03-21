@@ -45,10 +45,8 @@ pub(super) async fn try_send_cached_song(
     );
 
     let preferred_program_id = preferred_program_id.and_then(|id| i64::try_from(id).ok());
-    let link_target = cached_music_link_target(
-        preferred_program_id.or(cached_song.program_id),
-        music_id,
-    );
+    let link_target =
+        cached_music_link_target(preferred_program_id.or(cached_song.program_id), music_id);
     let keyboard = create_music_keyboard_for_target(
         link_target,
         music_id,

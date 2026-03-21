@@ -165,14 +165,8 @@ pub(super) async fn process_djradio_collection(
     for program in unique_tracks {
         let program_id = program.program_id;
         let main_track_id = program.main_track_id;
-        if let Err(e) = process_music_with_context(
-            bot,
-            msg,
-            state,
-            main_track_id,
-            Some(program),
-        )
-        .await
+        if let Err(e) =
+            process_music_with_context(bot, msg, state, main_track_id, Some(program)).await
         {
             failed_count += 1;
             tracing::error!(
@@ -231,8 +225,11 @@ pub(super) async fn download_cover_assets(
 
                             let data = Bytes::from(data);
                             let thumbnail_buffer = if download_thumbnail {
-                                let thumb_filename =
-                                    format!("thumb_{}_{}.jpg", song_id, chrono::Utc::now().timestamp());
+                                let thumb_filename = format!(
+                                    "thumb_{}_{}.jpg",
+                                    song_id,
+                                    chrono::Utc::now().timestamp()
+                                );
                                 ThumbnailBuffer::new(
                                     &state.config,
                                     data.clone(),
