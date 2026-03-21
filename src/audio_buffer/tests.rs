@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::{Config, StorageMode};
 use crate::music_api::SongDetail;
 use std::sync::{Arc, Mutex};
 
@@ -208,6 +209,35 @@ async fn audio_buffer_is_disk() {
 }
 
 #[tokio::test]
+async fn audio_buffer_hybrid_uses_disk_when_threshold_exceeded() {
+    let temp_name = format!(
+        "music163bot_audio_buffer_hybrid_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let cache_dir = std::env::temp_dir();
+    let mut config = Config::default();
+    config.storage_mode = StorageMode::Hybrid;
+    config.memory_threshold_mb = 1;
+    config.memory_max_file_mb = u64::MAX;
+    config.memory_buffer_mb = 0;
+
+    let buffer = AudioBuffer::new(
+        &config,
+        2 * 1024 * 1024,
+        temp_name.clone(),
+        cache_dir.to_str().unwrap(),
+    )
+    .await
+    .expect("create hybrid buffer");
+
+    assert!(buffer.is_disk(), "hybrid mode should fall back to disk");
+    assert_eq!(buffer.filename(), temp_name);
+    assert!(buffer.path().is_some(), "disk buffer should expose a path");
+
+    buffer.cleanup().await.expect("cleanup hybrid disk buffer");
+}
+
+#[tokio::test]
 async fn write_chunk_errors_without_disk_handle() {
     let path = std::env::temp_dir().join(format!(
         "music163bot_audio_buffer_none_{}",
@@ -225,10 +255,108 @@ async fn write_chunk_errors_without_disk_handle() {
 }
 
 #[tokio::test]
+async fn write_chunk_missing_disk_handle_preserves_error_copy() {
+    let path = std::env::temp_dir().join(format!(
+        "music163bot_audio_buffer_none_copy_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let mut buffer = AudioBuffer::Disk {
+        path,
+        file: None,
+        filename: "missing.mp3".to_string(),
+        written_bytes: 0,
+    };
+
+    let err = buffer
+        .write_chunk(b"abc")
+        .await
+        .expect_err("missing file handle should error");
+    assert_eq!(err.to_string(), "Disk buffer missing file handle");
+}
+
+#[tokio::test]
 async fn thumbnail_buffer_memory_bytes_roundtrip() {
     let data = bytes::Bytes::from_static(b"abc");
     let buf = ThumbnailBuffer::from_bytes(data.clone());
     assert_eq!(buf.get_data().await.unwrap_or_default(), b"abc");
+}
+
+#[tokio::test]
+async fn thumbnail_buffer_uses_disk_for_large_thumbnail() {
+    let temp_name = format!(
+        "music163bot_thumb_large_{}.jpg",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let cache_dir = std::env::temp_dir();
+    let mut config = Config::default();
+    config.storage_mode = StorageMode::Hybrid;
+    let data = bytes::Bytes::from(vec![7u8; 6 * 1024 * 1024]);
+
+    let buf = ThumbnailBuffer::new(
+        &config,
+        data.clone(),
+        cache_dir.to_str().unwrap(),
+        &temp_name,
+    )
+    .await
+    .expect("create thumbnail buffer");
+
+    assert!(!buf.is_memory(), "large thumbnails should use disk");
+    assert!(buf.path().is_some(), "disk thumbnail should expose a path");
+    assert_eq!(buf.get_data().await.expect("read thumbnail"), data);
+
+    buf.cleanup().await.expect("cleanup thumbnail buffer");
+}
+
+#[tokio::test]
+async fn audio_buffer_public_facade_methods_remain_usable() {
+    let cache_dir = std::env::temp_dir();
+
+    let mut memory_config = Config::default();
+    memory_config.storage_mode = StorageMode::Memory;
+    memory_config.memory_buffer_mb = 0;
+    memory_config.memory_max_file_mb = u64::MAX;
+
+    let mut memory = AudioBuffer::new(
+        &memory_config,
+        3,
+        "facade.mp3".to_string(),
+        cache_dir.to_str().unwrap(),
+    )
+    .await
+    .expect("create memory facade buffer");
+    memory
+        .write_chunk(b"abc")
+        .await
+        .expect("write memory bytes");
+
+    assert_eq!(memory.filename(), "facade.mp3");
+    assert!(memory.path().is_none());
+    assert!(memory.disk_file_mut().is_none());
+    let _ = memory.to_input_file();
+    assert_eq!(memory.size_fast(), 3);
+    assert_eq!(memory.get_data().await.expect("read memory data"), b"abc");
+    let bytes = memory
+        .take_memory_bytes_for_upload()
+        .expect("memory bytes for upload");
+    assert_eq!(bytes.as_ref(), b"abc");
+    let _ = AudioBuffer::Memory {
+        data: vec![1, 2, 3],
+        filename: "into.mp3".to_string(),
+    }
+    .into_input_file();
+
+    let disk_name = format!(
+        "music163bot_audio_buffer_facade_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let mut disk = AudioBuffer::new_disk(disk_name, cache_dir.to_str().unwrap())
+        .await
+        .expect("create disk facade buffer");
+    assert!(disk.path().is_some());
+    assert!(disk.disk_file_mut().is_some());
+    let _ = disk.to_input_file();
+    disk.cleanup().await.expect("cleanup disk facade buffer");
 }
 
 #[test]
