@@ -146,10 +146,6 @@ help - 显示详细使用帮助
 - **sqlx** - 异步 SQL 工具
 - **id3 / metaflac** - 音乐标签处理
 
-## 代码健康得分（desloppify）
-
-<img src="scorecard.png" width="100%">
-
 ## License
 
 [WTFPL License](LICENSE)

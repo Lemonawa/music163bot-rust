@@ -26,14 +26,13 @@ Use focused, behavior-named tests close to the implementation. Use `#[tokio::tes
 Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`). Keep commits small and single-purpose. PRs should include: intent, key changes, validation commands run, and any config/database impact.
 
 ## Agent Workflow
-After each major work round (for example, a feature batch or bugfix batch), and before each `git push`, run:
+After each major work round (for example, a feature batch or bugfix batch), and before each `git push`, run the standard Rust verification sequence:
 
 ```bash
-.venv-desloppify/bin/desloppify scan --path .
+cargo fmt -- --check
+cargo check
+cargo clippy -- -D warnings
+cargo test
 ```
-
-Address findings with `desloppify resolve fixed ...` (or justified `wontfix`) and rescan. `.desloppify/` is local tool state and should remain gitignored.
-
-If `desloppify update-skill codex` rewrites `AGENTS.md` with generated template blocks, revert those generated sections and keep this repository-specific guideline as source of truth.
 
 For Codex: any command that involves network access (for example `cargo update`, `pip install`, `curl`, `git clone`) must request sandbox escalation permission first, then execute normally after approval. Do not force `--offline` as a default workaround.
