@@ -33,8 +33,6 @@ pub struct MusicApi {
     client: Client,
     pub music_u: Option<String>,
     base_url: String,
-    auto_retry: bool,
-    max_retry_times: u32,
     eapi_cookie: String,
     music_u_cookie: Option<String>,
     song_detail_cache: DashMap<u64, TimedCacheEntry<Arc<SongDetail>>>,
@@ -45,9 +43,8 @@ pub struct MusicApi {
 const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
+pub(crate) const ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS: u32 = 5;
 const PERF_API_LOG_PREFIX: &str = "PERF_API";
-const DEFAULT_AUTO_RETRY: bool = true;
-const DEFAULT_MAX_RETRY_TIMES: u32 = 3;
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 const SHORT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 const MEDIA_URL_REWRITE_RULES: [(&str, &str); 8] = [

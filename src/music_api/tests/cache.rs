@@ -43,6 +43,11 @@ fn song_url_cache_key_includes_bitrate() {
 }
 
 #[test]
+fn album_art_download_uses_five_attempt_budget() {
+    assert_eq!(MusicApi::album_art_total_attempts(), 5);
+}
+
+#[test]
 fn fallback_candidates_skip_primary_after_attempt() {
     let candidates = [320_000, 192_000, 128_000];
     let fallback = super::requests::fallback_bitrate_candidates(&candidates, true);

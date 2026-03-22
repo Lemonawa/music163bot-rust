@@ -452,6 +452,17 @@ pub(super) async fn download_and_send_music(
     perf_ctx.log_stage(PERF_STAGE_DB_SAVE, db_save_start.elapsed());
     db_save_result?;
 
+    if cover_retry_exhausted {
+        let notice = cover_download_failure_notice();
+        if let Err(e) = send_reply_text(bot, msg, notice).await {
+            tracing::warn!(
+                "Failed to send cover fallback notice for music_id {}: {}",
+                song_id,
+                sanitize_sensitive_text(&e.to_string())
+            );
+        }
+    }
+
     // Delete status message
     delete_status_message_resilient(bot, msg.chat.id, status_msg.id).await;
 

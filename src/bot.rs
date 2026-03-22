@@ -46,7 +46,9 @@ mod upload_document;
 mod wiring;
 
 use about::handle_about_command;
-use collection_flow::{download_cover_assets, process_music_collection};
+use collection_flow::{
+    cover_download_failure_notice, download_cover_assets, process_music_collection,
+};
 use commands::{handle_music_url, handle_search_command};
 use core_flow::{process_music, process_music_with_context, process_program};
 use download_flow::download_and_send_music;
@@ -99,7 +101,7 @@ use wiring::{
 #[cfg(test)]
 use about::{BUILD_GIT_COMMIT, build_about_text};
 #[cfg(test)]
-use collection_flow::{collection_retry_delay_seconds, cover_download_timeout};
+use collection_flow::collection_retry_delay_seconds;
 #[cfg(test)]
 use entry::{CoverPolicy, parse_command_and_args, parse_start_music_id};
 #[cfg(test)]

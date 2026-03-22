@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::shared::song_url_has_download_url;
 use super::{
-    BROWSER_USER_AGENT, CachePruneStats, DEFAULT_AUTO_RETRY, DEFAULT_MAX_RETRY_TIMES, MusicApi,
+    ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS, BROWSER_USER_AGENT, CachePruneStats, MusicApi,
     SHORT_USER_AGENT, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL, SONG_URL_CACHE_TTL, SongDetail,
     SongUrl, TimedCacheEntry, song_url_cache_key,
 };
@@ -24,15 +24,7 @@ use crate::utils::build_http_client;
 impl MusicApi {
     #[must_use]
     pub fn new(music_u: Option<String>, base_url: String) -> Self {
-        Self::new_with_options(
-            music_u,
-            base_url,
-            0,
-            10,
-            60,
-            DEFAULT_AUTO_RETRY,
-            DEFAULT_MAX_RETRY_TIMES,
-        )
+        Self::new_with_options(music_u, base_url, 0, 10, 60)
     }
 
     #[must_use]
@@ -43,8 +35,6 @@ impl MusicApi {
             config.download_pool_max_idle_per_host,
             config.download_connect_timeout_secs,
             config.download_timeout,
-            config.auto_retry,
-            config.max_retry_times,
         )
     }
 
@@ -54,8 +44,6 @@ impl MusicApi {
         pool_max_idle_per_host: usize,
         connect_timeout_secs: u64,
         request_timeout_secs: u64,
-        auto_retry: bool,
-        max_retry_times: u32,
     ) -> Self {
         let mut client_builder = Client::builder();
 
@@ -88,8 +76,6 @@ impl MusicApi {
             client,
             music_u,
             base_url,
-            auto_retry,
-            max_retry_times,
             eapi_cookie,
             music_u_cookie,
             song_detail_cache: DashMap::new(),
@@ -98,12 +84,8 @@ impl MusicApi {
         }
     }
 
-    pub(super) fn album_art_total_attempts(&self) -> u32 {
-        if self.auto_retry {
-            self.max_retry_times.saturating_add(1)
-        } else {
-            1
-        }
+    pub(super) fn album_art_total_attempts() -> u32 {
+        ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS
     }
 
     pub(super) fn get_cached_song_detail(&self, song_id: u64) -> Option<Arc<SongDetail>> {

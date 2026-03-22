@@ -122,7 +122,7 @@ impl MusicApi {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
         }
 
-        let total_attempts = self.album_art_total_attempts();
+        let total_attempts = Self::album_art_total_attempts();
         let mut last_error = None;
 
         for attempt in 1..=total_attempts {

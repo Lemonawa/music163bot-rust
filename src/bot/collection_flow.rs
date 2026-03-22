@@ -265,29 +265,17 @@ pub(super) async fn download_cover_assets(
                 );
 
                 if download_cover {
-                    match tokio::time::timeout(
-                        cover_download_timeout(),
-                        state.music_api.download_album_art_data(pic_url),
-                    )
-                    .await
-                    {
-                        Err(_) => {
+                    match state.music_api.download_album_art_data(pic_url).await {
+                        Err(e) => {
                             tracing::warn!(
-                                "Album art download timed out after {:?} for music_id {}, continuing without cover",
-                                cover_download_timeout(),
-                                song_id
-                            );
-                            (None, None, false)
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!(
-                                "Failed to download 320px album art for music_id {}: {}",
+                                "Failed to download 320px album art for music_id {} after {} attempts: {}",
                                 song_id,
+                                crate::music_api::ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS,
                                 e
                             );
                             (None, None, true)
                         }
-                        Ok(Ok(data)) => {
+                        Ok(data) => {
                             tracing::debug!(
                                 "Downloaded 320px album art for music_id {} ({} bytes)",
                                 song_id,
@@ -332,6 +320,9 @@ pub(super) async fn download_cover_assets(
     result
 }
 
-pub(super) fn cover_download_timeout() -> std::time::Duration {
-    std::time::Duration::from_secs(2)
+pub(super) fn cover_download_failure_notice() -> String {
+    format!(
+        "⚠️ 封面下载连续失败 {} 次，已发送无封面版本",
+        crate::music_api::ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS
+    )
 }
