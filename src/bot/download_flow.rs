@@ -175,20 +175,20 @@ pub(super) async fn download_and_send_music(
     if downloaded == 0 {
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;
-        bot.edit_message_text(msg.chat.id, status_msg.id, "下载失败: 文件为空")
-            .await?;
+        edit_status_message_resilient(bot, msg.chat.id, status_msg.id, "下载失败: 文件为空").await;
         return Ok(());
     }
 
     if downloaded < 1024 {
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;
-        bot.edit_message_text(
+        edit_status_message_resilient(
+            bot,
             msg.chat.id,
             status_msg.id,
             format!("下载失败: 文件太小({downloaded} bytes)"),
         )
-        .await?;
+        .await;
         return Ok(());
     }
 
@@ -462,7 +462,7 @@ pub(super) async fn download_and_send_music(
     db_save_result?;
 
     // Delete status message
-    bot.delete_message(msg.chat.id, status_msg.id).await.ok();
+    delete_status_message_resilient(bot, msg.chat.id, status_msg.id).await;
 
     Ok(())
 }

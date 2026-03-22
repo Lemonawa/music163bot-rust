@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use super::{
-    MusicCollectionTarget, clean_filename, ensure_dir, parse_music_collection_target,
-    parse_music_id, parse_music_program_id, throughput_mbps, update_peak,
+    MusicCollectionTarget, clean_filename, ensure_dir, extract_retry_after_seconds,
+    parse_music_collection_target, parse_music_id, parse_music_program_id, throughput_mbps,
+    update_peak,
 };
 
 #[test]
@@ -247,4 +248,28 @@ fn sanitize_sensitive_text_redacts_telegram_bot_token_without_trailing_slash() {
 
     assert!(!sanitized.contains("123456789:fake_test_token"));
     assert!(sanitized.contains("/bot<redacted>"));
+}
+
+#[test]
+fn extract_retry_after_seconds_parses_common_telegram_formats() {
+    assert_eq!(
+        extract_retry_after_seconds(
+            "Telegram API error: Too Many Requests: retry after 26 (HTTP 429 Too Many Requests)"
+        ),
+        Some(26)
+    );
+    assert_eq!(extract_retry_after_seconds("Retry after 26s"), Some(26));
+    assert_eq!(extract_retry_after_seconds("retry after 7"), Some(7));
+}
+
+#[test]
+fn extract_retry_after_seconds_rejects_unrelated_messages() {
+    assert_eq!(
+        extract_retry_after_seconds("HTTP 429 without retry hint"),
+        None
+    );
+    assert_eq!(
+        extract_retry_after_seconds("Upload failed after 2.04s (15.25 MB/s)"),
+        None
+    );
 }

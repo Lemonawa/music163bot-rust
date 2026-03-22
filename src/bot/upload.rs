@@ -299,6 +299,61 @@ pub(super) async fn send_reply_html(
     Ok(())
 }
 
+pub(super) async fn edit_status_message_resilient(
+    bot: &Bot,
+    chat_id: teloxide::types::ChatId,
+    message_id: teloxide::types::MessageId,
+    text: impl Into<String>,
+) {
+    let text = text.into();
+    if let Err(e) = bot
+        .edit_message_text(chat_id, message_id, text.clone())
+        .await
+    {
+        let sanitized = sanitize_sensitive_text(&e.to_string());
+        if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
+            let bot = bot.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs.saturating_add(1)))
+                    .await;
+                if let Err(retry_err) = bot.edit_message_text(chat_id, message_id, text).await {
+                    tracing::debug!(
+                        "Status message edit retry failed: {}",
+                        sanitize_sensitive_text(&retry_err.to_string())
+                    );
+                }
+            });
+        } else {
+            tracing::debug!("Status message edit failed: {}", sanitized);
+        }
+    }
+}
+
+pub(super) async fn delete_status_message_resilient(
+    bot: &Bot,
+    chat_id: teloxide::types::ChatId,
+    message_id: teloxide::types::MessageId,
+) {
+    if let Err(e) = bot.delete_message(chat_id, message_id).await {
+        let sanitized = sanitize_sensitive_text(&e.to_string());
+        if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
+            let bot = bot.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs.saturating_add(1)))
+                    .await;
+                if let Err(retry_err) = bot.delete_message(chat_id, message_id).await {
+                    tracing::debug!(
+                        "Status message delete retry failed: {}",
+                        sanitize_sensitive_text(&retry_err.to_string())
+                    );
+                }
+            });
+        } else {
+            tracing::debug!("Status message delete failed: {}", sanitized);
+        }
+    }
+}
+
 pub(super) fn message_task_limit(max_concurrent_downloads: u32) -> usize {
     (max_concurrent_downloads as usize)
         .saturating_mul(4)

@@ -271,7 +271,27 @@ pub(super) async fn process_music_with_context(
         .get_song_detail_and_best_url(music_id, bitrate_candidates);
 
     let (status_result, detail_and_url_result) = tokio::join!(status_fut, fetch_fut);
-    let status_msg = status_result?;
+    let status_msg = match status_result {
+        Ok(status_msg) => status_msg,
+        Err(e) => {
+            let sanitized = sanitize_sensitive_text(&e.to_string());
+            if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
+                let retry_delay_secs = delay_secs.saturating_add(1);
+                tracing::warn!(
+                    "Status message rate limited for music_id {}. Waiting {}s before retry",
+                    music_id,
+                    retry_delay_secs
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
+                bot.send_message(msg.chat.id, loading_text)
+                    .reply_parameters(ReplyParameters::new(msg.id))
+                    .send()
+                    .await?
+            } else {
+                return Err(e);
+            }
+        }
+    };
     let select_url_duration = status_init_start.elapsed();
     log_perf(PERF_STAGE_SELECT_URL, select_url_duration);
     perf_ctx.log_stage(PERF_STAGE_SELECT_URL, select_url_duration);
@@ -283,12 +303,13 @@ pub(super) async fn process_music_with_context(
                 "Failed to fetch {media_label} detail/url for {music_id}: {}",
                 sanitize_sensitive_text(&e.to_string())
             );
-            bot.edit_message_text(
+            edit_status_message_resilient(
+                bot,
                 msg.chat.id,
                 status_msg.id,
                 format!("❌ 获取{media_label}信息或下载链接失败，请稍后重试"),
             )
-            .await?;
+            .await;
             perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
             return Ok(());
         }
@@ -304,17 +325,16 @@ pub(super) async fn process_music_with_context(
     };
 
     if song_url.url.is_empty() {
-        bot.edit_message_text(
+        edit_status_message_resilient(
+            bot,
             msg.chat.id,
             status_msg.id,
             "❌ 无法获取下载链接，可能需要VIP权限",
         )
-        .await?;
+        .await;
         perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
         return Ok(());
     }
-
-    let pre_upload_path_start = std::time::Instant::now();
 
     // Update status (fire-and-forget to overlap with download start)
     let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
@@ -324,36 +344,73 @@ pub(super) async fn process_music_with_context(
         let status_id = status_msg.id;
         let text = format!("📥 正在下载: {} - {}", song_detail.name, artists);
         tokio::spawn(async move {
-            bot_clone
-                .edit_message_text(chat_id, status_id, text)
-                .await
-                .ok();
+            edit_status_message_resilient(&bot_clone, chat_id, status_id, text).await;
         });
     }
 
     // Download and process the song
-    match download_and_send_music(
-        bot,
-        msg,
-        state,
-        song_detail,
-        &song_url,
-        &status_msg,
-        pre_upload_path_start,
-        &perf_ctx,
-        &artists,
-        link_target,
-    )
-    .await
-    {
-        Ok(()) => {}
-        Err(e) => {
-            tracing::warn!(
-                "Failed to process music {music_id}: {}",
-                sanitize_sensitive_text(&e.to_string())
-            );
-            bot.edit_message_text(msg.chat.id, status_msg.id, "❌ 处理失败，请稍后重试")
-                .await?;
+    let mut process_attempt = 0u32;
+    loop {
+        let pre_upload_path_start = std::time::Instant::now();
+        match download_and_send_music(
+            bot,
+            msg,
+            state,
+            Arc::clone(&song_detail),
+            &song_url,
+            &status_msg,
+            pre_upload_path_start,
+            &perf_ctx,
+            &artists,
+            link_target,
+        )
+        .await
+        {
+            Ok(()) => break,
+            Err(e) => {
+                let sanitized = sanitize_sensitive_text(&e.to_string());
+                if process_attempt == 0
+                    && let Some(delay_secs) = extract_retry_after_seconds(&sanitized)
+                {
+                    let retry_delay_secs = delay_secs.saturating_add(1);
+                    process_attempt = process_attempt.saturating_add(1);
+                    tracing::warn!(
+                        "Upload rate limited for music_id {}. Waiting {}s before retry",
+                        music_id,
+                        retry_delay_secs
+                    );
+                    edit_status_message_resilient(
+                        bot,
+                        msg.chat.id,
+                        status_msg.id,
+                        format!("⚠️ Telegram 限流，等待 {retry_delay_secs} 秒后重试"),
+                    )
+                    .await;
+                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
+                    edit_status_message_resilient(
+                        bot,
+                        msg.chat.id,
+                        status_msg.id,
+                        format!("📥 正在下载: {} - {}", song_detail.name, artists),
+                    )
+                    .await;
+                    continue;
+                }
+
+                tracing::warn!("Failed to process music {music_id}: {}", sanitized);
+                if extract_retry_after_seconds(&sanitized).is_some() {
+                    delete_status_message_resilient(bot, msg.chat.id, status_msg.id).await;
+                } else {
+                    edit_status_message_resilient(
+                        bot,
+                        msg.chat.id,
+                        status_msg.id,
+                        "❌ 处理失败，请稍后重试",
+                    )
+                    .await;
+                }
+                break;
+            }
         }
     }
 

@@ -38,6 +38,10 @@ static SECRET_QUERY_PARAM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     .expect("secret query parameter regex should be valid")
 });
 
+static RETRY_AFTER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bretry after\s+(\d+)(?:s|秒)?\b").expect("retry-after regex should be valid")
+});
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusicCollectionTarget {
     Playlist(u64),
@@ -71,6 +75,12 @@ pub fn sanitize_sensitive_text(text: &str) -> String {
     let sanitized = MUSIC_U_COOKIE_REGEX.replace_all(&sanitized, "MUSIC_U=<redacted>");
     let sanitized = SECRET_QUERY_PARAM_REGEX.replace_all(&sanitized, "$1<redacted>");
     sanitized.into_owned()
+}
+
+#[must_use]
+pub fn extract_retry_after_seconds(text: &str) -> Option<u64> {
+    let captures = RETRY_AFTER_REGEX.captures(text)?;
+    captures.get(1)?.as_str().parse::<u64>().ok()
 }
 
 /// Global regex patterns for URL parsing

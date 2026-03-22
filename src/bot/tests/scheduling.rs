@@ -173,6 +173,21 @@ fn upload_limit_clamps_bounds() {
 }
 
 #[test]
+fn collection_retry_delay_seconds_retries_first_rate_limit_once() {
+    let err = crate::error::BotError::Other(anyhow::anyhow!("Retry after 26s"));
+
+    assert_eq!(super::collection_retry_delay_seconds(&err, 0), Some(27));
+    assert_eq!(super::collection_retry_delay_seconds(&err, 1), None);
+}
+
+#[test]
+fn collection_retry_delay_seconds_ignores_non_rate_limit_errors() {
+    let err = crate::error::BotError::Other(anyhow::anyhow!("ordinary upload failure"));
+
+    assert_eq!(super::collection_retry_delay_seconds(&err, 0), None);
+}
+
+#[test]
 fn upload_client_refresh_decision_works() {
     let has_bot = UploadClientState {
         bot: Some(Bot::new("token")),

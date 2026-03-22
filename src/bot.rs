@@ -27,8 +27,8 @@ use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
 use crate::utils::{
     MusicCollectionTarget, build_http_client, clean_filename, ensure_dir, extract_first_url,
-    parse_music_collection_target, parse_music_id, parse_music_program_id, sanitize_sensitive_text,
-    throughput_mbps, update_peak,
+    extract_retry_after_seconds, parse_music_collection_target, parse_music_id,
+    parse_music_program_id, sanitize_sensitive_text, throughput_mbps, update_peak,
 };
 
 mod about;
@@ -75,10 +75,10 @@ use upload::{
     UploadBotBundle, UploadFileTarget, acquire_download_leader, append_search_result_line,
     apply_tags_in_blocking, cached_music_link_target, classify_message_task, cleanup_audio_buffer,
     cleanup_thumbnail_buffer, clearallcache_confirmation_prompt, collect_maintenance_signals,
-    create_music_keyboard_for_target, download_chunk_bytes, ensure_admin,
-    exceeds_batch_download_limit, get_upload_bot, is_clearallcache_confirm,
-    is_official_telegram_api, join_futures, log_perf, maintenance_worker, message_task_limit,
-    parse_api_url, require_command_args_or_reply, resource_availability_status,
+    create_music_keyboard_for_target, delete_status_message_resilient, download_chunk_bytes,
+    edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit, get_upload_bot,
+    is_clearallcache_confirm, is_official_telegram_api, join_futures, log_perf, maintenance_worker,
+    message_task_limit, parse_api_url, require_command_args_or_reply, resource_availability_status,
     rmcache_usage_prompt, select_local_upload_target, send_reply_html, send_reply_message,
     send_reply_text, should_log_command, should_refresh_upload_client,
     should_remove_song_cache_after_partial_failure, should_set_upload_pool_idle_timeout,
@@ -98,6 +98,8 @@ use wiring::{
 
 #[cfg(test)]
 use about::{BUILD_GIT_COMMIT, build_about_text};
+#[cfg(test)]
+use collection_flow::collection_retry_delay_seconds;
 #[cfg(test)]
 use entry::{CoverPolicy, parse_command_and_args, parse_start_music_id};
 #[cfg(test)]

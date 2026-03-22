@@ -71,6 +71,24 @@ fn parse_telegram_api_response_uses_unknown_error_when_description_missing() {
 }
 
 #[test]
+fn parse_telegram_api_response_preserves_retry_after_hint_for_429() {
+    let body = r#"{"ok": false, "description": "Too Many Requests: retry after 26", "parameters": {"retry_after": 26}}"#;
+    let err = super::parse_telegram_api_response(
+        body,
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        "sendAudio",
+    )
+    .expect_err("429 should be treated as Telegram API error");
+    let err_msg = err.to_string();
+
+    assert!(err_msg.contains("HTTP 429"));
+    assert_eq!(
+        crate::utils::extract_retry_after_seconds(&err_msg),
+        Some(26)
+    );
+}
+
+#[test]
 fn parse_telegram_api_response_redacts_sensitive_description_text() {
     let body = r#"{"ok": false, "description": "proxy said http://127.0.0.1:8081/bot123456789:fake_test_token/sendAudio failed"}"#;
     let err =

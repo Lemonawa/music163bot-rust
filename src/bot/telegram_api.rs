@@ -1,4 +1,5 @@
 use super::*;
+use std::fmt::Write as _;
 
 pub(super) async fn send_raw_upload_form(
     client: &reqwest::Client,
@@ -158,7 +159,16 @@ pub(super) fn parse_telegram_api_response(
             .get("description")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error");
-        let sanitized_description = sanitize_sensitive_text(description);
+        let retry_after = json
+            .get("parameters")
+            .and_then(|parameters| parameters.get("retry_after"))
+            .and_then(serde_json::Value::as_u64);
+        let mut sanitized_description = sanitize_sensitive_text(description);
+        if let Some(seconds) = retry_after
+            && extract_retry_after_seconds(&sanitized_description).is_none()
+        {
+            let _ = write!(sanitized_description, " (retry after {seconds})");
+        }
         tracing::error!("Telegram API error ({status}): {sanitized_description} [method={method}]",);
         return Err(BotError::Other(anyhow::anyhow!(
             "Telegram API error: {sanitized_description} (HTTP {status})",
