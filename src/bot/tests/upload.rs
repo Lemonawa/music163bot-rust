@@ -34,6 +34,14 @@ fn cover_policy_requires_download_when_embed_or_thumbnail() {
 }
 
 #[test]
+fn cover_download_timeout_is_capped_for_e2e() {
+    assert_eq!(
+        super::cover_download_timeout(),
+        std::time::Duration::from_secs(2)
+    );
+}
+
+#[test]
 fn perf_timer_formats_label_and_duration() {
     let label = "fetch_url";
     let formatted = format_perf(label, std::time::Duration::from_millis(12));

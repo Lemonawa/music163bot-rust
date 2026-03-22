@@ -19,9 +19,10 @@ pub use self::models::{
     SearchSong, SongDetail, SongDetailResponse, SongUrl, SongUrlResponse,
 };
 
+use self::media::resize_album_art_to_thumbnail;
 #[cfg(test)]
 use self::media::resize_image_with_padding;
-use self::media::{resize_album_art_to_thumbnail, rewrite_media_url};
+use self::media::rewrite_media_url;
 use self::models::{
     AlbumSongsResponse, DjProgramDetailResponse, DjProgramItem, DjProgramListResponse,
     EapiSearchResponse, PlaylistDetailResponse,

@@ -99,7 +99,7 @@ use wiring::{
 #[cfg(test)]
 use about::{BUILD_GIT_COMMIT, build_about_text};
 #[cfg(test)]
-use collection_flow::collection_retry_delay_seconds;
+use collection_flow::{collection_retry_delay_seconds, cover_download_timeout};
 #[cfg(test)]
 use entry::{CoverPolicy, parse_command_and_args, parse_start_music_id};
 #[cfg(test)]

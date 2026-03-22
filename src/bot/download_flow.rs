@@ -123,26 +123,9 @@ pub(super) async fn download_and_send_music(
         Ok::<(AudioBuffer, u64), anyhow::Error>((audio_buffer, downloaded))
     };
 
-    let upload_permit_perf_ctx = perf_ctx.clone();
-    let upload_permit_future = async {
-        let upload_permit_wait_start = std::time::Instant::now();
-        let permit = acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await;
-        upload_permit_perf_ctx.log_stage(
-            PERF_STAGE_UPLOAD_PERMIT_WAIT,
-            upload_permit_wait_start.elapsed(),
-        );
-        permit
-    };
-
-    // Execute downloads and upload permit acquisition in parallel
-    // Acquire upload permit early to minimize delay before upload starts
-    let (
-        downloaded_result,
-        (cover_artwork_data, thumbnail_buffer, cover_retry_exhausted),
-        upload_permit_result,
-    ) = tokio::join!(audio_future, artwork_future, upload_permit_future);
+    let (downloaded_result, (cover_artwork_data, thumbnail_buffer, cover_retry_exhausted)) =
+        tokio::join!(audio_future, artwork_future);
     let (mut audio_buffer, downloaded) = downloaded_result?;
-    let _upload_permit = upload_permit_result?;
     let should_remove_song_cache =
         should_remove_song_cache_after_partial_failure(cover_retry_exhausted);
 
@@ -195,7 +178,7 @@ pub(super) async fn download_and_send_music(
     tracing::debug!("File validation passed: {} bytes", downloaded);
 
     // 封面处理：使用320x320图片嵌入文件，缩略图用于Telegram显示
-    // Overlap tag processing with upload client/permit acquisition — they are independent.
+    // Overlap tag processing with upload client acquisition — they are independent.
     tracing::debug!("Processing tags for {} format", file_ext);
     let tag_perf_ctx = perf_ctx.clone();
     let tag_future = async {
@@ -228,7 +211,6 @@ pub(super) async fn download_and_send_music(
     let (tag_result, upload_client_result) = tokio::join!(tag_future, upload_client_future);
     audio_buffer = tag_result?;
     let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
-    // upload_permit already acquired during download phase
 
     // Get file size for database and logging
     let file_size = audio_buffer.size().await;
@@ -326,6 +308,15 @@ pub(super) async fn download_and_send_music(
     let pre_upload_path_duration = pre_upload_path_start.elapsed();
     log_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
     perf_ctx.log_stage(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
+
+    // Acquire the upload permit only when we are ready to send bytes to Telegram.
+    // This keeps slow downloads/tagging from occupying the upload lane.
+    let upload_permit_wait_start = std::time::Instant::now();
+    let _upload_permit = acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await?;
+    perf_ctx.log_stage(
+        PERF_STAGE_UPLOAD_PERMIT_WAIT,
+        upload_permit_wait_start.elapsed(),
+    );
 
     // Send audio file with enhanced error handling and proper MIME type
     tracing::debug!(

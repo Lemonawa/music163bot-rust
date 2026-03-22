@@ -265,8 +265,29 @@ pub(super) async fn download_cover_assets(
                 );
 
                 if download_cover {
-                    match state.music_api.download_album_art_data(pic_url).await {
-                        Ok(data) => {
+                    match tokio::time::timeout(
+                        cover_download_timeout(),
+                        state.music_api.download_album_art_data(pic_url),
+                    )
+                    .await
+                    {
+                        Err(_) => {
+                            tracing::warn!(
+                                "Album art download timed out after {:?} for music_id {}, continuing without cover",
+                                cover_download_timeout(),
+                                song_id
+                            );
+                            (None, None, false)
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                "Failed to download 320px album art for music_id {}: {}",
+                                song_id,
+                                e
+                            );
+                            (None, None, true)
+                        }
+                        Ok(Ok(data)) => {
                             tracing::debug!(
                                 "Downloaded 320px album art for music_id {} ({} bytes)",
                                 song_id,
@@ -294,14 +315,6 @@ pub(super) async fn download_cover_assets(
 
                             (Some(data), thumbnail_buffer, false)
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to download 320px album art for music_id {}: {}",
-                                song_id,
-                                e
-                            );
-                            (None, None, true)
-                        }
                     }
                 } else {
                     (None, None, false)
@@ -317,4 +330,8 @@ pub(super) async fn download_cover_assets(
     };
     perf_ctx.log_stage(PERF_STAGE_COVER_DOWNLOAD, cover_download_start.elapsed());
     result
+}
+
+pub(super) fn cover_download_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(2)
 }

@@ -12,6 +12,7 @@ pub(super) fn rewrite_media_url(url: &str) -> Cow<'_, str> {
             return Cow::Owned(format!("{to_prefix}{rest}"));
         }
     }
+
     Cow::Borrowed(url)
 }
 
@@ -98,6 +99,5 @@ pub(super) fn resize_image_with_padding(
         i64::from(offset_x),
         i64::from(offset_y),
     );
-
     DynamicImage::ImageRgb8(canvas)
 }

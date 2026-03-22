@@ -90,19 +90,13 @@ impl MusicApi {
 
     /// Download file with proper headers and cookies
     pub async fn download_file(&self, url: &str) -> Result<reqwest::Response> {
-        // Apply host replacement similar to the original Go project
-        // This helps avoid 403 errors from NetEase servers
+        // Apply host replacement similar to the original Go project.
+        // VPS sampling shows the original m704/m804 hosts can return 403 while m701 succeeds.
         let processed_url = rewrite_media_url(url);
-
-        let request = self.client.get(processed_url.as_ref());
-
-        // Add MUSIC_U cookie if available
-        let request = self.apply_music_u_cookie(request);
-
-        // Add comprehensive headers to avoid 403 errors
-        let request = Self::apply_audio_download_headers(request);
-
-        let response = request.send().await?;
+        let response = self
+            .build_audio_download_request(processed_url.as_ref())
+            .send()
+            .await?;
         Ok(response)
     }
 
@@ -174,5 +168,11 @@ impl MusicApi {
             .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
 
         Ok(processed)
+    }
+
+    fn build_audio_download_request(&self, url: &str) -> reqwest::RequestBuilder {
+        let request = self.client.get(url);
+        let request = self.apply_music_u_cookie(request);
+        Self::apply_audio_download_headers(request)
     }
 }
