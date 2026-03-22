@@ -1,5 +1,7 @@
 # 全局日志级别
 # 可选: trace/debug/info/warn/error
+# 优先级: --log-level > RUST_LOG > config.loglevel > 默认 info
+# 上传链路日志也由这里统一控制
 loglevel = info
 
 [bot]
@@ -88,11 +90,6 @@ pool_max_idle_per_host = 1
 # 上传连接池空闲超时秒数 (v1.1.14+)
 # 推荐值: 300
 pool_idle_timeout_secs = 300
-
-# 上传诊断日志级别 (v1.1.15+)
-# 可选: NONE/ERROR/WARNING/INFO/DEBUG (不区分大小写, WARN=WARNING)
-# 注意: 仍受全局 loglevel 影响 (loglevel=info 时 DEBUG 不会显示)
-log_level = INFO
 
 # 上传超时时间 (秒)
 timeout_secs = 300

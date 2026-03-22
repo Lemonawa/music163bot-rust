@@ -189,6 +189,19 @@ fn get_upload_bot_returns_bot_when_present() {
     assert!(get_upload_bot(&state).is_ok());
 }
 
+#[test]
+fn upload_prewarm_success_uses_global_info_level() {
+    let logs = capture_logs(tracing::Level::INFO, || {
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        let success = runtime.block_on(async {
+            run_upload_prewarm(|| async { Ok::<(), crate::error::BotError>(()) }).await
+        });
+        assert!(success);
+    });
+
+    assert!(logs.contains("Upload prewarm completed"));
+}
+
 #[tokio::test]
 async fn acquire_download_permit_returns_error_when_closed() {
     let semaphore = tokio::sync::Semaphore::new(1);

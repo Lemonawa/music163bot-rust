@@ -59,8 +59,8 @@ fn resolve_log_level_spec(
 ) -> String {
     for (source, candidate) in [
         ("--log-level", cli_log_level),
-        ("config.loglevel", Some(config_log_level)),
         ("RUST_LOG", env_log_level),
+        ("config.loglevel", Some(config_log_level)),
         ("default", Some(DEFAULT_LOG_LEVEL_SPEC)),
     ] {
         let Some(raw) = candidate else {
@@ -124,8 +124,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_log_level_prefers_config_over_env() {
+    fn resolve_log_level_prefers_env_over_config() {
         let resolved = resolve_log_level_spec(None, Some("error"), "warn");
+        assert_eq!(resolved, "error");
+    }
+
+    #[test]
+    fn resolve_log_level_falls_back_to_config() {
+        let resolved = resolve_log_level_spec(None, None, "warn");
         assert_eq!(resolved, "warn");
     }
 

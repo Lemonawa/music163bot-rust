@@ -297,10 +297,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
 
     let prewarm_state = Arc::clone(&bot_state);
     tokio::spawn(async move {
-        let _ = run_upload_prewarm(&prewarm_state.config, || {
-            acquire_upload_client(&prewarm_state)
-        })
-        .await;
+        let _ = run_upload_prewarm(|| acquire_upload_client(&prewarm_state)).await;
     });
 
     // Create dispatcher

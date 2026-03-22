@@ -69,67 +69,6 @@ impl std::fmt::Display for StorageMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum UploadLogLevel {
-    None,
-    Error,
-    Warning,
-    #[default]
-    Info,
-    Debug,
-}
-
-impl std::str::FromStr for UploadLogLevel {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if trimmed.eq_ignore_ascii_case("none") {
-            Ok(Self::None)
-        } else if trimmed.eq_ignore_ascii_case("error") {
-            Ok(Self::Error)
-        } else if trimmed.eq_ignore_ascii_case("warn") || trimmed.eq_ignore_ascii_case("warning") {
-            Ok(Self::Warning)
-        } else if trimmed.eq_ignore_ascii_case("info") {
-            Ok(Self::Info)
-        } else if trimmed.eq_ignore_ascii_case("debug") {
-            Ok(Self::Debug)
-        } else {
-            Err(anyhow::anyhow!("Invalid upload log level: {s}"))
-        }
-    }
-}
-
-impl std::fmt::Display for UploadLogLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = match self {
-            Self::None => "none",
-            Self::Error => "error",
-            Self::Warning => "warning",
-            Self::Info => "info",
-            Self::Debug => "debug",
-        };
-        write!(f, "{value}")
-    }
-}
-
-impl UploadLogLevel {
-    #[must_use]
-    pub fn allows(self, level: UploadLogLevel) -> bool {
-        self.rank() >= level.rank()
-    }
-
-    fn rank(self) -> u8 {
-        match self {
-            Self::None => 0,
-            Self::Error => 1,
-            Self::Warning => 2,
-            Self::Info => 3,
-            Self::Debug => 4,
-        }
-    }
-}
-
 fn parse_bool_like(value: &str) -> Option<bool> {
     match value.trim() {
         v if v.eq_ignore_ascii_case("true") => Some(true),
@@ -210,8 +149,6 @@ pub struct Config {
     pub upload_client_reuse_requests: u32,
     /// Max concurrent uploads
     pub upload_max_concurrent: u32,
-    /// Upload diagnostic log level
-    pub upload_log_level: UploadLogLevel,
     /// Upload pool max idle connections per host
     pub upload_pool_max_idle_per_host: usize,
     /// Upload pool idle timeout (seconds)
@@ -257,7 +194,6 @@ impl Default for Config {
             cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 0,
             upload_max_concurrent: 1,
-            upload_log_level: UploadLogLevel::default(),
             upload_pool_max_idle_per_host: 1,
             upload_pool_idle_timeout_secs: 300,
             upload_timeout_secs: 300,

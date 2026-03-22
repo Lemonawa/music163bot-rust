@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::io::{ReaderStream, StreamReader};
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
-use crate::config::{Config, CoverMode, UploadLogLevel};
+use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
@@ -84,7 +84,7 @@ use upload::{
     rmcache_usage_prompt, select_local_upload_target, send_reply_html, send_reply_message,
     send_reply_text, should_log_command, should_refresh_upload_client,
     should_remove_song_cache_after_partial_failure, should_set_upload_pool_idle_timeout,
-    should_spawn_message_task, upload_log_enabled, upload_task_limit, url_bitrate_candidates,
+    should_spawn_message_task, upload_task_limit, url_bitrate_candidates,
 };
 use upload_document::raw_send_document_bytes;
 use wiring::{

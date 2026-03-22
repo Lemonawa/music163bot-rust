@@ -254,15 +254,13 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
         ));
     }
 
-    if upload_log_enabled(config, UploadLogLevel::Debug) {
-        tracing::debug!(
-            "Upload diag: client settings pool_max_idle_per_host={}, pool_idle_timeout_secs={}, timeout_secs={}, api_url={}",
-            config.upload_pool_max_idle_per_host,
-            config.upload_pool_idle_timeout_secs,
-            config.upload_timeout_secs,
-            sanitize_sensitive_text(api_url.as_str())
-        );
-    }
+    tracing::debug!(
+        "Upload diag: client settings pool_max_idle_per_host={}, pool_idle_timeout_secs={}, timeout_secs={}, api_url={}",
+        config.upload_pool_max_idle_per_host,
+        config.upload_pool_idle_timeout_secs,
+        config.upload_timeout_secs,
+        sanitize_sensitive_text(api_url.as_str())
+    );
 
     let client = build_http_client(client_builder)?;
     let bot = Bot::with_client(&config.bot_token, client.clone()).set_api_url(api_url);
@@ -286,14 +284,12 @@ pub(super) async fn acquire_upload_client(
         let mut upload_state = state.upload_client_state.lock().await;
 
         if !should_refresh_upload_client(&upload_state, reuse_limit) {
-            if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
-                tracing::debug!(
-                    "Upload diag: reusing client (reuse_count: {}, reuse_limit: {})",
-                    upload_state.reuse_count,
-                    reuse_limit
-                );
-            }
-            return checkout_upload_client(&mut upload_state, &state.config);
+            tracing::debug!(
+                "Upload diag: reusing client (reuse_count: {}, reuse_limit: {})",
+                upload_state.reuse_count,
+                reuse_limit
+            );
+            return checkout_upload_client(&mut upload_state);
         }
 
         let reason = if upload_state.bot.is_none() {
@@ -304,14 +300,12 @@ pub(super) async fn acquire_upload_client(
         (reason, upload_state.reuse_count)
     };
 
-    if upload_log_enabled(&state.config, UploadLogLevel::Info) {
-        tracing::info!(
-            "Upload diag: creating client (reason: {}, reuse_count: {}, reuse_limit: {})",
-            reason,
-            reuse_count_before,
-            reuse_limit
-        );
-    }
+    tracing::info!(
+        "Upload diag: creating client (reason: {}, reuse_count: {}, reuse_limit: {})",
+        reason,
+        reuse_count_before,
+        reuse_limit
+    );
 
     let build_start = std::time::Instant::now();
     let bundle = build_upload_bot(&state.config)?;
@@ -322,27 +316,22 @@ pub(super) async fn acquire_upload_client(
         upload_state.raw_client = Some(bundle.raw_client);
         upload_state.upload_api_url = bundle.api_base_url;
         upload_state.reuse_count = 0;
-        if upload_log_enabled(&state.config, UploadLogLevel::Info) {
-            tracing::info!(
-                "Upload diag: client ready in {}ms",
-                build_start.elapsed().as_millis()
-            );
-        }
-    } else if upload_log_enabled(&state.config, UploadLogLevel::Debug) {
+        tracing::info!(
+            "Upload diag: client ready in {}ms",
+            build_start.elapsed().as_millis()
+        );
+    } else {
         tracing::debug!("Upload diag: client refreshed by another task");
     }
 
-    checkout_upload_client(&mut upload_state, &state.config)
+    checkout_upload_client(&mut upload_state)
 }
 
 pub(super) fn checkout_upload_client(
     upload_state: &mut UploadClientState,
-    config: &Config,
 ) -> Result<(Bot, reqwest::Client, String)> {
     let next_reuse_count = upload_state.reuse_count.saturating_add(1);
-    if upload_log_enabled(config, UploadLogLevel::Debug) {
-        tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
-    }
+    tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
     upload_state.reuse_count = next_reuse_count;
 
     let bot = get_upload_bot(upload_state)?;
@@ -351,16 +340,14 @@ pub(super) fn checkout_upload_client(
     Ok((bot, raw_client, api_url))
 }
 
-pub(super) async fn run_upload_prewarm<T, F, Fut>(config: &Config, warmup: F) -> bool
+pub(super) async fn run_upload_prewarm<T, F, Fut>(warmup: F) -> bool
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
     match warmup().await {
         Ok(_) => {
-            if upload_log_enabled(config, UploadLogLevel::Info) {
-                tracing::info!("Upload prewarm completed");
-            }
+            tracing::info!("Upload prewarm completed");
             true
         }
         Err(e) => {

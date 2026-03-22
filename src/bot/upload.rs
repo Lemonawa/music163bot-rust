@@ -482,10 +482,6 @@ pub(super) fn format_perf(label: &str, duration: std::time::Duration) -> String 
     format!("[{label}] {}ms", duration.as_millis())
 }
 
-pub(super) fn upload_log_enabled(config: &Config, level: UploadLogLevel) -> bool {
-    config.upload_log_level.allows(level)
-}
-
 pub(super) fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
 }

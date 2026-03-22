@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{Config, CoverMode, UploadLogLevel};
+use super::{Config, CoverMode};
 
 fn load_temp_config(prefix: &str, content: &str) -> Config {
     let temp_name = SystemTime::now()
@@ -107,22 +107,6 @@ download.max_batch_tracks=42\n";
 }
 
 #[test]
-fn upload_log_level_defaults_to_info() {
-    let config = Config::default();
-    assert_eq!(config.upload_log_level, UploadLogLevel::Info);
-}
-
-#[test]
-fn upload_log_level_parses_values() {
-    let content = "bot.token=token\n\
-upload.log_level=warn\n";
-
-    let loaded = load_temp_config("upload_log", content);
-
-    assert_eq!(loaded.upload_log_level, UploadLogLevel::Warning);
-}
-
-#[test]
 fn upload_max_concurrent_parses() {
     let content = "bot.token=token\n\
 upload.max_concurrent=6\n";
@@ -208,27 +192,6 @@ fn storage_mode_parses_mixed_case() {
 }
 
 #[test]
-fn upload_log_level_parses_mixed_case() {
-    assert_eq!(
-        "WaRn".parse::<UploadLogLevel>().unwrap(),
-        UploadLogLevel::Warning
-    );
-    assert_eq!(
-        "WARNING".parse::<UploadLogLevel>().unwrap(),
-        UploadLogLevel::Warning
-    );
-    assert_eq!(
-        "  Debug  ".parse::<UploadLogLevel>().unwrap(),
-        UploadLogLevel::Debug
-    );
-    assert_eq!(
-        "NONE".parse::<UploadLogLevel>().unwrap(),
-        UploadLogLevel::None
-    );
-    assert!("garbage".parse::<UploadLogLevel>().is_err());
-}
-
-#[test]
 fn ini_section_with_non_ascii_name_does_not_panic() {
     let content = "[音乐]\n\
 unused=1\n\
@@ -264,4 +227,15 @@ fn parse_bool_field_keeps_default_on_invalid() {
     let mut target = true;
     super::apply_bool_field("banana", &mut target, "test_key");
     assert!(target); // unchanged
+}
+
+#[test]
+fn legacy_upload_log_level_is_ignored() {
+    let default_config = Config::default();
+    let content = "bot.token=token\n\
+upload.log_level=debug\n";
+
+    let loaded = load_temp_config("legacy_upload_log", content);
+
+    assert_eq!(loaded.log_level, default_config.log_level);
 }

@@ -156,15 +156,6 @@ fn download_chunk_bytes_clamps_zero_to_minimum() {
 }
 
 #[test]
-fn upload_log_level_allows_thresholds() {
-    assert!(UploadLogLevel::Info.allows(UploadLogLevel::Error));
-    assert!(UploadLogLevel::Info.allows(UploadLogLevel::Warning));
-    assert!(UploadLogLevel::Info.allows(UploadLogLevel::Info));
-    assert!(!UploadLogLevel::Info.allows(UploadLogLevel::Debug));
-    assert!(!UploadLogLevel::None.allows(UploadLogLevel::Error));
-}
-
-#[test]
 fn upload_limit_clamps_bounds() {
     assert_eq!(super::upload_task_limit(0), 1);
     assert_eq!(super::upload_task_limit(1), 1);
@@ -216,8 +207,7 @@ fn upload_client_refresh_decision_works() {
 
 #[tokio::test]
 async fn upload_prewarm_failure_is_non_fatal() {
-    let config = crate::config::Config::default();
-    let ok = super::run_upload_prewarm(&config, || async {
+    let ok = super::run_upload_prewarm(|| async {
         Err::<(), crate::error::BotError>(crate::error::BotError::MusicApi(
             "simulated prewarm failure".to_string(),
         ))
@@ -229,9 +219,7 @@ async fn upload_prewarm_failure_is_non_fatal() {
 
 #[tokio::test]
 async fn upload_prewarm_runs_warmup_path() {
-    let config = crate::config::Config::default();
-    let ok =
-        super::run_upload_prewarm(&config, || async { Ok::<(), crate::error::BotError>(()) }).await;
+    let ok = super::run_upload_prewarm(|| async { Ok::<(), crate::error::BotError>(()) }).await;
 
     assert!(ok);
 }

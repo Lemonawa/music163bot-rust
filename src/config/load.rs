@@ -4,9 +4,7 @@ use std::io::{BufRead, BufReader};
 
 use anyhow::Result;
 
-use super::{
-    Config, CoverMode, StorageMode, UploadLogLevel, apply_bool_field, parse_admin_list, parse_field,
-};
+use super::{Config, CoverMode, StorageMode, apply_bool_field, parse_admin_list, parse_field};
 
 impl Config {
     pub fn load(config_path: &str) -> Result<Self> {
@@ -190,14 +188,6 @@ impl Config {
         if let Some(v) = config_map.get("upload.max_concurrent") {
             config.upload_max_concurrent =
                 parse_field(v, config.upload_max_concurrent, "upload.max_concurrent");
-        }
-        if let Some(level) = config_map.get("upload.log_level") {
-            match level.parse::<UploadLogLevel>() {
-                Ok(parsed) => config.upload_log_level = parsed,
-                Err(e) => {
-                    tracing::warn!("Invalid upload.log_level '{}': {}, using default", level, e);
-                }
-            }
         }
         if let Some(v) = config_map.get("upload.pool_max_idle_per_host") {
             config.upload_pool_max_idle_per_host = parse_field(
