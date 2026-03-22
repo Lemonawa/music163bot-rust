@@ -130,6 +130,17 @@ pub(super) fn should_download_cover(policy: CoverPolicy) -> bool {
     policy.embed_cover || policy.download_thumbnail
 }
 
+pub(super) async fn build_startup_update_listener(
+    bot: Bot,
+) -> teloxide::update_listeners::Polling<Bot> {
+    teloxide::update_listeners::Polling::builder(bot)
+        .timeout(std::time::Duration::from_secs(10))
+        .delete_webhook()
+        .await
+        .drop_pending_updates()
+        .build()
+}
+
 pub(super) async fn run(config: Config) -> Result<()> {
     tracing::info!("Starting Telegram bot...");
 
@@ -298,6 +309,9 @@ pub(super) async fn run(config: Config) -> Result<()> {
         .branch(Update::filter_callback_query().endpoint(handle_callback))
         .branch(Update::filter_inline_query().endpoint(handle_inline_query));
 
+    let listener = build_startup_update_listener(bot.clone()).await;
+    let error_handler = LoggingErrorHandler::with_custom_text("An error from the update listener");
+
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![bot_state])
         .default_handler(|upd| async move {
@@ -305,7 +319,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         })
         .enable_ctrlc_handler()
         .build()
-        .dispatch()
+        .dispatch_with_listener(listener, error_handler)
         .await;
     Ok(())
 }

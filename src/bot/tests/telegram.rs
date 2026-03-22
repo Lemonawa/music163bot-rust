@@ -1,3 +1,11 @@
+use std::sync::{Arc, Mutex};
+
+use futures_util::StreamExt;
+use teloxide::update_listeners::AsUpdateStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinHandle;
+
 #[test]
 fn redact_bot_token_in_error_message_masks_bot_path_segment() {
     let raw = "error sending request for url (http://127.0.0.1:8081/bot123456789:fake_test_token/sendAudio)";
@@ -221,4 +229,275 @@ async fn tagging_wrapper_adds_mp3_id3_header() {
     let data = tagged.get_data().await.expect("read tagged data");
     assert!(data.starts_with(b"ID3"));
 }
+
+#[tokio::test]
+async fn startup_update_listener_skips_pending_updates() {
+    let server = MockTelegramPollingServer::start().await;
+    let api_url = reqwest::Url::parse(&server.base_url()).expect("valid mock api url");
+    let bot = Bot::new("123456:TEST").set_api_url(api_url);
+
+    let mut listener = super::entry::build_startup_update_listener(bot).await;
+    let stream = listener.as_stream();
+    tokio::pin!(stream);
+    let update = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("listener should yield an update")
+        .expect("stream should produce an item")
+        .expect("listener request should succeed");
+
+    assert_eq!(update.id.0, 43);
+    assert_eq!(server.get_updates_offsets(), vec![-1, 43]);
+}
+
+#[derive(Debug, Default)]
+struct MockTelegramPollingServerState {
+    get_updates_offsets: Vec<i64>,
+}
+
+struct MockTelegramPollingServer {
+    base_url: String,
+    state: Arc<Mutex<MockTelegramPollingServerState>>,
+    accept_loop_task: JoinHandle<()>,
+}
+
+impl MockTelegramPollingServer {
+    async fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock telegram polling server");
+        let address = listener
+            .local_addr()
+            .expect("mock telegram polling server local addr");
+        let state = Arc::new(Mutex::new(MockTelegramPollingServerState::default()));
+        let shared_state = Arc::clone(&state);
+
+        let accept_loop_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let connection_state = Arc::clone(&shared_state);
+                tokio::spawn(async move {
+                    let _ = handle_mock_telegram_polling_connection(stream, connection_state).await;
+                });
+            }
+        });
+
+        Self {
+            base_url: format!("http://{address}/"),
+            state,
+            accept_loop_task,
+        }
+    }
+
+    fn base_url(&self) -> String {
+        self.base_url.clone()
+    }
+
+    fn get_updates_offsets(&self) -> Vec<i64> {
+        self.state
+            .lock()
+            .expect("lock mock telegram polling server state")
+            .get_updates_offsets
+            .clone()
+    }
+}
+
+impl Drop for MockTelegramPollingServer {
+    fn drop(&mut self) {
+        self.accept_loop_task.abort();
+    }
+}
+
+async fn handle_mock_telegram_polling_connection(
+    mut stream: TcpStream,
+    state: Arc<Mutex<MockTelegramPollingServerState>>,
+) -> std::io::Result<()> {
+    let Some((path, request_body)) = read_http_request(&mut stream).await? else {
+        return Ok(());
+    };
+
+    let method = path
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let body = match method.as_str() {
+        "getwebhookinfo" => mock_get_webhook_info_response_json(),
+        "getupdates" => mock_get_updates_response_json(&state, &path, &request_body),
+        _ => serde_json::json!({
+            "ok": false,
+            "description": format!("unsupported method: {method}")
+        })
+        .to_string(),
+    };
+
+    write_json_response(&mut stream, &body).await
+}
+
+fn mock_get_webhook_info_response_json() -> String {
+    serde_json::json!({
+        "ok": true,
+        "result": {
+            "url": "",
+            "has_custom_certificate": false,
+            "pending_update_count": 2,
+            "allowed_updates": ["message"]
+        }
+    })
+    .to_string()
+}
+
+fn mock_get_updates_response_json(
+    state: &Arc<Mutex<MockTelegramPollingServerState>>,
+    path: &str,
+    request_body: &str,
+) -> String {
+    let offset = parse_request_field_as_i64(path, request_body, "offset").unwrap_or(0);
+    let mut guard = state
+        .lock()
+        .expect("lock mock telegram polling server state");
+    guard.get_updates_offsets.push(offset);
+    drop(guard);
+
+    let update_ids: &[u32] = match offset {
+        -1 => &[42],
+        43 => &[43],
+        0 => &[41, 42, 43],
+        _ => &[],
+    };
+
+    let updates = update_ids
+        .iter()
+        .map(|&update_id| mock_message_update_json(update_id))
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "ok": true,
+        "result": updates,
+    })
+    .to_string()
+}
+
+fn mock_message_update_json(update_id: u32) -> serde_json::Value {
+    serde_json::json!({
+        "update_id": update_id,
+        "message": {
+            "message_id": update_id,
+            "date": 0,
+            "chat": {
+                "id": 123456,
+                "type": "private"
+            },
+            "from": {
+                "id": 123456,
+                "is_bot": false,
+                "first_name": "tester"
+            },
+            "text": format!("/music {update_id}")
+        }
+    })
+}
+
+async fn write_json_response(stream: &mut TcpStream, body: &str) -> std::io::Result<()> {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await?;
+    stream.shutdown().await
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> std::io::Result<Option<(String, String)>> {
+    let mut request_buffer = Vec::new();
+    let mut chunk = [0u8; 1024];
+
+    let header_end = loop {
+        let read_size = stream.read(&mut chunk).await?;
+        if read_size == 0 {
+            return Ok(None);
+        }
+        request_buffer.extend_from_slice(&chunk[..read_size]);
+        if let Some(pos) = find_byte_sequence(&request_buffer, b"\r\n\r\n") {
+            break pos;
+        }
+    };
+
+    let headers = String::from_utf8_lossy(&request_buffer[..header_end]);
+    let request_line = headers.lines().next().unwrap_or_default();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .map_or_else(|| "/".to_string(), ToString::to_string);
+
+    let content_length = parse_content_length(&headers);
+    let body_start = header_end + 4;
+    let mut body = if body_start < request_buffer.len() {
+        request_buffer[body_start..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    while body.len() < content_length {
+        let read_size = stream.read(&mut chunk).await?;
+        if read_size == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..read_size]);
+    }
+    body.truncate(content_length);
+
+    Ok(Some((path, String::from_utf8_lossy(&body).into_owned())))
+}
+
+fn parse_request_field_as_i64(path: &str, body: &str, field: &str) -> Option<i64> {
+    parse_query_field_as_i64(path, field)
+        .or_else(|| {
+            url::form_urlencoded::parse(body.as_bytes()).find_map(|(key, value)| {
+                if key == field {
+                    value.parse().ok()
+                } else {
+                    None
+                }
+            })
+        })
+        .or_else(|| {
+            let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
+            value.get(field)?.as_i64()
+        })
+}
+
+fn parse_query_field_as_i64(path: &str, field: &str) -> Option<i64> {
+    let query = path.split_once('?')?.1;
+    url::form_urlencoded::parse(query.as_bytes()).find_map(|(key, value)| {
+        if key == field {
+            value.parse().ok()
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_content_length(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                value.trim().parse().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
+fn find_byte_sequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 use super::*;
