@@ -69,7 +69,7 @@ impl MusicApi {
                 "Failed to build share-link resolve client: {}",
                 crate::utils::sanitize_sensitive_text(&e.to_string())
             );
-            Client::new()
+            build_redirect_disabled_fallback_client()
         });
 
         let eapi_cookie = Self::generate_eapi_cookie(music_u.as_deref());
@@ -340,4 +340,11 @@ fn build_music_api_http_client(
     }
 
     build_http_client(builder)
+}
+
+fn build_redirect_disabled_fallback_client() -> Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| Client::new())
 }

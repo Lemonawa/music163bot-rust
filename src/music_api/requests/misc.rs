@@ -120,7 +120,15 @@ impl MusicApi {
                 .send()
                 .await?;
 
-            if response.status().is_redirection() {
+            let status = response.status();
+            if matches!(
+                status,
+                reqwest::StatusCode::MOVED_PERMANENTLY
+                    | reqwest::StatusCode::FOUND
+                    | reqwest::StatusCode::SEE_OTHER
+                    | reqwest::StatusCode::TEMPORARY_REDIRECT
+                    | reqwest::StatusCode::PERMANENT_REDIRECT
+            ) {
                 let location = response
                     .headers()
                     .get(reqwest::header::LOCATION)
@@ -139,6 +147,11 @@ impl MusicApi {
                 }
                 current = next;
                 continue;
+            }
+            if status.is_redirection() {
+                return Err(BotError::MusicApi(format!(
+                    "Unsupported redirect status without Location handling: {status}"
+                )));
             }
 
             response.error_for_status_ref()?;
