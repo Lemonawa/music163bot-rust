@@ -116,7 +116,11 @@ fn is_trusted_music_share_url_accepts_netease_domains() {
     assert!(super::is_trusted_music_share_url(
         "https://music.163.com/song?id=123"
     ));
+    assert!(super::is_trusted_music_share_url(
+        "https://foo.music.163.com/song?id=123"
+    ));
     assert!(super::is_trusted_music_share_url("https://163cn.tv/abcd"));
+    assert!(super::is_trusted_music_share_url("https://a.163cn.tv/abcd"));
     assert!(super::is_trusted_music_share_url("https://163cn.link/abcd"));
 }
 
@@ -128,6 +132,18 @@ fn is_trusted_music_share_url_rejects_untrusted_domains() {
     assert!(!super::is_trusted_music_share_url(
         "https://attacker.test/?q=music.163.com"
     ));
+    assert!(!super::is_trusted_music_share_url(
+        "ftp://music.163.com/song?id=123"
+    ));
+}
+
+#[test]
+fn extract_first_trusted_music_share_url_skips_untrusted_urls() {
+    let text = "see https://example.com/x and https://163cn.link/abcd";
+    assert_eq!(
+        super::extract_first_trusted_music_share_url(text),
+        Some("https://163cn.link/abcd".to_string())
+    );
 }
 
 #[test]

@@ -236,12 +236,24 @@ pub fn extract_first_url(text: &str) -> Option<String> {
         .map(|matched| matched.as_str().to_string())
 }
 
+/// Extract the first trusted NetEase share URL from text.
+pub fn extract_first_trusted_music_share_url(text: &str) -> Option<String> {
+    SHARE_LINK_REGEX.find_iter(text).find_map(|matched| {
+        let url = matched.as_str();
+        is_trusted_music_share_url(url).then(|| url.to_string())
+    })
+}
+
 /// Return whether URL host belongs to trusted NetEase share domains.
 #[must_use]
 pub fn is_trusted_music_share_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
     };
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
 
     let Some(host) = parsed.host_str() else {
         return false;
