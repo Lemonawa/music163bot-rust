@@ -107,14 +107,12 @@ impl MusicApi {
             return Err(BotError::MusicApi("Untrusted share-link host".to_string()));
         }
 
-        let redirect_safe_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
         let mut current = reqwest::Url::parse(url)
             .map_err(|e| BotError::MusicApi(format!("Invalid share-link URL: {e}")))?;
 
         for _ in 0..5 {
-            let response = redirect_safe_client
+            let response = self
+                .resolve_client
                 .get(current.clone())
                 .header("User-Agent", SHORT_USER_AGENT)
                 .header("Accept", "*/*")

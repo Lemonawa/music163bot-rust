@@ -244,7 +244,7 @@ pub fn extract_first_trusted_music_share_url(text: &str) -> Option<String> {
     })
 }
 
-/// Return whether URL host belongs to trusted NetEase share domains.
+/// Return whether URL uses HTTP(S) and host belongs to trusted NetEase share domains.
 #[must_use]
 pub fn is_trusted_music_share_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {

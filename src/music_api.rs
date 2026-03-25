@@ -31,6 +31,7 @@ use self::models::{
 #[derive(Debug)]
 pub struct MusicApi {
     client: Client,
+    resolve_client: Client,
     pub music_u: Option<String>,
     base_url: String,
     eapi_cookie: String,
