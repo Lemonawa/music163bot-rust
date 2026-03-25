@@ -122,6 +122,9 @@ fn is_trusted_music_share_url_accepts_netease_domains() {
     assert!(super::is_trusted_music_share_url("https://163cn.tv/abcd"));
     assert!(super::is_trusted_music_share_url("https://a.163cn.tv/abcd"));
     assert!(super::is_trusted_music_share_url("https://163cn.link/abcd"));
+    assert!(super::is_trusted_music_share_url(
+        "https://a.163cn.link/abcd"
+    ));
 }
 
 #[test]
