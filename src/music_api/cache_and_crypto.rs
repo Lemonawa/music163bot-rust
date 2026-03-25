@@ -45,28 +45,31 @@ impl MusicApi {
         connect_timeout_secs: u64,
         request_timeout_secs: u64,
     ) -> Self {
-        let mut client_builder = Client::builder();
-
-        // Use rustls TLS for better compatibility
-        client_builder = client_builder.use_rustls_tls();
-
-        // Performance optimizations
-        // pool_max_idle_per_host(0) prevents connection pool memory accumulation
-        client_builder = client_builder
-            .tcp_nodelay(true)
-            .pool_max_idle_per_host(pool_max_idle_per_host)
-            .connect_timeout(Duration::from_secs(connect_timeout_secs))
-            .timeout(Duration::from_secs(request_timeout_secs.max(1)));
-
-        // Add user agent
-        client_builder = client_builder.user_agent(BROWSER_USER_AGENT);
-
-        let client = build_http_client(client_builder).unwrap_or_else(|e| {
+        let client = build_music_api_http_client(
+            pool_max_idle_per_host,
+            connect_timeout_secs,
+            request_timeout_secs,
+            false,
+        )
+        .unwrap_or_else(|e| {
             tracing::error!(
                 "Failed to build HTTP client: {}",
                 crate::utils::sanitize_sensitive_text(&e.to_string())
             );
             Client::new()
+        });
+        let resolve_client = build_music_api_http_client(
+            pool_max_idle_per_host,
+            connect_timeout_secs,
+            request_timeout_secs,
+            true,
+        )
+        .unwrap_or_else(|e| {
+            tracing::error!(
+                "Failed to build share-link resolve client: {}",
+                crate::utils::sanitize_sensitive_text(&e.to_string())
+            );
+            build_redirect_disabled_fallback_client()
         });
 
         let eapi_cookie = Self::generate_eapi_cookie(music_u.as_deref());
@@ -74,6 +77,7 @@ impl MusicApi {
 
         Self {
             client,
+            resolve_client,
             music_u,
             base_url,
             eapi_cookie,
@@ -314,4 +318,33 @@ impl MusicApi {
     pub(super) fn choose_eapi_user_agent() -> &'static str {
         "NeteaseMusic/9.3.40.1753206443(164);Dalvik/2.1.0 (Linux; U; Android 9; MIX 2 MIUI/V12.0.1.0.PDECNXM)"
     }
+}
+
+fn build_music_api_http_client(
+    pool_max_idle_per_host: usize,
+    connect_timeout_secs: u64,
+    request_timeout_secs: u64,
+    disable_redirects: bool,
+) -> Result<Client> {
+    let mut builder = Client::builder();
+
+    builder = builder.use_rustls_tls();
+    builder = builder
+        .tcp_nodelay(true)
+        .pool_max_idle_per_host(pool_max_idle_per_host)
+        .connect_timeout(Duration::from_secs(connect_timeout_secs))
+        .timeout(Duration::from_secs(request_timeout_secs.max(1)))
+        .user_agent(BROWSER_USER_AGENT);
+    if disable_redirects {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+
+    build_http_client(builder)
+}
+
+fn build_redirect_disabled_fallback_client() -> Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("failed to build redirect-disabled HTTP client")
 }

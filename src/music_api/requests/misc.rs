@@ -5,6 +5,7 @@ use super::super::{
     resize_album_art_to_thumbnail, rewrite_media_url,
 };
 use crate::error::BotError;
+use crate::utils::is_trusted_music_share_url;
 
 impl MusicApi {
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
@@ -102,17 +103,70 @@ impl MusicApi {
 
     /// Resolve final URL for share links with minimal body transfer
     pub async fn resolve_share_link(&self, url: &str) -> Result<reqwest::Url> {
-        let response = self
-            .client
-            .get(url)
-            .header("User-Agent", SHORT_USER_AGENT)
-            .header("Accept", "*/*")
-            .header(reqwest::header::RANGE, "bytes=0-0")
-            .send()
-            .await?
-            .error_for_status()?;
+        if !is_trusted_music_share_url(url) {
+            return Err(BotError::MusicApi("Untrusted share-link host".to_string()));
+        }
 
-        Ok(response.url().clone())
+        let mut current = reqwest::Url::parse(url)
+            .map_err(|e| BotError::MusicApi(format!("Invalid share-link URL: {e}")))?;
+
+        for _ in 0..5 {
+            let response = self
+                .resolve_client
+                .get(current.clone())
+                .header("User-Agent", SHORT_USER_AGENT)
+                .header("Accept", "*/*")
+                .header(reqwest::header::RANGE, "bytes=0-0")
+                .send()
+                .await?;
+
+            let status = response.status();
+            if matches!(
+                status,
+                reqwest::StatusCode::MOVED_PERMANENTLY
+                    | reqwest::StatusCode::FOUND
+                    | reqwest::StatusCode::SEE_OTHER
+                    | reqwest::StatusCode::TEMPORARY_REDIRECT
+                    | reqwest::StatusCode::PERMANENT_REDIRECT
+            ) {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .ok_or_else(|| {
+                        BotError::MusicApi("Missing Location header in redirect".to_string())
+                    })?
+                    .to_str()
+                    .map_err(|e| BotError::MusicApi(format!("Invalid redirect location: {e}")))?;
+                let next = current
+                    .join(location)
+                    .map_err(|e| BotError::MusicApi(format!("Invalid redirect target URL: {e}")))?;
+                if !is_trusted_music_share_url(next.as_str()) {
+                    return Err(BotError::MusicApi(
+                        "Untrusted share-link redirect host".to_string(),
+                    ));
+                }
+                current = next;
+                continue;
+            }
+            if status.is_redirection() {
+                return Err(BotError::MusicApi(format!(
+                    "Unsupported redirect status without Location handling: {status}"
+                )));
+            }
+
+            response.error_for_status_ref()?;
+            let final_url = response.url().clone();
+            if !is_trusted_music_share_url(final_url.as_str()) {
+                return Err(BotError::MusicApi(
+                    "Untrusted share-link final host".to_string(),
+                ));
+            }
+            return Ok(final_url);
+        }
+
+        Err(BotError::MusicApi(
+            "Too many share-link redirects".to_string(),
+        ))
     }
 
     /// Download and resize album art image into memory

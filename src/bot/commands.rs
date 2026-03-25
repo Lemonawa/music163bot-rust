@@ -10,7 +10,7 @@ pub(super) async fn handle_music_url(
         return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
 
-    let Some(url) = extract_first_url(text) else {
+    let Some(url) = extract_first_trusted_music_share_url(text) else {
         send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
         return Ok(());
     };
