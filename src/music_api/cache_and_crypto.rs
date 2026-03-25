@@ -346,5 +346,5 @@ fn build_redirect_disabled_fallback_client() -> Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| Client::new())
+        .expect("failed to build redirect-disabled HTTP client")
 }

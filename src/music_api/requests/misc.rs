@@ -155,7 +155,13 @@ impl MusicApi {
             }
 
             response.error_for_status_ref()?;
-            return Ok(response.url().clone());
+            let final_url = response.url().clone();
+            if !is_trusted_music_share_url(final_url.as_str()) {
+                return Err(BotError::MusicApi(
+                    "Untrusted share-link final host".to_string(),
+                ));
+            }
+            return Ok(final_url);
         }
 
         Err(BotError::MusicApi(
