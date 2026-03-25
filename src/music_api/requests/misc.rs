@@ -107,17 +107,49 @@ impl MusicApi {
             return Err(BotError::MusicApi("Untrusted share-link host".to_string()));
         }
 
-        let response = self
-            .client
-            .get(url)
-            .header("User-Agent", SHORT_USER_AGENT)
-            .header("Accept", "*/*")
-            .header(reqwest::header::RANGE, "bytes=0-0")
-            .send()
-            .await?
-            .error_for_status()?;
+        let redirect_safe_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let mut current = reqwest::Url::parse(url)
+            .map_err(|e| BotError::MusicApi(format!("Invalid share-link URL: {e}")))?;
 
-        Ok(response.url().clone())
+        for _ in 0..5 {
+            let response = redirect_safe_client
+                .get(current.clone())
+                .header("User-Agent", SHORT_USER_AGENT)
+                .header("Accept", "*/*")
+                .header(reqwest::header::RANGE, "bytes=0-0")
+                .send()
+                .await?;
+
+            if response.status().is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .ok_or_else(|| {
+                        BotError::MusicApi("Missing Location header in redirect".to_string())
+                    })?
+                    .to_str()
+                    .map_err(|e| BotError::MusicApi(format!("Invalid redirect location: {e}")))?;
+                let next = current
+                    .join(location)
+                    .map_err(|e| BotError::MusicApi(format!("Invalid redirect target URL: {e}")))?;
+                if !is_trusted_music_share_url(next.as_str()) {
+                    return Err(BotError::MusicApi(
+                        "Untrusted share-link redirect host".to_string(),
+                    ));
+                }
+                current = next;
+                continue;
+            }
+
+            response.error_for_status_ref()?;
+            return Ok(response.url().clone());
+        }
+
+        Err(BotError::MusicApi(
+            "Too many share-link redirects".to_string(),
+        ))
     }
 
     /// Download and resize album art image into memory
