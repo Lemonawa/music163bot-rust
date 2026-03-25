@@ -15,6 +15,15 @@ pub(super) async fn handle_music_url(
         return Ok(());
     };
 
+    if !is_trusted_music_share_url(&url) {
+        tracing::warn!(
+            "Rejected untrusted share-link host: {}",
+            sanitize_sensitive_text(&url)
+        );
+        send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
+        return Ok(());
+    }
+
     if let Some(target) = parse_direct_music_target(&url) {
         return dispatch_parsed_music_target(bot, msg, state, target).await;
     }

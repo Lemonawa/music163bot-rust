@@ -5,6 +5,7 @@ use super::super::{
     resize_album_art_to_thumbnail, rewrite_media_url,
 };
 use crate::error::BotError;
+use crate::utils::is_trusted_music_share_url;
 
 impl MusicApi {
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
@@ -102,6 +103,10 @@ impl MusicApi {
 
     /// Resolve final URL for share links with minimal body transfer
     pub async fn resolve_share_link(&self, url: &str) -> Result<reqwest::Url> {
+        if !is_trusted_music_share_url(url) {
+            return Err(BotError::MusicApi("Untrusted share-link host".to_string()));
+        }
+
         let response = self
             .client
             .get(url)

@@ -112,6 +112,25 @@ fn parse_music_program_id_rejects_song_link() {
 }
 
 #[test]
+fn is_trusted_music_share_url_accepts_netease_domains() {
+    assert!(super::is_trusted_music_share_url(
+        "https://music.163.com/song?id=123"
+    ));
+    assert!(super::is_trusted_music_share_url("https://163cn.tv/abcd"));
+    assert!(super::is_trusted_music_share_url("https://163cn.link/abcd"));
+}
+
+#[test]
+fn is_trusted_music_share_url_rejects_untrusted_domains() {
+    assert!(!super::is_trusted_music_share_url(
+        "https://example.com/song?id=123"
+    ));
+    assert!(!super::is_trusted_music_share_url(
+        "https://attacker.test/?q=music.163.com"
+    ));
+}
+
+#[test]
 fn ensure_dir_is_idempotent() {
     let temp_name = format!(
         "music163bot_utils_dir_{}",
