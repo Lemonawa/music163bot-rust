@@ -25,6 +25,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify:
+    name: Format, Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc
+        with:
+          shared-key: rust-${{ runner.os }}-verify
+
+      - name: Check Formatting
+        run: cargo fmt -- --check
+
+      - name: Check
+        run: cargo check
+
+      - name: Clippy Lints
+        run: cargo clippy -- -D warnings
+
+      - name: Run Tests
+        run: cargo test
+
   build_artifact:
     name: Build Artifact (Linux-x86_64)
     runs-on: ubuntu-latest
