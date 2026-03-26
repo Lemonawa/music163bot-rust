@@ -265,10 +265,15 @@ pub(super) async fn download_cover_assets(
                 );
 
                 if download_cover {
-                    match state.music_api.download_album_art_data(pic_url).await {
+                    let resize = !matches!(cover_mode, CoverMode::Original | CoverMode::Both);
+                    match state
+                        .music_api
+                        .download_album_art_data(pic_url, resize)
+                        .await
+                    {
                         Err(e) => {
                             tracing::warn!(
-                                "Failed to download 320px album art for music_id {} after {} attempts: {}",
+                                "Failed to download album art for music_id {} after {} attempts: {}",
                                 song_id,
                                 crate::music_api::ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS,
                                 e
@@ -277,13 +282,34 @@ pub(super) async fn download_cover_assets(
                         }
                         Ok(data) => {
                             tracing::debug!(
-                                "Downloaded 320px album art for music_id {} ({} bytes)",
+                                "Downloaded album art for music_id {} ({} bytes, resize: {})",
                                 song_id,
-                                data.len()
+                                data.len(),
+                                resize
                             );
 
-                            let data = Bytes::from(data);
                             let thumbnail_buffer = if download_thumbnail {
+                                let thumb_data_bytes = if resize {
+                                    Bytes::from(data.clone())
+                                } else {
+                                    let raw_data = data.clone();
+                                    if let Ok(Ok(resized)) =
+                                        tokio::task::spawn_blocking(move || {
+                                            crate::music_api::resize_album_art_to_thumbnail(
+                                                &raw_data,
+                                            )
+                                        })
+                                        .await
+                                    {
+                                        Bytes::from(resized)
+                                    } else {
+                                        tracing::warn!(
+                                            "Failed to resize album art to thumbnail for Both mode"
+                                        );
+                                        Bytes::from(data.clone())
+                                    }
+                                };
+
                                 let thumb_filename = format!(
                                     "thumb_{}_{}.jpg",
                                     song_id,
@@ -291,7 +317,7 @@ pub(super) async fn download_cover_assets(
                                 );
                                 ThumbnailBuffer::new(
                                     &state.config,
-                                    data.clone(),
+                                    thumb_data_bytes,
                                     &state.config.cache_dir,
                                     &thumb_filename,
                                 )
@@ -301,7 +327,8 @@ pub(super) async fn download_cover_assets(
                                 None
                             };
 
-                            (Some(data), thumbnail_buffer, false)
+                            let embed_data = Bytes::from(data);
+                            (Some(embed_data), thumbnail_buffer, false)
                         }
                     }
                 } else {

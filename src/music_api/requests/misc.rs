@@ -169,9 +169,9 @@ impl MusicApi {
         ))
     }
 
-    /// Download and resize album art image into memory
+    /// Download album art image into memory, optionally resizing to thumbnail
     /// Uses spawn_blocking for CPU-intensive image processing to avoid blocking async runtime
-    pub async fn download_album_art_data(&self, pic_url: &str) -> Result<Vec<u8>> {
+    pub async fn download_album_art_data(&self, pic_url: &str, resize: bool) -> Result<Vec<u8>> {
         if pic_url.is_empty() {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
         }
@@ -180,7 +180,7 @@ impl MusicApi {
         let mut last_error = None;
 
         for attempt in 1..=total_attempts {
-            match self.download_album_art_data_once(pic_url).await {
+            match self.download_album_art_data_once(pic_url, resize).await {
                 Ok(data) => return Ok(data),
                 Err(e) => {
                     if attempt < total_attempts {
@@ -201,7 +201,7 @@ impl MusicApi {
             .unwrap_or_else(|| BotError::MusicApi("Album art download failed".to_string())))
     }
 
-    async fn download_album_art_data_once(&self, pic_url: &str) -> Result<Vec<u8>> {
+    async fn download_album_art_data_once(&self, pic_url: &str, resize: bool) -> Result<Vec<u8>> {
         // Download the image with common headers
         let request = self.client.get(pic_url);
         let request = Self::apply_image_download_headers(request);
@@ -216,12 +216,18 @@ impl MusicApi {
 
         let bytes = response.bytes().await?;
 
-        // Process image in spawn_blocking to avoid blocking async runtime
-        let processed = tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes))
-            .await
-            .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
-
-        Ok(processed)
+        if resize {
+            // Process image in spawn_blocking to avoid blocking async runtime
+            let processed =
+                tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes))
+                    .await
+                    .map_err(|e| {
+                        BotError::MusicApi(format!("Image processing task failed: {e}"))
+                    })??;
+            Ok(processed)
+        } else {
+            Ok(bytes.to_vec())
+        }
     }
 
     fn build_audio_download_request(&self, url: &str) -> reqwest::RequestBuilder {
