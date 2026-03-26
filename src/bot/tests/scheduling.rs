@@ -1,3 +1,6 @@
+use super::*;
+use crate::bot::wiring::MIN_DOWNLOAD_CHUNK_BYTES;
+
 #[test]
 fn append_search_result_line_formats_output() {
     let mut results = String::new();
@@ -223,5 +226,3 @@ async fn upload_prewarm_runs_warmup_path() {
 
     assert!(ok);
 }
-use super::*;
-use crate::bot::wiring::MIN_DOWNLOAD_CHUNK_BYTES;
