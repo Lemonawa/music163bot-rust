@@ -70,18 +70,13 @@ pub(super) async fn download_and_send_music(
         if content_length == Some(0) {
             return Err(anyhow::anyhow!("Empty file or unable to get file size"));
         }
-        let max_audio_bytes = state
-            .config
-            .max_audio_file_mb
-            .saturating_mul(1024 * 1024)
-            .max(1);
+        let max_audio_file_mb = state.config.max_audio_file_mb.max(1);
+        let max_audio_bytes = max_audio_file_mb.saturating_mul(1024 * 1024);
         if let Some(len) = content_length
             && len > max_audio_bytes
         {
             return Err(anyhow::anyhow!(
-                "File too large ({} bytes > {} MB limit)",
-                len,
-                state.config.max_audio_file_mb
+                "File too large ({len} bytes > {max_audio_file_mb} MB limit)"
             ));
         }
 
@@ -129,9 +124,7 @@ pub(super) async fn download_and_send_music(
 
                     if downloaded > max_audio_bytes {
                         error = Some(anyhow::anyhow!(
-                            "File too large ({} bytes > {} MB limit)",
-                            downloaded,
-                            state.config.max_audio_file_mb
+                            "File too large ({downloaded} bytes > {max_audio_file_mb} MB limit)"
                         ));
                         break;
                     }
@@ -172,9 +165,7 @@ pub(super) async fn download_and_send_music(
 
                     if downloaded > max_audio_bytes {
                         error = Some(anyhow::anyhow!(
-                            "File too large ({} bytes > {} MB limit)",
-                            downloaded,
-                            state.config.max_audio_file_mb
+                            "File too large ({downloaded} bytes > {max_audio_file_mb} MB limit)"
                         ));
                         break;
                     }

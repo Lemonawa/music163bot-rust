@@ -317,7 +317,7 @@ pub(super) async fn download_cover_assets(
                                                 song_id,
                                                 e
                                             );
-                                            Bytes::from(Vec::new())
+                                            Bytes::new()
                                         }
                                     }
                                 } else {

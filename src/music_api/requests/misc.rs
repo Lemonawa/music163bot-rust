@@ -259,21 +259,24 @@ impl MusicApi {
             )));
         }
 
-        if let Some(len) = response.content_length() {
+        let limit_mb = max_bytes.div_ceil(1024 * 1024).max(1);
+        let mut data = if let Some(len) = response.content_length() {
             if len == 0 {
                 return Err(BotError::MusicApi("Album art is empty".to_string()));
             }
             if len > max_bytes {
                 return Err(BotError::MusicApi(format!(
-                    "Album art too large ({} bytes > {} MB limit)",
-                    len,
-                    max_bytes / (1024 * 1024)
+                    "Album art too large ({len} bytes > {limit_mb} MB limit)"
                 )));
             }
-        }
+            let reserve_len = std::cmp::min(len, max_bytes);
+            let capacity = usize::try_from(reserve_len).unwrap_or(usize::MAX);
+            Vec::with_capacity(capacity)
+        } else {
+            Vec::new()
+        };
 
         let mut stream = response.bytes_stream();
-        let mut data = Vec::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             let next_size = data
@@ -282,8 +285,7 @@ impl MusicApi {
                 .ok_or_else(|| BotError::MusicApi("Album art size overflow".to_string()))?;
             if (next_size as u64) > max_bytes {
                 return Err(BotError::MusicApi(format!(
-                    "Album art too large (exceeded {} MB limit)",
-                    max_bytes / (1024 * 1024)
+                    "Album art too large (exceeded {limit_mb} MB limit)"
                 )));
             }
             data.extend_from_slice(&chunk);

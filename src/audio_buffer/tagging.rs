@@ -23,7 +23,7 @@ impl AudioBuffer {
                 written_bytes,
                 ..
             } => {
-                tag.write_to_path(&**path, Version::Id3v24)
+                tag.write_to_path(path.as_path(), Version::Id3v24)
                     .context("Failed to write ID3 tags to disk file")?;
                 *written_bytes = std::fs::metadata(path)
                     .map(|m| m.len())
