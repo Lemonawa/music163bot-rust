@@ -1,0 +1,33 @@
+name: Security Audit
+
+on:
+  push:
+    paths:
+      - 'Cargo.lock'
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+  schedule:
+    - cron: '0 0 * * *' # Run daily at midnight
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4.1.1
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@7627fb428e65e78e2ec9a24ae5c5bd5f8553f182 # v2.69.10
+        with:
+          tool: cargo-audit
+
+      - name: Run cargo-audit
+        run: cargo audit
