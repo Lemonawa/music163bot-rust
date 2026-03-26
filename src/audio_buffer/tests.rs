@@ -160,7 +160,7 @@ fn test_find_mp3_audio_start() {
     mp3_data.extend_from_slice(b"\xFF\xFB"); // MP3 sync word
 
     let result = AudioBuffer::find_mp3_audio_start(&mp3_data);
-    assert_eq!(result, 10); // 10 byte header
+    assert_eq!(result.unwrap(), 10); // 10 byte header
 }
 
 #[tokio::test]

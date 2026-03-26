@@ -70,6 +70,23 @@ pub(super) async fn download_and_send_music(
             return Err(anyhow::anyhow!("Empty file or unable to get file size"));
         }
 
+        // Enforce max download size limit when Content-Length is known
+        let max_size_bytes = if state.config.max_download_size_mb > 0 {
+            state.config.max_download_size_mb * 1024 * 1024
+        } else {
+            u64::MAX // No limit
+        };
+
+        if let Some(size) = content_length
+            && size > max_size_bytes
+        {
+            return Err(anyhow::anyhow!(
+                "File size ({} MB) exceeds maximum allowed size ({} MB)",
+                size / (1024 * 1024),
+                max_size_bytes / (1024 * 1024)
+            ));
+        }
+
         // Create audio buffer based on storage mode configuration
         let mut audio_buffer = AudioBuffer::new(
             &state.config,
@@ -95,6 +112,14 @@ pub(super) async fn download_and_send_music(
             tokio::io::AsyncWriteExt::flush(&mut writer)
                 .await
                 .context("Failed to flush disk writer")?;
+            // Enforce max size even for disk mode (in case Content-Length was missing)
+            if downloaded > max_size_bytes {
+                return Err(anyhow::anyhow!(
+                    "Downloaded size ({} MB) exceeds maximum allowed size ({} MB)",
+                    downloaded / (1024 * 1024),
+                    max_size_bytes / (1024 * 1024)
+                ));
+            }
             downloaded
         } else {
             let mut downloaded = 0u64;
@@ -103,6 +128,15 @@ pub(super) async fn download_and_send_music(
                 downloaded += chunk.len() as u64;
 
                 audio_buffer.write_chunk(&chunk).await?;
+
+                // Enforce max size during streaming for chunked transfers
+                if downloaded > max_size_bytes {
+                    return Err(anyhow::anyhow!(
+                        "Downloaded size ({} MB) exceeds maximum allowed size ({} MB)",
+                        downloaded / (1024 * 1024),
+                        max_size_bytes / (1024 * 1024)
+                    ));
+                }
             }
             downloaded
         };
@@ -125,7 +159,16 @@ pub(super) async fn download_and_send_music(
 
     let (downloaded_result, (cover_artwork_data, thumbnail_buffer, cover_retry_exhausted)) =
         tokio::join!(audio_future, artwork_future);
-    let (mut audio_buffer, downloaded) = downloaded_result?;
+
+    // Clean up thumbnail on audio download failure
+    let (mut audio_buffer, downloaded) = match downloaded_result {
+        Ok(result) => result,
+        Err(e) => {
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e.into());
+        }
+    };
+
     let should_remove_song_cache =
         should_remove_song_cache_after_partial_failure(cover_retry_exhausted);
 
@@ -209,8 +252,21 @@ pub(super) async fn download_and_send_music(
     };
 
     let (tag_result, upload_client_result) = tokio::join!(tag_future, upload_client_future);
-    audio_buffer = tag_result?;
-    let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
+    audio_buffer = match tag_result {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e);
+        }
+    };
+    let (_upload_bot, raw_client, api_base_url) = match upload_client_result {
+        Ok(client) => client,
+        Err(e) => {
+            cleanup_audio_buffer(audio_buffer).await;
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e);
+        }
+    };
 
     // Get file size for database and logging
     let file_size = audio_buffer.size().await;

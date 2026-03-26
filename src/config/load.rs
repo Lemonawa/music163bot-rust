@@ -171,6 +171,10 @@ impl Config {
             config.download_chunk_size_kb =
                 parse_field(v, config.download_chunk_size_kb, "download.chunk_size_kb");
         }
+        if let Some(v) = config_map.get("download.max_size_mb") {
+            config.max_download_size_mb =
+                parse_field(v, config.max_download_size_mb, "download.max_size_mb");
+        }
         if let Some(mode) = config_map.get("download.cover_mode") {
             match mode.parse::<CoverMode>() {
                 Ok(m) => config.cover_mode = m,

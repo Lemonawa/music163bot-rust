@@ -28,6 +28,14 @@ impl AudioBuffer {
         Ok(())
     }
 
+    /// Get current written bytes (for progress tracking and size validation)
+    pub fn written_bytes(&self) -> u64 {
+        match self {
+            Self::Disk { written_bytes, .. } => *written_bytes,
+            Self::Memory { data, .. } => data.len() as u64,
+        }
+    }
+
     /// Finish writing and flush any buffers.
     pub async fn finish(&mut self) -> Result<()> {
         if let Self::Disk { file, .. } = self

@@ -143,6 +143,8 @@ pub struct Config {
     pub download_connect_timeout_secs: u64,
     /// Download chunk size in KB for buffering
     pub download_chunk_size_kb: usize,
+    /// Maximum allowed download size in MB (0 = unlimited, default 200)
+    pub max_download_size_mb: u64,
     /// Cover art mode: thumbnail, original, or both
     pub cover_mode: CoverMode,
     /// Upload client reuse request limit
@@ -191,6 +193,7 @@ impl Default for Config {
             download_pool_max_idle_per_host: 2,
             download_connect_timeout_secs: 10,
             download_chunk_size_kb: 256,
+            max_download_size_mb: 200,
             cover_mode: CoverMode::Thumbnail,
             upload_client_reuse_requests: 0,
             upload_max_concurrent: 1,

@@ -31,13 +31,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4f366e62c85c59abc66ca013b1b44fccf34dd664 # stable
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@082a5b888e5c07c0e9a67fffe4f0bbd72d0e7e3d # v2.9.1
         with:
           shared-key: rust-${{ runner.os }}-x86_64-unknown-linux-gnu
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -72,7 +72,7 @@ jobs:
           echo "archive=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact (Linux-x86_64)
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@ea053fc7d47ea5b59867071670bd3668c5b50c5f # v7.0.0
         with:
           name: ci-linux-x86_64
           path: ${{ steps.package.outputs.archive }}

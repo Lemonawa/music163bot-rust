@@ -18,9 +18,15 @@ impl AudioBuffer {
         let tag = Self::build_id3_tag(song_detail, artwork_data);
 
         match self {
-            Self::Disk { path, .. } => {
+            Self::Disk {
+                path,
+                written_bytes,
+                ..
+            } => {
                 tag.write_to_path(path, Version::Id3v24)
                     .context("Failed to write ID3 tags to disk file")?;
+                // Invalidate written_bytes cache - size() will fetch actual size from disk
+                *written_bytes = 0;
             }
             Self::Memory { data, .. } => {
                 // Memory mode: create new tag and prepend to audio data
@@ -33,7 +39,15 @@ impl AudioBuffer {
                 let has_existing_id3 = data.len() >= 3 && &data[0..3] == b"ID3";
                 if has_existing_id3 {
                     // Skip existing ID3 tag and replace with new one
-                    let audio_start = Self::find_mp3_audio_start(data);
+                    let audio_start = Self::find_mp3_audio_start(data)?;
+                    // Validate that audio_start is within bounds
+                    if audio_start > data.len() {
+                        return Err(anyhow::anyhow!(
+                            "Invalid ID3 tag: computed audio start ({}) exceeds file size ({})",
+                            audio_start,
+                            data.len()
+                        ));
+                    }
                     // Use a single reallocation approach
                     let mut new_data =
                         Vec::with_capacity(tag_buffer.len() + data.len() - audio_start);
@@ -82,9 +96,9 @@ impl AudioBuffer {
     }
 
     /// Find the start of MP3 audio data (after ID3v2 tag)
-    pub(super) fn find_mp3_audio_start(data: &[u8]) -> usize {
+    pub(super) fn find_mp3_audio_start(data: &[u8]) -> Result<usize> {
         if data.len() < 10 || &data[0..3] != b"ID3" {
-            return 0; // No ID3 tag
+            return Ok(0); // No ID3 tag
         }
 
         // ID3v2 header: "ID3" + version (2 bytes) + flags (1 byte) + size (4 bytes syncsafe)
@@ -94,7 +108,18 @@ impl AudioBuffer {
             | ((size_bytes[2] as usize & 0x7F) << 7)
             | (size_bytes[3] as usize & 0x7F);
 
-        10 + size // Header (10 bytes) + tag data
+        let audio_start = 10 + size; // Header (10 bytes) + tag data
+
+        // Validate that the computed offset is within the file bounds
+        if audio_start > data.len() {
+            return Err(anyhow::anyhow!(
+                "Invalid ID3 tag: size field indicates {} bytes but file is only {} bytes",
+                audio_start,
+                data.len()
+            ));
+        }
+
+        Ok(audio_start)
     }
 
     /// Add FLAC metadata (picture block + vorbis comments) - supports both disk and memory modes
@@ -104,9 +129,16 @@ impl AudioBuffer {
         artwork_data: Option<&[u8]>,
     ) -> Result<()> {
         match self {
-            Self::Disk { path, .. } => {
+            Self::Disk {
+                path,
+                written_bytes,
+                ..
+            } => {
                 // Disk mode: use metaflac directly
-                Self::add_flac_metadata_disk(path, song_detail, artwork_data)
+                Self::add_flac_metadata_disk(path, song_detail, artwork_data)?;
+                // Invalidate written_bytes cache - size() will fetch actual size from disk
+                *written_bytes = 0;
+                Ok(())
             }
             Self::Memory { data, .. } => {
                 // Memory mode: parse and rebuild FLAC in memory
