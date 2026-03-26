@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use futures_util::StreamExt;
 use serde::Serialize;
 
@@ -237,7 +238,7 @@ impl MusicApi {
         let bytes = self.download_image_with_limit(pic_url, max_bytes).await?;
 
         // Process image in spawn_blocking to avoid blocking async runtime
-        let processed = self.build_thumbnail_from_bytes(bytes).await?;
+        let processed = self.build_thumbnail_from_bytes(Bytes::from(bytes)).await?;
 
         Ok(processed)
     }
@@ -297,7 +298,7 @@ impl MusicApi {
         Ok(data)
     }
 
-    pub(crate) async fn build_thumbnail_from_bytes(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
+    pub(crate) async fn build_thumbnail_from_bytes(&self, bytes: Bytes) -> Result<Vec<u8>> {
         tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes))
             .await
             .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))?

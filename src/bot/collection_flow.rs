@@ -307,7 +307,7 @@ pub(super) async fn download_cover_assets(
                                 let thumb_bytes = if download_original {
                                     match state
                                         .music_api
-                                        .build_thumbnail_from_bytes(data.clone().to_vec())
+                                        .build_thumbnail_from_bytes(data.clone())
                                         .await
                                     {
                                         Ok(bytes) => Bytes::from(bytes),
