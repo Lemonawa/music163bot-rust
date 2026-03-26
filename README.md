@@ -1,5 +1,10 @@
 # Music163bot-Rust
 
+[![Build and Release](https://github.com/Lemonawa/music163bot-rust/actions/workflows/build.yml/badge.svg)](https://github.com/Lemonawa/music163bot-rust/actions/workflows/build.yml)
+[![CI](https://github.com/Lemonawa/music163bot-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/Lemonawa/music163bot-rust/actions/workflows/ci.yml)
+[![CodeQL Security Scan](https://github.com/Lemonawa/music163bot-rust/actions/workflows/codeql.yml/badge.svg)](https://github.com/Lemonawa/music163bot-rust/actions/workflows/codeql.yml)
+[![License: WTFPL](https://img.shields.io/badge/License-WTFPL-brightgreen.svg)](http://www.wtfpl.net/about/)
+
 一个用 Rust 语言重写的网易云音乐 Telegram 机器人，基于 [Music163bot-Go](https://github.com/XiaoMengXinX/Music163bot-Go) 项目。
 
 ## 功能特性

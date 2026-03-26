@@ -1,0 +1,34 @@
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+    authors:
+      - dependabot[bot]
+  categories:
+    - title: 🚀 Features
+      labels:
+        - enhancement
+        - feature
+      commits:
+        - "feat:"
+        - "feature:"
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+        - fix
+      commits:
+        - "fix:"
+        - "bug:"
+    - title: 🧰 Maintenance & Refactoring
+      labels:
+        - refactor
+        - chore
+      commits:
+        - "refactor:"
+        - "chore:"
+    - title: 📦 Dependency Updates
+      labels:
+        - dependencies
+      commits:
+        - "deps:"
+        - "chore(deps):"
