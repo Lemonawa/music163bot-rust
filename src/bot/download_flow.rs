@@ -80,18 +80,31 @@ pub(super) async fn download_and_send_music(
         .await?;
 
         let mut stream = response.bytes_stream();
+        let max_download_size = if audio_buffer.is_memory() {
+            state.config.memory_max_file_mb * 1024 * 1024
+        } else {
+            // Maximum reasonable media size (2GB) to prevent disk exhaustion
+            2000 * 1024 * 1024
+        };
+
         let downloaded = if audio_buffer.is_disk() {
             let chunk_bytes = download_chunk_bytes(&state.config);
             let stream = stream.map_err(std::io::Error::other);
-            let mut reader =
+            let reader =
                 tokio::io::BufReader::with_capacity(chunk_bytes, StreamReader::new(stream));
+            let mut limited_reader = tokio::io::AsyncReadExt::take(reader, max_download_size + 1);
             let file = audio_buffer
                 .disk_file_mut()
                 .ok_or_else(|| anyhow::anyhow!("Disk buffer missing file handle"))?;
             let mut writer = tokio::io::BufWriter::with_capacity(chunk_bytes, file);
-            let downloaded = tokio::io::copy_buf(&mut reader, &mut writer)
+            let downloaded = tokio::io::copy_buf(&mut limited_reader, &mut writer)
                 .await
                 .context("Failed to stream download to disk")?;
+            
+            if downloaded > max_download_size {
+                return Err(anyhow::anyhow!("Download exceeds maximum allowed size ({} bytes)", max_download_size));
+            }
+
             tokio::io::AsyncWriteExt::flush(&mut writer)
                 .await
                 .context("Failed to flush disk writer")?;
@@ -101,6 +114,10 @@ pub(super) async fn download_and_send_music(
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk?;
                 downloaded += chunk.len() as u64;
+
+                if downloaded > max_download_size {
+                    return Err(anyhow::anyhow!("Download exceeds maximum allowed size ({} bytes)", max_download_size));
+                }
 
                 audio_buffer.write_chunk(&chunk).await?;
             }
@@ -125,7 +142,14 @@ pub(super) async fn download_and_send_music(
 
     let (downloaded_result, (cover_artwork_data, thumbnail_buffer, cover_retry_exhausted)) =
         tokio::join!(audio_future, artwork_future);
-    let (mut audio_buffer, downloaded) = downloaded_result?;
+    let (mut audio_buffer, downloaded) = match downloaded_result {
+        Ok(res) => res,
+        Err(e) => {
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e.into());
+        }
+    };
+
     let should_remove_song_cache =
         should_remove_song_cache_after_partial_failure(cover_retry_exhausted);
 
@@ -209,8 +233,24 @@ pub(super) async fn download_and_send_music(
     };
 
     let (tag_result, upload_client_result) = tokio::join!(tag_future, upload_client_future);
-    audio_buffer = tag_result?;
-    let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
+    
+    audio_buffer = match tag_result {
+        Ok(buf) => buf,
+        Err(e) => {
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e.into());
+        }
+    };
+
+    let (_upload_bot, raw_client, api_base_url) = match upload_client_result {
+        Ok(res) => res,
+        Err(e) => {
+            cleanup_audio_buffer(audio_buffer).await;
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e.into());
+        }
+    };
+
 
     // Get file size for database and logging
     let file_size = audio_buffer.size().await;
@@ -312,7 +352,14 @@ pub(super) async fn download_and_send_music(
     // Acquire the upload permit only when we are ready to send bytes to Telegram.
     // This keeps slow downloads/tagging from occupying the upload lane.
     let upload_permit_wait_start = std::time::Instant::now();
-    let _upload_permit = acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await?;
+    let _upload_permit = match acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await {
+        Ok(permit) => permit,
+        Err(e) => {
+            cleanup_audio_buffer(audio_buffer).await;
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e.into());
+        }
+    };
     perf_ctx.log_stage(
         PERF_STAGE_UPLOAD_PERMIT_WAIT,
         upload_permit_wait_start.elapsed(),

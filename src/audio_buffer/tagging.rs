@@ -18,9 +18,16 @@ impl AudioBuffer {
         let tag = Self::build_id3_tag(song_detail, artwork_data);
 
         match self {
-            Self::Disk { path, .. } => {
-                tag.write_to_path(path, Version::Id3v24)
+            Self::Disk {
+                path,
+                written_bytes,
+                ..
+            } => {
+                tag.write_to_path(path.as_path(), Version::Id3v24)
                     .context("Failed to write ID3 tags to disk file")?;
+                *written_bytes = std::fs::metadata(path.as_path())
+                    .map(|m| m.len())
+                    .unwrap_or(0);
             }
             Self::Memory { data, .. } => {
                 // Memory mode: create new tag and prepend to audio data
@@ -55,7 +62,7 @@ impl AudioBuffer {
 
     fn build_id3_tag(song_detail: &SongDetail, artwork_data: Option<&[u8]>) -> id3::Tag {
         use crate::music_api::format_artists;
-        use id3::{Tag, TagLike, frame};
+        use id3::{frame, Tag, TagLike};
 
         let mut tag = Tag::new();
 
@@ -94,7 +101,7 @@ impl AudioBuffer {
             | ((size_bytes[2] as usize & 0x7F) << 7)
             | (size_bytes[3] as usize & 0x7F);
 
-        10 + size // Header (10 bytes) + tag data
+        std::cmp::min(10 + size, data.len()) // Prevent out of bounds
     }
 
     /// Add FLAC metadata (picture block + vorbis comments) - supports both disk and memory modes
@@ -104,9 +111,17 @@ impl AudioBuffer {
         artwork_data: Option<&[u8]>,
     ) -> Result<()> {
         match self {
-            Self::Disk { path, .. } => {
+            Self::Disk {
+                path,
+                written_bytes,
+                ..
+            } => {
                 // Disk mode: use metaflac directly
-                Self::add_flac_metadata_disk(path, song_detail, artwork_data)
+                Self::add_flac_metadata_disk(path.as_path(), song_detail, artwork_data)?;
+                *written_bytes = std::fs::metadata(path.as_path())
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                Ok(())
             }
             Self::Memory { data, .. } => {
                 // Memory mode: parse and rebuild FLAC in memory
