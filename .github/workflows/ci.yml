@@ -39,7 +39,7 @@ jobs:
           toolchain: stable
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        uses: Swatinem/rust-cache@c1937111970e37e0d56d5c9a379b8c56404c23c8 # v2.9.1
         with:
           shared-key: rust-${{ runner.os }}-x86_64-unknown-linux-gnu
           save-if: ${{ github.ref == 'refs/heads/main' }}

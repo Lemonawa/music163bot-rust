@@ -41,7 +41,7 @@ impl AudioBuffer {
                 if has_existing_id3 {
                     // Skip existing ID3 tag and replace with new one
                     let audio_start = Self::find_mp3_audio_start(data)
-                        .context("Invalid ID3 tag length in MP3 data")?;
+                        .context("Invalid or truncated ID3 header in MP3 data")?;
                     // Use a single reallocation approach
                     let mut new_data =
                         Vec::with_capacity(tag_buffer.len() + data.len() - audio_start);
@@ -91,8 +91,15 @@ impl AudioBuffer {
 
     /// Find the start of MP3 audio data (after ID3v2 tag)
     pub(super) fn find_mp3_audio_start(data: &[u8]) -> Result<usize> {
-        if data.len() < 10 || &data[0..3] != b"ID3" {
+        if !data.starts_with(b"ID3") {
             return Ok(0); // No ID3 tag
+        }
+
+        if data.len() < 10 {
+            return Err(anyhow::anyhow!(
+                "Truncated ID3 header: only {} bytes available",
+                data.len()
+            ));
         }
 
         // ID3v2 header: "ID3" + version (2 bytes) + flags (1 byte) + size (4 bytes syncsafe)
