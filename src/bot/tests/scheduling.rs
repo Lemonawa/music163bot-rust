@@ -151,7 +151,7 @@ fn download_chunk_bytes_clamps_zero_to_minimum() {
 
     assert_eq!(
         super::download_chunk_bytes(&config),
-        super::MIN_DOWNLOAD_CHUNK_BYTES
+        MIN_DOWNLOAD_CHUNK_BYTES
     );
 }
 
@@ -224,3 +224,4 @@ async fn upload_prewarm_runs_warmup_path() {
     assert!(ok);
 }
 use super::*;
+use crate::bot::wiring::MIN_DOWNLOAD_CHUNK_BYTES;

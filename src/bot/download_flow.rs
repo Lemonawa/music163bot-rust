@@ -74,7 +74,9 @@ pub(super) async fn download_and_send_music(
             .max_audio_file_mb
             .saturating_mul(1024 * 1024)
             .max(1);
-        if let Some(len) = content_length && len > max_audio_bytes {
+        if let Some(len) = content_length
+            && len > max_audio_bytes
+        {
             return Err(anyhow::anyhow!(
                 "File too large ({} bytes > {} MB limit)",
                 len,
@@ -85,7 +87,7 @@ pub(super) async fn download_and_send_music(
         // Create audio buffer based on storage mode configuration
         let mut audio_buffer = AudioBuffer::new(
             &state.config,
-            content_length.unwrap_or(max_audio_bytes),
+            content_length.unwrap_or(0),
             filename.clone(),
             &state.config.cache_dir,
         )

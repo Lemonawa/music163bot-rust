@@ -1,3 +1,6 @@
+#[cfg(test)]
+use crate::bot::wiring::MIN_DOWNLOAD_CHUNK_BYTES;
+
 use super::*;
 
 pub(super) async fn apply_tags_in_blocking(
@@ -486,7 +489,7 @@ pub(super) fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(super) fn download_chunk_bytes(config: &Config) -> usize {
     config
         .download_chunk_size_kb
