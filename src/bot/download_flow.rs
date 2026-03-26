@@ -101,12 +101,13 @@ pub(super) async fn download_and_send_music(
             .saturating_mul(1024)
             .max(64 * 1024);
         let mut downloaded = 0u64;
-        match &mut audio_buffer {
+        let download_result: anyhow::Result<()> = match &mut audio_buffer {
             AudioBuffer::Disk {
                 file,
                 written_bytes,
                 ..
             } => {
+                let mut error: Option<anyhow::Error> = None;
                 let mut writer = {
                     let file = file
                         .take()
@@ -118,8 +119,8 @@ pub(super) async fn download_and_send_music(
                     let chunk = match chunk_result {
                         Ok(chunk) => chunk,
                         Err(e) => {
-                            let _ = audio_buffer.cleanup().await;
-                            return Err(anyhow::anyhow!("Download stream error: {e}"));
+                            error = Some(anyhow::anyhow!("Download stream error: {e}"));
+                            break;
                         }
                     };
                     downloaded = downloaded
@@ -127,35 +128,42 @@ pub(super) async fn download_and_send_music(
                         .ok_or_else(|| anyhow::anyhow!("Downloaded size overflow"))?;
 
                     if downloaded > max_audio_bytes {
-                        let _ = audio_buffer.cleanup().await;
-                        return Err(anyhow::anyhow!(
+                        error = Some(anyhow::anyhow!(
                             "File too large ({} bytes > {} MB limit)",
                             downloaded,
                             state.config.max_audio_file_mb
                         ));
+                        break;
                     }
 
                     if let Err(e) = writer.write_all(&chunk).await {
-                        let _ = audio_buffer.cleanup().await;
-                        return Err(anyhow::anyhow!("Failed to write buffered chunk: {e}"));
+                        error = Some(anyhow::anyhow!("Failed to write buffered chunk: {e}"));
+                        break;
                     }
                 }
 
-                if let Err(e) = writer.flush().await {
-                    let _ = audio_buffer.cleanup().await;
-                    return Err(anyhow::anyhow!("Failed to flush audio file: {e}"));
+                if error.is_none()
+                    && let Err(e) = writer.flush().await
+                {
+                    error = Some(anyhow::anyhow!("Failed to flush audio file: {e}"));
                 }
 
-                *file = Some(writer.into_inner());
-                *written_bytes = downloaded;
+                if let Some(e) = error {
+                    Err(e)
+                } else {
+                    *file = Some(writer.into_inner());
+                    *written_bytes = downloaded;
+                    Ok(())
+                }
             }
             AudioBuffer::Memory { .. } => {
+                let mut error: Option<anyhow::Error> = None;
                 while let Some(chunk_result) = stream.next().await {
                     let chunk = match chunk_result {
                         Ok(chunk) => chunk,
                         Err(e) => {
-                            let _ = audio_buffer.cleanup().await;
-                            return Err(anyhow::anyhow!("Download stream error: {e}"));
+                            error = Some(anyhow::anyhow!("Download stream error: {e}"));
+                            break;
                         }
                     };
                     downloaded = downloaded
@@ -163,20 +171,27 @@ pub(super) async fn download_and_send_music(
                         .ok_or_else(|| anyhow::anyhow!("Downloaded size overflow"))?;
 
                     if downloaded > max_audio_bytes {
-                        let _ = audio_buffer.cleanup().await;
-                        return Err(anyhow::anyhow!(
+                        error = Some(anyhow::anyhow!(
                             "File too large ({} bytes > {} MB limit)",
                             downloaded,
                             state.config.max_audio_file_mb
                         ));
+                        break;
                     }
 
                     if let Err(e) = audio_buffer.write_chunk(&chunk).await {
-                        let _ = audio_buffer.cleanup().await;
-                        return Err(e);
+                        error = Some(e);
+                        break;
                     }
                 }
+
+                if let Some(e) = error { Err(e) } else { Ok(()) }
             }
+        };
+
+        if let Err(e) = download_result {
+            let _ = audio_buffer.cleanup().await;
+            return Err(e);
         }
 
         if let Err(e) = audio_buffer.finish().await {
