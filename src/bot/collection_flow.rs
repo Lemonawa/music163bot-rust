@@ -250,6 +250,11 @@ pub(super) async fn download_cover_assets(
     perf_ctx: &PerfTraceContext,
 ) -> (Option<Bytes>, Option<ThumbnailBuffer>, bool) {
     let cover_download_start = std::time::Instant::now();
+    let max_cover_bytes = state
+        .config
+        .max_cover_file_mb
+        .saturating_mul(1024 * 1024)
+        .max(1);
     let result = if let Some(ref al) = song_detail.al {
         tracing::debug!("Album info found: id={}, name={}", al.id, al.name);
         if let Some(ref pic_url) = al.pic_url {
@@ -265,10 +270,24 @@ pub(super) async fn download_cover_assets(
                 );
 
                 if download_cover {
-                    match state.music_api.download_album_art_data(pic_url).await {
+                    let download_original =
+                        matches!(cover_mode, CoverMode::Original | CoverMode::Both);
+                    let download_result = if download_original {
+                        state
+                            .music_api
+                            .download_album_art_original(pic_url, max_cover_bytes)
+                            .await
+                    } else {
+                        state
+                            .music_api
+                            .download_album_art_data(pic_url, max_cover_bytes)
+                            .await
+                    };
+
+                    match download_result {
                         Err(e) => {
                             tracing::warn!(
-                                "Failed to download 320px album art for music_id {} after {} attempts: {}",
+                                "Failed to download album art for music_id {} after {} attempts: {}",
                                 song_id,
                                 crate::music_api::ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS,
                                 e
@@ -277,26 +296,51 @@ pub(super) async fn download_cover_assets(
                         }
                         Ok(data) => {
                             tracing::debug!(
-                                "Downloaded 320px album art for music_id {} ({} bytes)",
+                                "Downloaded album art for music_id {} ({} bytes, original={})",
                                 song_id,
-                                data.len()
+                                data.len(),
+                                download_original
                             );
 
                             let data = Bytes::from(data);
                             let thumbnail_buffer = if download_thumbnail {
-                                let thumb_filename = format!(
-                                    "thumb_{}_{}.jpg",
-                                    song_id,
-                                    chrono::Utc::now().timestamp()
-                                );
-                                ThumbnailBuffer::new(
-                                    &state.config,
-                                    data.clone(),
-                                    &state.config.cache_dir,
-                                    &thumb_filename,
-                                )
-                                .await
-                                .ok()
+                                let thumb_bytes = if download_original {
+                                    match state
+                                        .music_api
+                                        .build_thumbnail_from_bytes(data.clone().to_vec())
+                                        .await
+                                    {
+                                        Ok(bytes) => Bytes::from(bytes),
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Failed to resize album art for thumbnail (music_id {}): {}",
+                                                song_id,
+                                                e
+                                            );
+                                            Bytes::from(Vec::new())
+                                        }
+                                    }
+                                } else {
+                                    data.clone()
+                                };
+
+                                if thumb_bytes.is_empty() {
+                                    None
+                                } else {
+                                    let thumb_filename = format!(
+                                        "thumb_{}_{}.jpg",
+                                        song_id,
+                                        chrono::Utc::now().timestamp()
+                                    );
+                                    ThumbnailBuffer::new(
+                                        &state.config,
+                                        thumb_bytes,
+                                        &state.config.cache_dir,
+                                        &thumb_filename,
+                                    )
+                                    .await
+                                    .ok()
+                                }
                             } else {
                                 None
                             };

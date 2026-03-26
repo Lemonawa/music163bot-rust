@@ -1,3 +1,4 @@
+use futures_util::StreamExt;
 use serde::Serialize;
 
 use super::super::{
@@ -5,7 +6,7 @@ use super::super::{
     resize_album_art_to_thumbnail, rewrite_media_url,
 };
 use crate::error::BotError;
-use crate::utils::is_trusted_music_share_url;
+use crate::utils::{is_trusted_music_share_url, sanitize_sensitive_text};
 
 impl MusicApi {
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
@@ -171,16 +172,12 @@ impl MusicApi {
 
     /// Download and resize album art image into memory
     /// Uses spawn_blocking for CPU-intensive image processing to avoid blocking async runtime
-    pub async fn download_album_art_data(&self, pic_url: &str) -> Result<Vec<u8>> {
-        if pic_url.is_empty() {
-            return Err(BotError::MusicApi("Empty album art URL".to_string()));
-        }
-
+    pub async fn download_album_art_data(&self, pic_url: &str, max_bytes: u64) -> Result<Vec<u8>> {
         let total_attempts = Self::album_art_total_attempts();
         let mut last_error = None;
 
         for attempt in 1..=total_attempts {
-            match self.download_album_art_data_once(pic_url).await {
+            match self.download_album_art_data_once(pic_url, max_bytes).await {
                 Ok(data) => return Ok(data),
                 Err(e) => {
                     if attempt < total_attempts {
@@ -188,8 +185,8 @@ impl MusicApi {
                             "Album art download attempt {}/{} failed for {}: {}",
                             attempt,
                             total_attempts,
-                            crate::utils::sanitize_sensitive_text(pic_url),
-                            crate::utils::sanitize_sensitive_text(&e.to_string())
+                            sanitize_sensitive_text(pic_url),
+                            sanitize_sensitive_text(&e.to_string())
                         );
                     }
                     last_error = Some(e);
@@ -201,8 +198,55 @@ impl MusicApi {
             .unwrap_or_else(|| BotError::MusicApi("Album art download failed".to_string())))
     }
 
-    async fn download_album_art_data_once(&self, pic_url: &str) -> Result<Vec<u8>> {
+    pub async fn download_album_art_original(
+        &self,
+        pic_url: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>> {
+        if pic_url.is_empty() {
+            return Err(BotError::MusicApi("Empty album art URL".to_string()));
+        }
+
+        let total_attempts = Self::album_art_total_attempts();
+        let mut last_error = None;
+
+        for attempt in 1..=total_attempts {
+            match self.download_image_with_limit(pic_url, max_bytes).await {
+                Ok(data) => return Ok(data),
+                Err(e) => {
+                    if attempt < total_attempts {
+                        tracing::warn!(
+                            "Original album art download attempt {}/{} failed for {}: {}",
+                            attempt,
+                            total_attempts,
+                            sanitize_sensitive_text(pic_url),
+                            sanitize_sensitive_text(&e.to_string())
+                        );
+                    }
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        Err(last_error
+            .unwrap_or_else(|| BotError::MusicApi("Album art download failed".to_string())))
+    }
+
+    async fn download_album_art_data_once(&self, pic_url: &str, max_bytes: u64) -> Result<Vec<u8>> {
         // Download the image with common headers
+        let bytes = self.download_image_with_limit(pic_url, max_bytes).await?;
+
+        // Process image in spawn_blocking to avoid blocking async runtime
+        let processed = self.build_thumbnail_from_bytes(bytes).await?;
+
+        Ok(processed)
+    }
+
+    async fn download_image_with_limit(&self, pic_url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+        if pic_url.is_empty() {
+            return Err(BotError::MusicApi("Empty album art URL".to_string()));
+        }
+
         let request = self.client.get(pic_url);
         let request = Self::apply_image_download_headers(request);
 
@@ -214,14 +258,49 @@ impl MusicApi {
             )));
         }
 
-        let bytes = response.bytes().await?;
+        if let Some(len) = response.content_length() {
+            if len == 0 {
+                return Err(BotError::MusicApi("Album art is empty".to_string()));
+            }
+            if len > max_bytes {
+                return Err(BotError::MusicApi(format!(
+                    "Album art too large ({} bytes > {} MB limit)",
+                    len,
+                    max_bytes / (1024 * 1024)
+                )));
+            }
+        }
 
-        // Process image in spawn_blocking to avoid blocking async runtime
-        let processed = tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes))
+        let mut stream = response.bytes_stream();
+        let mut data = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let next_size = data
+                .len()
+                .checked_add(chunk.len())
+                .ok_or_else(|| BotError::MusicApi("Album art size overflow".to_string()))?;
+            if (next_size as u64) > max_bytes {
+                return Err(BotError::MusicApi(format!(
+                    "Album art too large (exceeded {} MB limit)",
+                    max_bytes / (1024 * 1024)
+                )));
+            }
+            data.extend_from_slice(&chunk);
+        }
+
+        if data.is_empty() {
+            return Err(BotError::MusicApi(
+                "Album art download returned empty body".to_string(),
+            ));
+        }
+
+        Ok(data)
+    }
+
+    pub(crate) async fn build_thumbnail_from_bytes(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
+        tokio::task::spawn_blocking(move || resize_album_art_to_thumbnail(&bytes))
             .await
-            .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))??;
-
-        Ok(processed)
+            .map_err(|e| BotError::MusicApi(format!("Image processing task failed: {e}")))?
     }
 
     fn build_audio_download_request(&self, url: &str) -> reqwest::RequestBuilder {

@@ -140,6 +140,10 @@ pub(super) async fn handle_status_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
+    let Some(_user_id) = authorize_admin_command(bot, msg, &state.config, "status").await? else {
+        return Ok(());
+    };
+
     let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
     let chat_id = msg.chat.id.0;
 

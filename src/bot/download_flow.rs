@@ -69,44 +69,64 @@ pub(super) async fn download_and_send_music(
         if content_length == Some(0) {
             return Err(anyhow::anyhow!("Empty file or unable to get file size"));
         }
+        let max_audio_bytes = state
+            .config
+            .max_audio_file_mb
+            .saturating_mul(1024 * 1024)
+            .max(1);
+        if let Some(len) = content_length && len > max_audio_bytes {
+            return Err(anyhow::anyhow!(
+                "File too large ({} bytes > {} MB limit)",
+                len,
+                state.config.max_audio_file_mb
+            ));
+        }
 
         // Create audio buffer based on storage mode configuration
         let mut audio_buffer = AudioBuffer::new(
             &state.config,
-            content_length.unwrap_or(0),
+            content_length.unwrap_or(max_audio_bytes),
             filename.clone(),
             &state.config.cache_dir,
         )
         .await?;
 
         let mut stream = response.bytes_stream();
-        let downloaded = if audio_buffer.is_disk() {
-            let chunk_bytes = download_chunk_bytes(&state.config);
-            let stream = stream.map_err(std::io::Error::other);
-            let mut reader =
-                tokio::io::BufReader::with_capacity(chunk_bytes, StreamReader::new(stream));
-            let file = audio_buffer
-                .disk_file_mut()
-                .ok_or_else(|| anyhow::anyhow!("Disk buffer missing file handle"))?;
-            let mut writer = tokio::io::BufWriter::with_capacity(chunk_bytes, file);
-            let downloaded = tokio::io::copy_buf(&mut reader, &mut writer)
-                .await
-                .context("Failed to stream download to disk")?;
-            tokio::io::AsyncWriteExt::flush(&mut writer)
-                .await
-                .context("Failed to flush disk writer")?;
-            downloaded
-        } else {
-            let mut downloaded = 0u64;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                downloaded += chunk.len() as u64;
+        let mut downloaded = 0u64;
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = match chunk_result {
+                Ok(chunk) => chunk,
+                Err(e) => {
+                    let _ = audio_buffer.cleanup().await;
+                    return Err(anyhow::anyhow!("Download stream error: {e}"));
+                }
+            };
+            downloaded = downloaded
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| anyhow::anyhow!("Downloaded size overflow"))?;
 
-                audio_buffer.write_chunk(&chunk).await?;
+            if downloaded > max_audio_bytes {
+                let _ = audio_buffer.cleanup().await;
+                return Err(anyhow::anyhow!(
+                    "File too large ({} bytes > {} MB limit)",
+                    downloaded,
+                    state.config.max_audio_file_mb
+                ));
             }
-            downloaded
-        };
-        audio_buffer.finish().await?;
+
+            if let Err(e) = audio_buffer.write_chunk(&chunk).await {
+                let _ = audio_buffer.cleanup().await;
+                return Err(e);
+            }
+        }
+
+        if let AudioBuffer::Disk { written_bytes, .. } = &mut audio_buffer {
+            *written_bytes = downloaded;
+        }
+        if let Err(e) = audio_buffer.finish().await {
+            let _ = audio_buffer.cleanup().await;
+            return Err(e);
+        }
         let download_duration = download_start.elapsed();
         let download_mbps = throughput_mbps(downloaded, download_duration);
         state
@@ -125,7 +145,13 @@ pub(super) async fn download_and_send_music(
 
     let (downloaded_result, (cover_artwork_data, thumbnail_buffer, cover_retry_exhausted)) =
         tokio::join!(audio_future, artwork_future);
-    let (mut audio_buffer, downloaded) = downloaded_result?;
+    let (mut audio_buffer, downloaded) = match downloaded_result {
+        Ok(result) => result,
+        Err(e) => {
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e.into());
+        }
+    };
     let should_remove_song_cache =
         should_remove_song_cache_after_partial_failure(cover_retry_exhausted);
 
@@ -209,8 +235,21 @@ pub(super) async fn download_and_send_music(
     };
 
     let (tag_result, upload_client_result) = tokio::join!(tag_future, upload_client_future);
-    audio_buffer = tag_result?;
-    let (_upload_bot, raw_client, api_base_url) = upload_client_result?;
+    audio_buffer = match tag_result {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e);
+        }
+    };
+    let (_upload_bot, raw_client, api_base_url) = match upload_client_result {
+        Ok(ok) => ok,
+        Err(e) => {
+            cleanup_audio_buffer(audio_buffer).await;
+            cleanup_thumbnail_buffer(thumbnail_buffer).await;
+            return Err(e);
+        }
+    };
 
     // Get file size for database and logging
     let file_size = audio_buffer.size().await;

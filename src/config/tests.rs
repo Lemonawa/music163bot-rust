@@ -38,6 +38,8 @@ fn max_batch_download_tracks_has_default() {
 fn memory_max_file_has_default() {
     let config = Config::default();
     assert_eq!(config.memory_max_file_mb, 100);
+    assert_eq!(config.max_audio_file_mb, 200);
+    assert_eq!(config.max_cover_file_mb, 15);
 }
 
 #[test]
@@ -68,6 +70,8 @@ fn invalid_numeric_config_keeps_defaults() {
     let default_config = Config::default();
     let content = "bot.token=token\n\
 download.memory_max_file_mb=not-a-number\n\
+download.max_audio_file_mb=nan\n\
+download.max_cover_file_mb=nan\n\
 maintenance.memory_release_interval_requests=bad\n\
 maintenance.db_analyze_interval_requests=bad\n";
 
@@ -82,6 +86,8 @@ maintenance.db_analyze_interval_requests=bad\n";
         loaded.db_analyze_interval_requests,
         default_config.db_analyze_interval_requests
     );
+    assert_eq!(loaded.max_audio_file_mb, default_config.max_audio_file_mb);
+    assert_eq!(loaded.max_cover_file_mb, default_config.max_cover_file_mb);
 }
 
 #[test]
@@ -104,6 +110,18 @@ download.max_batch_tracks=42\n";
     let loaded = load_temp_config("batch_limit", content);
 
     assert_eq!(loaded.max_batch_download_tracks, 42);
+}
+
+#[test]
+fn download_size_limits_parse() {
+    let content = "bot.token=token\n\
+download.max_audio_file_mb=256\n\
+download.max_cover_file_mb=8\n";
+
+    let loaded = load_temp_config("download_limits", content);
+
+    assert_eq!(loaded.max_audio_file_mb, 256);
+    assert_eq!(loaded.max_cover_file_mb, 8);
 }
 
 #[test]

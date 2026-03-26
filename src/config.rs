@@ -133,6 +133,10 @@ pub struct Config {
     pub memory_buffer_mb: u64,
     /// Maximum file size in MB allowed for memory mode (larger files use disk)
     pub memory_max_file_mb: u64,
+    /// Maximum audio file size in MB allowed for any download (hard limit)
+    pub max_audio_file_mb: u64,
+    /// Maximum cover/thumbnail size in MB allowed for any download (hard limit)
+    pub max_cover_file_mb: u64,
     /// Maximum concurrent downloads (lower = less memory, higher = more throughput)
     pub max_concurrent_downloads: u32,
     /// Maximum tracks allowed for a single playlist/album download request
@@ -185,6 +189,8 @@ impl Default for Config {
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
             memory_max_file_mb: 100,
+            max_audio_file_mb: 200,
+            max_cover_file_mb: 15,
             // Balanced default: slightly higher throughput than 3 with moderate memory growth.
             max_concurrent_downloads: 4,
             max_batch_download_tracks: 20,

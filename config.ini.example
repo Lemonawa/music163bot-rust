@@ -43,11 +43,15 @@ dir = ./downloads
 storage_mode = disk
 
 # 封面模式
-# - thumbnail: 默认，仅下载 320x320 缩略图；嵌入封面始终为 320x320 JPEG (Telegram 规范)
-# - original: 兼容项，当前与 thumbnail 一致，不再下载原始分辨率
-# - both: 兼容项，当前与 thumbnail 一致，不再下载原始分辨率
-# 备注: 未来可能扩展高分辨率嵌入，但当前始终为 320x320 JPEG
+# - thumbnail: 默认，仅下载 320x320 缩略图并嵌入
+# - original: 下载原始封面用于嵌入，不生成缩略图
+# - both: 下载原始封面用于嵌入，同时生成 320x320 缩略图发送给 Telegram
 cover_mode = thumbnail
+
+# 全局下载体积上限（单位 MB）
+# 超过该值的音频/封面会被拒绝，防止耗尽磁盘或内存
+max_audio_file_mb = 200
+max_cover_file_mb = 15
 
 # 混合模式阈值 (MB)，文件大于此值使用磁盘模式
 memory_threshold = 100

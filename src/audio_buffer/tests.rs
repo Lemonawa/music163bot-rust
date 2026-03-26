@@ -160,7 +160,47 @@ fn test_find_mp3_audio_start() {
     mp3_data.extend_from_slice(b"\xFF\xFB"); // MP3 sync word
 
     let result = AudioBuffer::find_mp3_audio_start(&mp3_data);
-    assert_eq!(result, 10); // 10 byte header
+    assert_eq!(result.expect("audio start"), 10); // 10 byte header
+}
+
+#[test]
+fn mp3_audio_start_rejects_oversized_tag() {
+    // Declare an absurdly large ID3 tag that exceeds the buffer
+    let mut mp3_data = b"ID3".to_vec();
+    mp3_data.extend_from_slice(&[0x04, 0x00]); // Version 2.4.0
+    mp3_data.push(0x00); // Flags
+    mp3_data.extend_from_slice(&[0x7F, 0x7F, 0x7F, 0x7F]); // Max syncsafe size
+    mp3_data.extend_from_slice(b"\xFF\xFB"); // MP3 sync word (minimal payload)
+
+    let result = AudioBuffer::find_mp3_audio_start(&mp3_data);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn disk_written_bytes_refresh_after_tagging() {
+    let temp_name = format!(
+        "music163bot_tag_refresh_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let cache_dir = std::env::temp_dir();
+    let mut buffer = AudioBuffer::new_disk(temp_name, cache_dir.to_str().unwrap())
+        .await
+        .expect("create disk buffer");
+
+    buffer
+        .write_chunk(b"\xFF\xFB\x00\x00\x00\x00")
+        .await
+        .expect("write initial bytes");
+    buffer.finish().await.expect("flush disk buffer");
+
+    let before = buffer.size_fast();
+    buffer
+        .add_id3_tags(&sample_song_detail(), None)
+        .expect("tagging should succeed");
+    let after = buffer.size_fast();
+
+    assert!(after > before, "tagging should update written_bytes");
+    buffer.cleanup().await.expect("cleanup disk buffer");
 }
 
 #[tokio::test]

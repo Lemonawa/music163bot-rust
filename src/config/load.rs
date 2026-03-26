@@ -139,6 +139,14 @@ impl Config {
             config.memory_max_file_mb =
                 parse_field(v, config.memory_max_file_mb, "download.memory_max_file_mb");
         }
+        if let Some(v) = config_map.get("download.max_audio_file_mb") {
+            config.max_audio_file_mb =
+                parse_field(v, config.max_audio_file_mb, "download.max_audio_file_mb");
+        }
+        if let Some(v) = config_map.get("download.max_cover_file_mb") {
+            config.max_cover_file_mb =
+                parse_field(v, config.max_cover_file_mb, "download.max_cover_file_mb");
+        }
         if let Some(v) = config_map.get("download.max_concurrent") {
             config.max_concurrent_downloads = parse_field(
                 v,

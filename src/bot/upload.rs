@@ -17,7 +17,7 @@ pub(super) async fn apply_tags_in_blocking(
 
         match file_ext.as_str() {
             "mp3" => {
-                let cover_label = if embed_cover { "320" } else { "none" };
+                let cover_label = if embed_cover { "provided" } else { "none" };
                 tracing::debug!("Adding ID3 tags to MP3 (cover: {})", cover_label);
                 match audio_buffer.add_id3_tags(&song_detail, embed_artwork) {
                     Ok(()) => tracing::debug!("MP3 tags added successfully"),
@@ -25,7 +25,7 @@ pub(super) async fn apply_tags_in_blocking(
                 }
             }
             "flac" => {
-                let cover_label = if embed_cover { "320" } else { "none" };
+                let cover_label = if embed_cover { "provided" } else { "none" };
                 tracing::debug!("Adding FLAC metadata (cover: {})", cover_label);
                 match audio_buffer.add_flac_metadata(&song_detail, embed_artwork) {
                     Ok(()) => tracing::debug!("FLAC metadata added successfully"),
@@ -486,6 +486,7 @@ pub(super) fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
 }
 
+#[allow(dead_code)]
 pub(super) fn download_chunk_bytes(config: &Config) -> usize {
     config
         .download_chunk_size_kb

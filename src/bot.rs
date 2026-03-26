@@ -4,10 +4,9 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
-use anyhow::Context;
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::StreamExt;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
@@ -18,7 +17,6 @@ use teloxide::types::{
     ReplyParameters,
 };
 use tokio::sync::{Mutex, Notify};
-use tokio_util::io::{ReaderStream, StreamReader};
 
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode};
@@ -78,12 +76,12 @@ use upload::{
     UploadBotBundle, UploadFileTarget, acquire_download_leader, append_search_result_line,
     apply_tags_in_blocking, cached_music_link_target, classify_message_task, cleanup_audio_buffer,
     cleanup_thumbnail_buffer, clearallcache_confirmation_prompt, collect_maintenance_signals,
-    create_music_keyboard_for_target, delete_status_message_resilient, download_chunk_bytes,
-    edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit, get_upload_bot,
-    is_clearallcache_confirm, is_official_telegram_api, join_futures, log_perf, maintenance_worker,
-    message_task_limit, parse_api_url, require_command_args_or_reply, resource_availability_status,
-    rmcache_usage_prompt, select_local_upload_target, send_reply_html, send_reply_message,
-    send_reply_text, should_log_command, should_refresh_upload_client,
+    create_music_keyboard_for_target, delete_status_message_resilient, edit_status_message_resilient,
+    ensure_admin, exceeds_batch_download_limit, get_upload_bot, is_clearallcache_confirm,
+    is_official_telegram_api, join_futures, log_perf, maintenance_worker, message_task_limit,
+    parse_api_url, require_command_args_or_reply, resource_availability_status, rmcache_usage_prompt,
+    select_local_upload_target, send_reply_html, send_reply_message, send_reply_text,
+    should_log_command, should_refresh_upload_client,
     should_remove_song_cache_after_partial_failure, should_set_upload_pool_idle_timeout,
     should_spawn_message_task, upload_task_limit, url_bitrate_candidates,
 };
@@ -111,8 +109,8 @@ use target_resolution::ParsedMusicTarget;
 use telegram_api::{parse_telegram_api_response, redact_bot_token_in_error_message};
 #[cfg(test)]
 use upload::{
-    build_music_url, build_program_url, format_perf, is_command_text, is_spawnable_command_text,
-    maybe_local_file_uri,
+    build_music_url, build_program_url, download_chunk_bytes, format_perf, is_command_text,
+    is_spawnable_command_text, maybe_local_file_uri,
 };
 #[cfg(test)]
 use wiring::{
