@@ -44,9 +44,8 @@ storage_mode = disk
 
 # 封面模式
 # - thumbnail: 默认，仅下载 320x320 缩略图；嵌入封面始终为 320x320 JPEG (Telegram 规范)
-# - original: 兼容项，当前与 thumbnail 一致，不再下载原始分辨率
-# - both: 兼容项，当前与 thumbnail 一致，不再下载原始分辨率
-# 备注: 未来可能扩展高分辨率嵌入，但当前始终为 320x320 JPEG
+# - original: 下载并嵌入原始高分辨率封面
+# - both: 嵌入高分辨率封面，同时生成 320x320 缩略图用于 Telegram 预览
 cover_mode = thumbnail
 
 # 混合模式阈值 (MB)，文件大于此值使用磁盘模式

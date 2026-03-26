@@ -56,7 +56,7 @@ cargo build --release
     - 可选：在 `[music]` 部分设置 `music_u` cookie 来访问付费歌曲。
     - 调整 `cache_dir` 和 `database` 路径。
     - （v1.1.0+）在 `[download]` 部分配置存储模式（推荐 `disk`）。
-    - 在 `[download]` 部分配置 `cover_mode`（默认 `thumbnail`，嵌入封面固定 320x320 JPEG；`original/both` 仅保留兼容，不再下载原始分辨率）。
+    - 在 `[download]` 部分配置 `cover_mode`（默认 `thumbnail`；`original` 嵌入高分辨率；`both` 兼顾高分辨率和预览）。
     - 在 `[download]` 部分配置 `max_batch_tracks`（默认 20，超出时拒绝整单歌单/专辑下载）。
     - （v1.1.14+）可在 `[upload]` 调整 `client_reuse_requests`（`0` 表示不按请求次数刷新）。
 
@@ -109,7 +109,7 @@ pool_idle_timeout_secs = 300
 
 - 内嵌封面固定为 320x320 JPEG（符合 Telegram 封面规范）。
 - `cover_mode=thumbnail` 使用 320x320 缩略图。
-- `cover_mode=original/both` 仅保留兼容，当前与 `thumbnail` 行为一致，不再下载原始分辨率。
+- `cover_mode=original` 嵌入高清晰度原始封面；`cover_mode=both` 会额外生成一个320x320缩略图以支持 Telegram 封面预览。
 
 ### 运行
 
@@ -131,7 +131,7 @@ music - 下载/分享网易云音乐 (支持搜索关键词或 ID)
 netease - 下载/分享网易云音乐 (等同于 /music)
 search - 搜索网易云音乐
 lyric - 获取歌曲歌词
-status - 查看机器人运行状态和缓存信息
+status - 查看机器人运行状态和缓存信息（仅管理员）
 about - 关于机器人
 rmcache - [管理员] 清理指定音乐的缓存
 clearallcache - [管理员] 清除所有缓存 (需确认)

@@ -21,7 +21,7 @@ pub(super) async fn handle_help_command(
         4️⃣ <b>获取歌词</b>\n\
         使用 <code>/lyric &lt;关键词或ID&gt;</code> 获取歌词。\n\n\
         5️⃣ <b>更多命令</b>\n\
-        • <code>/status</code> - 查看系统状态\n\
+        • <code>/status</code> - 查看系统状态（仅管理员）\n\
         • <code>/about</code> - 关于机器人\n\n\
         💬 <b>项目主页：</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">GitHub</a>",
         state.bot_username
