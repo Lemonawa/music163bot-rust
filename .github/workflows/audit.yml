@@ -4,17 +4,19 @@ on:
   push:
     paths:
       - 'Cargo.lock'
+      - '.cargo/audit.toml'
+      - '.github/workflows/audit.yml'
   pull_request:
     paths:
       - 'Cargo.lock'
+      - '.cargo/audit.toml'
+      - '.github/workflows/audit.yml'
   schedule:
     - cron: '0 0 * * *' # Run daily at midnight
   workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
 
 jobs:
   audit:

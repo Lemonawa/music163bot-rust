@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+  # This advisory is reported through `sqlx-mysql` -> `rsa`, but this project
+  # only enables SQLite features in `sqlx` (no MySQL code path is compiled).
+  "RUSTSEC-2023-0071",
+]
