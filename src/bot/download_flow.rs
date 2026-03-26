@@ -100,9 +100,11 @@ pub(super) async fn download_and_send_music(
             let downloaded = tokio::io::copy_buf(&mut limited_reader, &mut writer)
                 .await
                 .context("Failed to stream download to disk")?;
-            
+
             if downloaded > max_download_size {
-                return Err(anyhow::anyhow!("Download exceeds maximum allowed size ({} bytes)", max_download_size));
+                return Err(anyhow::anyhow!(
+                    "Download exceeds maximum allowed size ({max_download_size} bytes)"
+                ));
             }
 
             tokio::io::AsyncWriteExt::flush(&mut writer)
@@ -116,7 +118,9 @@ pub(super) async fn download_and_send_music(
                 downloaded += chunk.len() as u64;
 
                 if downloaded > max_download_size {
-                    return Err(anyhow::anyhow!("Download exceeds maximum allowed size ({} bytes)", max_download_size));
+                    return Err(anyhow::anyhow!(
+                        "Download exceeds maximum allowed size ({max_download_size} bytes)"
+                    ));
                 }
 
                 audio_buffer.write_chunk(&chunk).await?;
@@ -233,12 +237,12 @@ pub(super) async fn download_and_send_music(
     };
 
     let (tag_result, upload_client_result) = tokio::join!(tag_future, upload_client_future);
-    
+
     audio_buffer = match tag_result {
         Ok(buf) => buf,
         Err(e) => {
             cleanup_thumbnail_buffer(thumbnail_buffer).await;
-            return Err(e.into());
+            return Err(e);
         }
     };
 
@@ -247,10 +251,9 @@ pub(super) async fn download_and_send_music(
         Err(e) => {
             cleanup_audio_buffer(audio_buffer).await;
             cleanup_thumbnail_buffer(thumbnail_buffer).await;
-            return Err(e.into());
+            return Err(e);
         }
     };
-
 
     // Get file size for database and logging
     let file_size = audio_buffer.size().await;
@@ -352,14 +355,15 @@ pub(super) async fn download_and_send_music(
     // Acquire the upload permit only when we are ready to send bytes to Telegram.
     // This keeps slow downloads/tagging from occupying the upload lane.
     let upload_permit_wait_start = std::time::Instant::now();
-    let _upload_permit = match acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await {
-        Ok(permit) => permit,
-        Err(e) => {
-            cleanup_audio_buffer(audio_buffer).await;
-            cleanup_thumbnail_buffer(thumbnail_buffer).await;
-            return Err(e.into());
-        }
-    };
+    let _upload_permit =
+        match acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await {
+            Ok(permit) => permit,
+            Err(e) => {
+                cleanup_audio_buffer(audio_buffer).await;
+                cleanup_thumbnail_buffer(thumbnail_buffer).await;
+                return Err(e);
+            }
+        };
     perf_ctx.log_stage(
         PERF_STAGE_UPLOAD_PERMIT_WAIT,
         upload_permit_wait_start.elapsed(),

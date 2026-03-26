@@ -62,7 +62,7 @@ impl AudioBuffer {
 
     fn build_id3_tag(song_detail: &SongDetail, artwork_data: Option<&[u8]>) -> id3::Tag {
         use crate::music_api::format_artists;
-        use id3::{frame, Tag, TagLike};
+        use id3::{Tag, TagLike, frame};
 
         let mut tag = Tag::new();
 
