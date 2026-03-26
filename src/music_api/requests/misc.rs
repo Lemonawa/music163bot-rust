@@ -270,8 +270,11 @@ impl MusicApi {
                 )));
             }
             let reserve_len = std::cmp::min(len, max_bytes);
-            let capacity = usize::try_from(reserve_len).unwrap_or(usize::MAX);
-            Vec::with_capacity(capacity)
+            if let Ok(capacity) = usize::try_from(reserve_len) {
+                Vec::with_capacity(capacity)
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         };

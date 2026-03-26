@@ -250,11 +250,8 @@ pub(super) async fn download_cover_assets(
     perf_ctx: &PerfTraceContext,
 ) -> (Option<Bytes>, Option<ThumbnailBuffer>, bool) {
     let cover_download_start = std::time::Instant::now();
-    let max_cover_bytes = state
-        .config
-        .max_cover_file_mb
-        .saturating_mul(1024 * 1024)
-        .max(1);
+    let max_cover_mb = state.config.max_cover_file_mb.max(1);
+    let max_cover_bytes = max_cover_mb.saturating_mul(1024 * 1024);
     let result = if let Some(ref al) = song_detail.al {
         tracing::debug!("Album info found: id={}, name={}", al.id, al.name);
         if let Some(ref pic_url) = al.pic_url {

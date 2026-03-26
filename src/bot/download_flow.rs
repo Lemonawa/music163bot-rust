@@ -90,11 +90,13 @@ pub(super) async fn download_and_send_music(
         .await?;
 
         let mut stream = response.bytes_stream();
+        let max_chunk_bytes: usize = 16 * 1024 * 1024;
         let chunk_bytes = state
             .config
             .download_chunk_size_kb
             .saturating_mul(1024)
-            .max(64 * 1024);
+            .max(64 * 1024)
+            .min(max_chunk_bytes);
         let mut downloaded = 0u64;
         let download_result: anyhow::Result<()> = match &mut audio_buffer {
             AudioBuffer::Disk {
