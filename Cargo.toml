@@ -37,7 +37,7 @@ md5 = "0.8"
 uuid = { version = "1.0", features = ["v4"] }
 
 # Crypto for eapi search
-cipher = "0.4"
+cipher = "0.5"
 aes = "0.8"
 ecb = "0.1"
 hex = "0.4"
