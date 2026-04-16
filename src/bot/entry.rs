@@ -176,7 +176,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
                     .use_rustls_tls()
                     .user_agent("Go-http-client/2.0")
                     .pool_max_idle_per_host(2)
-                    .pool_idle_timeout(std::time::Duration::from_secs(60))
+                    .pool_idle_timeout(std::time::Duration::from_mins(1))
                     .timeout(std::time::Duration::from_secs(30))
                     .no_gzip();
                 let client = build_http_client(client_builder)?;
@@ -235,7 +235,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         let client_builder = reqwest::Client::builder()
             .use_rustls_tls()
             .pool_max_idle_per_host(2)
-            .pool_idle_timeout(std::time::Duration::from_secs(60))
+            .pool_idle_timeout(std::time::Duration::from_mins(1))
             .timeout(std::time::Duration::from_secs(30));
         let client = build_http_client(client_builder)?;
         Bot::with_client(&config.bot_token, client)
