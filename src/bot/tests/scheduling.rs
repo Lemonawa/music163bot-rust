@@ -102,7 +102,7 @@ fn batch_download_limit_rejects_only_when_over_limit() {
 #[test]
 fn maintenance_scheduler_emits_expected_signals() {
     let counters = super::MaintenanceCounters::new();
-    let mut config = crate::config::Config::default();
+    let mut config = Config::default();
     config.db_analyze_interval_requests = 2;
     config.memory_release_interval_requests = 3;
 
@@ -118,7 +118,7 @@ fn maintenance_scheduler_emits_expected_signals() {
 #[test]
 fn maintenance_scheduler_emits_cache_prune_signal_on_interval() {
     let counters = super::MaintenanceCounters::new();
-    let mut config = crate::config::Config::default();
+    let mut config = Config::default();
     config.db_analyze_interval_requests = 0;
     config.memory_release_interval_requests = 0;
 
@@ -165,7 +165,7 @@ fn upload_limit_clamps_bounds() {
 
 #[test]
 fn collection_retry_delay_seconds_retries_first_rate_limit_once() {
-    let err = crate::error::BotError::Other(anyhow::anyhow!("Retry after 26s"));
+    let err = BotError::Other(anyhow::anyhow!("Retry after 26s"));
 
     assert_eq!(super::collection_retry_delay_seconds(&err, 0), Some(27));
     assert_eq!(super::collection_retry_delay_seconds(&err, 1), None);
@@ -173,7 +173,7 @@ fn collection_retry_delay_seconds_retries_first_rate_limit_once() {
 
 #[test]
 fn collection_retry_delay_seconds_ignores_non_rate_limit_errors() {
-    let err = crate::error::BotError::Other(anyhow::anyhow!("ordinary upload failure"));
+    let err = BotError::Other(anyhow::anyhow!("ordinary upload failure"));
 
     assert_eq!(super::collection_retry_delay_seconds(&err, 0), None);
 }
@@ -208,9 +208,7 @@ fn upload_client_refresh_decision_works() {
 #[tokio::test]
 async fn upload_prewarm_failure_is_non_fatal() {
     let ok = super::run_upload_prewarm(|| async {
-        Err::<(), crate::error::BotError>(crate::error::BotError::MusicApi(
-            "simulated prewarm failure".to_string(),
-        ))
+        Err::<(), BotError>(BotError::MusicApi("simulated prewarm failure".to_string()))
     })
     .await;
 
@@ -219,7 +217,7 @@ async fn upload_prewarm_failure_is_non_fatal() {
 
 #[tokio::test]
 async fn upload_prewarm_runs_warmup_path() {
-    let ok = super::run_upload_prewarm(|| async { Ok::<(), crate::error::BotError>(()) }).await;
+    let ok = super::run_upload_prewarm(|| async { Ok::<(), BotError>(()) }).await;
 
     assert!(ok);
 }

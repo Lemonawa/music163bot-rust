@@ -49,11 +49,10 @@ pub enum MusicCollectionTarget {
     DjRadio(u64),
 }
 
-/// Build a reqwest HTTP client from a builder, logging and mapping errors on failure.
+/// Build a reqwest HTTP client from a builder, mapping errors on failure.
 pub fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
     builder.build().map_err(|e| {
         let sanitized = sanitize_sensitive_text(&e.to_string());
-        tracing::error!("Failed to build HTTP client: {}", sanitized);
         BotError::HttpClientBuild(sanitized)
     })
 }
@@ -83,7 +82,6 @@ pub fn extract_retry_after_seconds(text: &str) -> Option<u64> {
     captures.get(1)?.as_str().parse::<u64>().ok()
 }
 
-/// Global regex patterns for URL parsing
 static SONG_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"music\.163\.com/.*?song.*?[?&]id=(\d+)").expect("song id regex should be valid")
 });
@@ -182,7 +180,6 @@ fn parse_music_collection_target_from_url(url: &str) -> Option<MusicCollectionTa
         })
 }
 
-/// Extract music ID from text
 pub fn parse_music_id(text: &str) -> Option<u64> {
     if let Some(id) = parse_direct_numeric_id(text) {
         return Some(id);
@@ -192,14 +189,12 @@ pub fn parse_music_id(text: &str) -> Option<u64> {
         return Some(id);
     }
 
-    // Try to extract from URL
     if let Some(captures) = SONG_REGEX.captures(text)
         && let Some(id_str) = captures.get(1)
     {
         return id_str.as_str().parse().ok();
     }
 
-    // Try to extract from share link
     if let Some(url_match) = SHARE_LINK_REGEX.find(text) {
         return parse_music_id_from_share_url(url_match.as_str());
     }
@@ -227,13 +222,6 @@ pub fn parse_music_collection_target(text: &str) -> Option<MusicCollectionTarget
     SHARE_LINK_REGEX
         .find(text)
         .and_then(|url_match| parse_music_collection_target_from_url(url_match.as_str()))
-}
-
-/// Extract the first URL from text
-pub fn extract_first_url(text: &str) -> Option<String> {
-    SHARE_LINK_REGEX
-        .find(text)
-        .map(|matched| matched.as_str().to_string())
 }
 
 /// Extract the first trusted NetEase share URL from text.
@@ -265,7 +253,6 @@ pub fn is_trusted_music_share_url(url: &str) -> bool {
         || host.ends_with(".163cn.link")
 }
 
-/// Check if directory exists, create if not
 pub fn ensure_dir(path: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(Path::new(path))
 }
@@ -291,53 +278,6 @@ pub fn clean_filename(name: &str) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-/// Calculate MD5 hash of a file
-pub fn verify_md5(file_path: &str, expected_md5: &str) -> anyhow::Result<bool> {
-    use std::fs::File;
-    use std::io::{BufReader, Read};
-
-    let file = File::open(file_path)?;
-    let mut reader = BufReader::new(file);
-    let mut hasher = md5::Context::new();
-    let mut buffer = vec![0; 65536];
-
-    loop {
-        let count = reader.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.consume(&buffer[..count]);
-    }
-
-    let result = hasher.finalize();
-    let hash = format!("{result:x}");
-
-    Ok(hash.eq_ignore_ascii_case(expected_md5))
-}
-
-/// Format file size in human readable format
-#[must_use]
-pub fn format_file_size(size: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
-    let mut size = size as f64;
-    let mut unit_index = 0;
-
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-
-    format!("{:.2} {}", size, UNITS[unit_index])
-}
-
-/// Format duration in human readable format
-#[must_use]
-pub fn format_duration(seconds: u64) -> String {
-    let minutes = seconds / 60;
-    let seconds = seconds % 60;
-    format!("{minutes:02}:{seconds:02}")
 }
 
 #[must_use]

@@ -20,7 +20,6 @@ static SYSTEM: LazyLock<Mutex<(System, StdInstant)>> = LazyLock::new(|| {
 const MEMORY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl AudioBuffer {
-    /// Create a new audio buffer based on configuration and file characteristics.
     pub async fn new(
         config: &Config,
         content_length: u64,
@@ -78,7 +77,6 @@ impl AudioBuffer {
         })
     }
 
-    /// Determine if memory mode should be used based on configuration and system state.
     fn should_use_memory(config: &Config, content_length: u64) -> bool {
         match config.storage_mode {
             StorageMode::Disk => false,

@@ -7,6 +7,12 @@ use tokio::time::Duration;
 
 use super::SongUrl;
 use super::shared;
+use crate::error::BotError;
+
+/// Construct the standard "API returned non-200 code" error.
+pub(super) fn api_code_error(code: i32) -> BotError {
+    BotError::MusicApi(format!("API returned code {code}"))
+}
 
 pub(super) fn fallback_bitrate_candidates(
     bitrate_candidates: &[u64],

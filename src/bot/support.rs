@@ -144,7 +144,7 @@ pub(super) async fn handle_status_command(
         return Ok(());
     }
 
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(-1, |u| u.id.0 as i64);
     let chat_id = msg.chat.id.0;
 
     let (total_count, user_count, chat_count) = state
@@ -297,7 +297,7 @@ pub(super) async fn ensure_admin_user_id(
     msg: &Message,
     config: &Config,
 ) -> ResponseResult<Option<i64>> {
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(-1, |u| u.id.0 as i64);
     if ensure_admin(bot, msg, config).await? {
         Ok(Some(user_id))
     } else {

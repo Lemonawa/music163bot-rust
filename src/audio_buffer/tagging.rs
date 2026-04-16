@@ -30,16 +30,12 @@ impl AudioBuffer {
                     .unwrap_or(0);
             }
             Self::Memory { data, .. } => {
-                // Memory mode: create new tag and prepend to audio data
                 let mut tag_buffer = Vec::new();
                 tag.write_to(&mut tag_buffer, Version::Id3v24)
                     .context("Failed to write ID3 tags to memory")?;
 
-                // For MP3: ID3v2 tag goes at the beginning
-                // Check if data already starts with ID3
                 let has_existing_id3 = data.len() >= 3 && &data[0..3] == b"ID3";
                 if has_existing_id3 {
-                    // Skip existing ID3 tag and replace with new one
                     let audio_start = Self::find_mp3_audio_start(data);
                     // Use a single reallocation approach
                     let mut new_data =
@@ -48,7 +44,6 @@ impl AudioBuffer {
                     new_data.extend_from_slice(&data[audio_start..]);
                     *data = new_data;
                 } else {
-                    // No existing ID3, just prepend - use single allocation
                     let mut new_data = Vec::with_capacity(tag_buffer.len() + data.len());
                     new_data.extend_from_slice(&tag_buffer);
                     new_data.extend_from_slice(data);
@@ -91,7 +86,7 @@ impl AudioBuffer {
     /// Find the start of MP3 audio data (after ID3v2 tag)
     pub(super) fn find_mp3_audio_start(data: &[u8]) -> usize {
         if data.len() < 10 || &data[0..3] != b"ID3" {
-            return 0; // No ID3 tag
+            return 0;
         }
 
         // ID3v2 header: "ID3" + version (2 bytes) + flags (1 byte) + size (4 bytes syncsafe)
@@ -116,7 +111,6 @@ impl AudioBuffer {
                 written_bytes,
                 ..
             } => {
-                // Disk mode: use metaflac directly
                 Self::add_flac_metadata_disk(path.as_path(), song_detail, artwork_data)?;
                 *written_bytes = std::fs::metadata(path.as_path())
                     .map(|m| m.len())
@@ -124,7 +118,6 @@ impl AudioBuffer {
                 Ok(())
             }
             Self::Memory { data, .. } => {
-                // Memory mode: parse and rebuild FLAC in memory
                 Self::add_flac_metadata_memory(data, song_detail, artwork_data)
             }
         }
@@ -165,12 +158,9 @@ impl AudioBuffer {
     ) -> Result<()> {
         use metaflac::Tag;
 
-        // 1. Find where audio data starts
         let audio_start = Self::find_flac_audio_start(data)?;
-        // Clone only the audio portion we need
         let audio_data = &data[audio_start..];
 
-        // 2. Read existing metadata
         let mut cursor = Cursor::new(&data[..]);
         let mut tag = match Tag::read_from(&mut cursor) {
             Ok(tag) => tag,
@@ -182,7 +172,6 @@ impl AudioBuffer {
 
         Self::build_flac_tag_updates(&mut tag, song_detail, artwork_data);
 
-        // 5. Encode metadata only.
         let artwork_overhead = artwork_data.map_or(0, <[u8]>::len);
         let mut metadata_bytes = Vec::with_capacity(artwork_overhead + 4096); // metadata overhead estimate
         tag.write_to(&mut metadata_bytes)
@@ -209,8 +198,6 @@ impl AudioBuffer {
         use crate::music_api::format_artists;
         use metaflac::block::{Picture, PictureType};
 
-        // Add Vorbis Comments (text metadata)
-        // Title
         tag.set_vorbis("TITLE", vec![song_detail.name.clone()]);
 
         // Album
@@ -220,15 +207,11 @@ impl AudioBuffer {
             .map_or("Unknown Album", |al| al.name.as_str());
         tag.set_vorbis("ALBUM", vec![album_name.to_string()]);
 
-        // Artist (Performer)
         let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
         tag.set_vorbis("ARTIST", vec![artist]);
 
-        // Description (163 key) - preserve existing value if present, otherwise don't add
-        // The original FLAC file from NetEase may already contain the 163 key
-        // We don't generate a fake key, just preserve what's already there
+        // The 163 key is preserved if already present; a fake key is never generated.
 
-        // Add album artwork if provided
         if let Some(artwork_data) = artwork_data {
             tag.remove_picture_type(PictureType::CoverFront);
 

@@ -39,12 +39,10 @@ pub enum ThumbnailBuffer {
 }
 
 impl AudioBuffer {
-    /// Check if this is a memory-based buffer
     pub fn is_memory(&self) -> bool {
         matches!(self, Self::Memory { .. })
     }
 
-    /// Check if this is a disk-based buffer
     pub fn is_disk(&self) -> bool {
         matches!(self, Self::Disk { .. })
     }
@@ -58,7 +56,6 @@ impl AudioBuffer {
         }
     }
 
-    /// Get the filename
     pub fn filename(&self) -> &str {
         match self {
             Self::Disk { filename, .. } | Self::Memory { filename, .. } => filename,

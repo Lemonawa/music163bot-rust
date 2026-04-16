@@ -23,7 +23,13 @@ pub(super) async fn try_send_cached_song(
             music_id,
             cached_song.music_size
         );
-        let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+        if let Err(e) = state.database.delete_song_by_music_id(music_id_i64).await {
+            tracing::warn!(
+                "Failed to delete invalid cache for music_id {}: {}",
+                music_id,
+                e
+            );
+        }
         return Ok(false);
     }
 
@@ -70,7 +76,13 @@ pub(super) async fn try_send_cached_song(
                     music_id,
                     e
                 );
-                let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+                if let Err(e) = state.database.delete_song_by_music_id(music_id_i64).await {
+                    tracing::warn!(
+                        "Failed to delete stale cache for music_id {}: {}",
+                        music_id,
+                        e
+                    );
+                }
                 Ok(false)
             } else {
                 Err(e)
@@ -101,9 +113,9 @@ pub(super) async fn process_program(
 }
 
 pub(super) fn apply_program_metadata(
-    song_detail: Arc<crate::music_api::SongDetail>,
+    song_detail: Arc<SongDetail>,
     program: &ProgramMainTrack,
-) -> Arc<crate::music_api::SongDetail> {
+) -> Arc<SongDetail> {
     let mut detail = (*song_detail).clone();
 
     if !program.program_name.trim().is_empty() {
@@ -127,7 +139,7 @@ pub(super) fn apply_program_metadata(
     } else {
         program.author_name.clone()
     };
-    detail.ar = Some(vec![crate::music_api::Artist {
+    detail.ar = Some(vec![Artist {
         id: 0,
         name: author_name,
     }]);
@@ -158,7 +170,7 @@ pub(super) fn apply_program_metadata(
         program.radio_name.clone()
     };
     let album_id = previous_album.as_ref().map_or(0, |album| album.id);
-    detail.al = Some(crate::music_api::Album {
+    detail.al = Some(Album {
         id: album_id,
         name: album_name,
         pic_url: cover_url,
@@ -258,7 +270,6 @@ pub(super) async fn process_music_with_context(
     state.runtime_metrics.record_cache_miss();
     perf_ctx = perf_ctx.with_cache_path("miss_cold");
 
-    // Send status message and fetch song detail+URL in parallel
     let status_init_start = std::time::Instant::now();
     let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
 
@@ -348,7 +359,6 @@ pub(super) async fn process_music_with_context(
         });
     }
 
-    // Download and process the song
     let mut process_attempt = 0u32;
     loop {
         let pre_upload_path_start = std::time::Instant::now();

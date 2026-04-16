@@ -1,9 +1,10 @@
 use serde::Serialize;
 
 use super::super::{
-    EapiSearchResponse, LyricResponse, MusicApi, Result, SHORT_USER_AGENT, SearchSong,
+    LyricResponse, MusicApi, Result, SHORT_USER_AGENT, SearchResponse, SearchSong,
     resize_album_art_to_thumbnail, rewrite_media_url,
 };
+use super::api_code_error;
 use crate::error::BotError;
 use crate::utils::is_trusted_music_share_url;
 
@@ -23,10 +24,7 @@ impl MusicApi {
         let data: LyricResponse = response.json().await?;
 
         if data.code != 200 {
-            return Err(BotError::MusicApi(format!(
-                "API returned code {}",
-                data.code
-            )));
+            return Err(api_code_error(data.code));
         }
 
         let lyric = data
@@ -70,7 +68,7 @@ impl MusicApi {
             .iter()
             .position(|&b| !b.is_ascii_whitespace())
             .map_or(&raw_bytes[..], |pos| &raw_bytes[pos..]);
-        let data: EapiSearchResponse = if trimmed_bytes.first() == Some(&b'{') {
+        let data: SearchResponse = if trimmed_bytes.first() == Some(&b'{') {
             serde_json::from_slice(trimmed_bytes)?
         } else {
             let trimmed_str = std::str::from_utf8(trimmed_bytes)
@@ -80,10 +78,7 @@ impl MusicApi {
         };
 
         if data.code != 200 {
-            return Err(BotError::MusicApi(format!(
-                "API returned code {}",
-                data.code
-            )));
+            return Err(api_code_error(data.code));
         }
 
         Ok(data.result.songs)

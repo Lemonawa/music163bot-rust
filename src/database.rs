@@ -201,48 +201,9 @@ impl Database {
         Ok(result.last_insert_rowid())
     }
 
-    /// Update `file_id` and `thumb_file_id` for a song
-    pub async fn update_file_ids(
-        &self,
-        music_id: i64,
-        file_id: Option<String>,
-        thumb_file_id: Option<String>,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE song_infos SET file_id = ?, thumb_file_id = ?, updated_at = CURRENT_TIMESTAMP WHERE music_id = ?"
-        )
-        .bind(&file_id)
-        .bind(&thumb_file_id)
-        .bind(music_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
     /// Count total songs
     pub async fn count_total_songs(&self) -> Result<i64> {
         let row = sqlx::query("SELECT COUNT(*) as count FROM song_infos")
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(row.get("count"))
-    }
-
-    /// Count songs from specific user
-    pub async fn count_songs_from_user(&self, user_id: i64) -> Result<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM song_infos WHERE from_user_id = ?")
-            .bind(user_id)
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(row.get("count"))
-    }
-
-    /// Count songs from specific chat
-    pub async fn count_songs_from_chat(&self, chat_id: i64) -> Result<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM song_infos WHERE from_chat_id = ?")
-            .bind(chat_id)
             .fetch_one(&self.pool)
             .await?;
 
@@ -291,13 +252,6 @@ impl Database {
     pub async fn optimize(&self) -> Result<()> {
         sqlx::query("VACUUM").execute(&self.pool).await?;
         tracing::info!("Database VACUUM completed successfully");
-        Ok(())
-    }
-
-    /// Run ANALYZE to update query planner statistics
-    pub async fn analyze(&self) -> Result<()> {
-        sqlx::query("ANALYZE").execute(&self.pool).await?;
-        tracing::debug!("Database ANALYZE completed");
         Ok(())
     }
 

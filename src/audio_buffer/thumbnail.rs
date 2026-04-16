@@ -40,7 +40,6 @@ impl ThumbnailBuffer {
         Self::Disk { path }
     }
 
-    /// Create from memory data.
     #[must_use]
     pub fn from_memory(data: Vec<u8>) -> Self {
         Self::Memory {
@@ -48,13 +47,11 @@ impl ThumbnailBuffer {
         }
     }
 
-    /// Create from Bytes data.
     #[must_use]
     pub fn from_bytes(data: Bytes) -> Self {
         Self::Memory { data }
     }
 
-    /// Get the thumbnail data.
     pub async fn get_data(&self) -> Result<Vec<u8>> {
         match self {
             Self::Disk { path } => tokio::fs::read(path)
@@ -73,13 +70,11 @@ impl ThumbnailBuffer {
         }
     }
 
-    /// Check if this is memory-based.
     #[must_use]
     pub fn is_memory(&self) -> bool {
         matches!(self, Self::Memory { .. })
     }
 
-    /// Convert to InputFile for Telegram.
     pub fn to_input_file(&self) -> Result<InputFile> {
         match self {
             Self::Disk { path } => Ok(InputFile::file(path)),
@@ -96,7 +91,6 @@ impl ThumbnailBuffer {
         }
     }
 
-    /// Cleanup resources.
     pub async fn cleanup(self) -> Result<()> {
         match self {
             Self::Disk { path } => remove_file_if_exists(&path).await?,

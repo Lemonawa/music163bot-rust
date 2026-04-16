@@ -24,7 +24,7 @@ use self::media::resize_image_with_padding;
 use self::media::rewrite_media_url;
 use self::models::{
     AlbumSongsResponse, DjProgramDetailResponse, DjProgramItem, DjProgramListResponse,
-    EapiSearchResponse, PlaylistDetailResponse,
+    PlaylistDetailResponse,
 };
 
 #[derive(Debug)]

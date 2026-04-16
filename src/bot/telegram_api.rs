@@ -79,11 +79,9 @@ pub(super) async fn raw_send_file(
         }
     }
 
-    // reply_parameters as JSON
     let reply_params = format!(r#"{{"message_id":{}}}"#, params.reply_to_message_id);
     form = form.text("reply_parameters", reply_params);
 
-    // reply_markup as JSON
     if let Some(ref markup_json) = params.reply_markup_json {
         form = form.text("reply_markup", markup_json.clone());
     }
@@ -98,7 +96,6 @@ pub(super) async fn raw_send_file(
         form = form.text("duration", duration.to_string());
     }
 
-    // Attach thumbnail if available
     if let Some(thumb) = params.thumbnail {
         match thumb {
             ThumbnailBuffer::Memory { data } => {
@@ -149,10 +146,8 @@ pub(super) fn parse_telegram_api_response(
     status: reqwest::StatusCode,
     method: &str,
 ) -> Result<serde_json::Value> {
-    let json: serde_json::Value = serde_json::from_str(body).map_err(|e| {
-        tracing::error!("Upload response parse error: {e}. Body omitted for safety.");
-        BotError::Other(anyhow::anyhow!("Failed to parse upload response: {e}"))
-    })?;
+    let json: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| BotError::Other(anyhow::anyhow!("Failed to parse upload response: {e}")))?;
 
     if !status.is_success() || json.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
         let description = json
@@ -169,9 +164,8 @@ pub(super) fn parse_telegram_api_response(
         {
             let _ = write!(sanitized_description, " (retry after {seconds})");
         }
-        tracing::error!("Telegram API error ({status}): {sanitized_description} [method={method}]",);
         return Err(BotError::Other(anyhow::anyhow!(
-            "Telegram API error: {sanitized_description} (HTTP {status})",
+            "Telegram API error: {sanitized_description} (HTTP {status}) [method={method}]",
         )));
     }
 
@@ -335,7 +329,10 @@ pub(super) fn checkout_upload_client(
     upload_state.reuse_count = next_reuse_count;
 
     let bot = get_upload_bot(upload_state)?;
-    let raw_client = upload_state.raw_client.clone().unwrap_or_default();
+    let raw_client = upload_state
+        .raw_client
+        .clone()
+        .ok_or_else(|| BotError::Other(anyhow::anyhow!("upload raw_client not initialized")))?;
     let api_url = upload_state.upload_api_url.clone();
     Ok((bot, raw_client, api_url))
 }
@@ -370,10 +367,10 @@ pub(super) async fn acquire_semaphore_permit<'a>(
     semaphore: &'a tokio::sync::Semaphore,
     label: &str,
 ) -> Result<tokio::sync::SemaphorePermit<'a>> {
-    semaphore.acquire().await.map_err(|e| {
-        tracing::error!("{} semaphore closed: {}", label, e);
-        BotError::Other(anyhow::anyhow!("{label} semaphore closed"))
-    })
+    semaphore
+        .acquire()
+        .await
+        .map_err(|_| BotError::Other(anyhow::anyhow!("{label} semaphore closed")))
 }
 
 pub(super) async fn acquire_upload_permit(
@@ -385,8 +382,8 @@ pub(super) async fn acquire_upload_permit(
 pub(super) async fn acquire_upload_permit_owned(
     semaphore: Arc<tokio::sync::Semaphore>,
 ) -> Result<tokio::sync::OwnedSemaphorePermit> {
-    semaphore.acquire_owned().await.map_err(|e| {
-        tracing::error!("Upload semaphore closed: {}", e);
-        BotError::Other(anyhow::anyhow!("upload semaphore closed"))
-    })
+    semaphore
+        .acquire_owned()
+        .await
+        .map_err(|_| BotError::Other(anyhow::anyhow!("upload semaphore closed")))
 }

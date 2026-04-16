@@ -90,7 +90,7 @@ fn parse_api_url_rejects_invalid_base() {
 
 #[tokio::test]
 async fn local_file_uri_disabled_by_default() {
-    let mut config = crate::config::Config::default();
+    let mut config = Config::default();
     config.bot_api = "http://localhost:8081".to_string();
 
     let path = create_temp_file();
@@ -102,7 +102,7 @@ async fn local_file_uri_disabled_by_default() {
 
 #[tokio::test]
 async fn local_file_uri_skips_official_api() {
-    let mut config = crate::config::Config::default();
+    let mut config = Config::default();
     config.upload_local_file_uri = true;
 
     let path = create_temp_file();
@@ -114,7 +114,7 @@ async fn local_file_uri_skips_official_api() {
 
 #[tokio::test]
 async fn local_file_uri_builds_from_existing_path() {
-    let mut config = crate::config::Config::default();
+    let mut config = Config::default();
     config.upload_local_file_uri = true;
 
     let path = create_temp_file();
@@ -129,7 +129,7 @@ async fn local_file_uri_builds_from_existing_path() {
 
 #[tokio::test]
 async fn local_file_uri_returns_none_for_missing_path() {
-    let mut config = crate::config::Config::default();
+    let mut config = Config::default();
     config.upload_local_file_uri = true;
 
     let path = std::env::temp_dir().join(format!("missing_{}", Uuid::new_v4()));
@@ -193,9 +193,8 @@ fn get_upload_bot_returns_bot_when_present() {
 fn upload_prewarm_success_uses_global_info_level() {
     let logs = capture_logs(tracing::Level::INFO, || {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let success = runtime.block_on(async {
-            run_upload_prewarm(|| async { Ok::<(), crate::error::BotError>(()) }).await
-        });
+        let success = runtime
+            .block_on(async { run_upload_prewarm(|| async { Ok::<(), BotError>(()) }).await });
         assert!(success);
     });
 
