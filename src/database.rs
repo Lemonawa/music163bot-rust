@@ -112,6 +112,11 @@ impl Database {
             }
         }
 
+        // Normalize legacy from_user_id=0 (no sender) to -1 for consistency.
+        sqlx::query("UPDATE song_infos SET from_user_id = -1 WHERE from_user_id = 0")
+            .execute(&pool)
+            .await?;
+
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_song_infos_from_user_id ON song_infos(from_user_id)",
         )

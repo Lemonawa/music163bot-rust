@@ -450,14 +450,14 @@ pub(super) async fn download_and_send_music(
         }
     } else if let Err(e) = upload_result {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
-        tracing::warn!(
+        tracing::error!(
             "Upload failed after {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
             upload_duration.as_secs_f64(),
             upload_mbps,
             in_flight_after,
             peak_in_flight
         );
-        tracing::warn!("Upload failed: {}", sanitize_sensitive_text(&e.to_string()));
+        tracing::error!("Upload failed: {}", sanitize_sensitive_text(&e.to_string()));
 
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;
