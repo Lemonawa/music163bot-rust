@@ -40,7 +40,7 @@ pub struct MusicApi {
     song_lyric_cache: DashMap<u64, TimedCacheEntry<String>>,
 }
 
-const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
+const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_mins(5);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_mins(5);
 pub(crate) const ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS: u32 = 5;
