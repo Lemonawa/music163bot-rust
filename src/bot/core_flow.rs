@@ -23,7 +23,13 @@ pub(super) async fn try_send_cached_song(
             music_id,
             cached_song.music_size
         );
-        let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+        if let Err(e) = state.database.delete_song_by_music_id(music_id_i64).await {
+            tracing::warn!(
+                "Failed to delete invalid cache for music_id {}: {}",
+                music_id,
+                sanitize_sensitive_text(&e.to_string())
+            );
+        }
         return Ok(false);
     }
 
@@ -70,7 +76,13 @@ pub(super) async fn try_send_cached_song(
                     music_id,
                     e
                 );
-                let _ = state.database.delete_song_by_music_id(music_id_i64).await;
+                if let Err(e) = state.database.delete_song_by_music_id(music_id_i64).await {
+                    tracing::warn!(
+                        "Failed to delete stale file_id cache for music_id {}: {}",
+                        music_id,
+                        sanitize_sensitive_text(&e.to_string())
+                    );
+                }
                 Ok(false)
             } else {
                 Err(e)
