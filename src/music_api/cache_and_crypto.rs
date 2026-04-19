@@ -56,7 +56,7 @@ impl MusicApi {
                 "Failed to build HTTP client: {}",
                 crate::utils::sanitize_sensitive_text(&e.to_string())
             );
-            Client::new()
+            build_fallback_client()
         });
         let resolve_client = build_music_api_http_client(
             pool_max_idle_per_host,
@@ -342,9 +342,19 @@ fn build_music_api_http_client(
     build_http_client(builder)
 }
 
+fn build_fallback_client() -> Client {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_mins(1))
+        .build()
+        .expect("failed to build fallback HTTP client")
+}
+
 fn build_redirect_disabled_fallback_client() -> Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_mins(1))
         .build()
         .expect("failed to build redirect-disabled HTTP client")
 }
