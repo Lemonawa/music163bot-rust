@@ -258,7 +258,6 @@ pub(super) async fn process_music_with_context(
     state.runtime_metrics.record_cache_miss();
     perf_ctx = perf_ctx.with_cache_path("miss_cold");
 
-    // Send status message and fetch song detail+URL in parallel
     let status_init_start = std::time::Instant::now();
     let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
 
@@ -336,7 +335,6 @@ pub(super) async fn process_music_with_context(
         return Ok(());
     }
 
-    // Update status (fire-and-forget to overlap with download start)
     let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
     {
         let bot_clone = bot.clone();
@@ -348,7 +346,6 @@ pub(super) async fn process_music_with_context(
         });
     }
 
-    // Download and process the song
     let mut process_attempt = 0u32;
     loop {
         let pre_upload_path_start = std::time::Instant::now();

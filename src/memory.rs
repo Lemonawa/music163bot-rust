@@ -9,8 +9,6 @@
 /// in the allocator's pools.
 #[cfg(not(target_env = "msvc"))]
 pub fn force_memory_release() {
-    // Strategy 1: Trigger decay to encourage memory return
-    // This is less aggressive than purge but more efficient
     let decay_result = unsafe {
         tikv_jemalloc_sys::mallctl(
             c"arena.all.decay".as_ptr().cast(),
@@ -27,8 +25,6 @@ pub fn force_memory_release() {
         );
     }
 
-    // Strategy 2: Force purge of dirty pages if decay didn't free enough
-    // This is more aggressive and ensures immediate memory return
     let purge_result = unsafe {
         tikv_jemalloc_sys::mallctl(
             c"arena.all.purge".as_ptr().cast(),
@@ -48,9 +44,7 @@ pub fn force_memory_release() {
 
 /// Stub for non-jemalloc platforms
 #[cfg(target_env = "msvc")]
-pub fn force_memory_release() {
-    // Windows uses system allocator, no explicit purge available
-}
+pub fn force_memory_release() {}
 
 /// Report current memory usage stats (debug builds only)
 #[cfg(all(debug_assertions, not(target_env = "msvc")))]
@@ -113,6 +107,4 @@ pub fn log_memory_stats() {
 }
 
 #[cfg(not(all(debug_assertions, not(target_env = "msvc"))))]
-pub fn log_memory_stats() {
-    // No-op in release builds or on Windows
-}
+pub fn log_memory_stats() {}

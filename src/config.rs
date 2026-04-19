@@ -106,11 +106,9 @@ fn parse_admin_list(admins: &str) -> Vec<i64> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    // Required fields
     pub bot_token: String,
     pub music_u: Option<String>,
 
-    // Optional fields with defaults
     pub bot_api: String,
     pub music_api: String,
     pub bot_admin: Vec<i64>,
@@ -124,7 +122,6 @@ pub struct Config {
     pub download_timeout: u64,
     pub check_md5: bool,
 
-    // Smart storage settings (v1.1.0+)
     /// Storage mode for temporary files: disk, memory, or hybrid
     pub storage_mode: StorageMode,
     /// Memory threshold in MB for hybrid mode (files larger than this use disk)
@@ -180,12 +177,10 @@ impl Default for Config {
             max_retry_times: 3,
             download_timeout: 60,
             check_md5: true,
-            // Smart storage defaults (v1.1.0+)
-            storage_mode: StorageMode::Disk, // Backward compatible
+            storage_mode: StorageMode::Disk,
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
             memory_max_file_mb: 100,
-            // Balanced default: slightly higher throughput than 3 with moderate memory growth.
             max_concurrent_downloads: 4,
             max_batch_download_tracks: 20,
             download_pool_max_idle_per_host: 2,

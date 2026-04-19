@@ -62,9 +62,9 @@ pub(super) async fn raw_send_file(
                     .file_name(filename.clone())
                     .mime_str(mime_type)?
             } else if let AudioBuffer::Disk { path, .. } = audio_buffer {
-                let file = tokio::fs::File::open(path).await.map_err(|e| {
-                    BotError::Other(anyhow::anyhow!("Failed to open file for upload: {e}"))
-                })?;
+                let file = tokio::fs::File::open(path)
+                    .await
+                    .map_err(BotError::FileOperation)?;
                 let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
                 let body = reqwest::Body::wrap_stream(stream);
                 reqwest::multipart::Part::stream_with_length(body, file_size)
@@ -79,11 +79,9 @@ pub(super) async fn raw_send_file(
         }
     }
 
-    // reply_parameters as JSON
     let reply_params = format!(r#"{{"message_id":{}}}"#, params.reply_to_message_id);
     form = form.text("reply_parameters", reply_params);
 
-    // reply_markup as JSON
     if let Some(ref markup_json) = params.reply_markup_json {
         form = form.text("reply_markup", markup_json.clone());
     }
@@ -98,7 +96,6 @@ pub(super) async fn raw_send_file(
         form = form.text("duration", duration.to_string());
     }
 
-    // Attach thumbnail if available
     if let Some(thumb) = params.thumbnail {
         match thumb {
             ThumbnailBuffer::Memory { data } => {
@@ -114,15 +111,13 @@ pub(super) async fn raw_send_file(
                         form = form.text("thumbnail", uri);
                     }
                     UploadFileTarget::Multipart => {
-                        let file = tokio::fs::File::open(path).await.map_err(|e| {
-                            BotError::Other(anyhow::anyhow!("Failed to open thumbnail: {e}"))
-                        })?;
+                        let file = tokio::fs::File::open(path)
+                            .await
+                            .map_err(BotError::FileOperation)?;
                         let len = file
                             .metadata()
                             .await
-                            .map_err(|e| {
-                                BotError::Other(anyhow::anyhow!("Failed to stat thumbnail: {e}"))
-                            })?
+                            .map_err(BotError::FileOperation)?
                             .len();
                         let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
                         let body = reqwest::Body::wrap_stream(stream);
@@ -151,7 +146,7 @@ pub(super) fn parse_telegram_api_response(
 ) -> Result<serde_json::Value> {
     let json: serde_json::Value = serde_json::from_str(body).map_err(|e| {
         tracing::error!("Upload response parse error: {e}. Body omitted for safety.");
-        BotError::Other(anyhow::anyhow!("Failed to parse upload response: {e}"))
+        BotError::Serialization(e)
     })?;
 
     if !status.is_success() || json.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
@@ -199,8 +194,6 @@ pub(super) fn mime_for_filename(filename: &str) -> &'static str {
 }
 
 pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
-    // API URL must match teloxide's internal format: base URL without "/bot" suffix
-    // teloxide automatically appends "bot<TOKEN>/" to the path
     let api_url_str = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org"
     {
         let base = config.bot_api.trim_end_matches("/bot");
@@ -265,7 +258,6 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     let client = build_http_client(client_builder)?;
     let bot = Bot::with_client(&config.bot_token, client.clone()).set_api_url(api_url);
 
-    // Build full API base URL for raw requests: "{base}bot{token}/"
     let raw_api_base = format!("{}bot{}/", api_url_str, config.bot_token);
 
     Ok(UploadBotBundle {

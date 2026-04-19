@@ -12,12 +12,12 @@ pub(super) async fn download_and_send_music(
     artists: &str,
     link_target: MusicLinkTarget,
 ) -> Result<()> {
-    // Determine file extension
-    let file_ext = if song_url.url.contains(".flac") {
-        "flac"
+    let audio_format = if song_url.url.contains(".flac") {
+        AudioFormat::Flac
     } else {
-        "mp3"
+        AudioFormat::Mp3
     };
+    let file_ext = audio_format.as_str();
 
     let filename = clean_filename(&format!(
         "{} - {}.{}",
@@ -31,7 +31,6 @@ pub(super) async fn download_and_send_music(
     let download_thumbnail = cover_policy.download_thumbnail;
     let download_cover = should_download_cover(cover_policy);
 
-    // Extract fields needed for SongInfo before moving song_detail into blocking task
     let song_id = song_detail.id;
     let song_name = song_detail.name.clone();
     let song_album = song_detail
@@ -40,7 +39,6 @@ pub(super) async fn download_and_send_music(
         .map_or_else(|| "Unknown Album".to_string(), |al| al.name.clone());
     let duration_ms = song_detail.dt;
 
-    // Start parallel downloads: audio file and album art
     let cover_perf_ctx = perf_ctx.clone();
     let artwork_future = download_cover_assets(
         state,
@@ -52,25 +50,21 @@ pub(super) async fn download_and_send_music(
         &cover_perf_ctx,
     );
 
-    // Download audio file using smart storage
     let download_perf_ctx = perf_ctx.clone();
     let audio_future = async {
         let _download_permit = acquire_download_permit(&state.download_semaphore).await?;
         let download_start = std::time::Instant::now();
         let response = state.music_api.download_file(&song_url.url).await?;
 
-        // Check response status
         if !response.status().is_success() {
             return Err(anyhow::anyhow!("HTTP {}", response.status()));
         }
 
-        // Check content length. None means unknown/chunked transfer and is allowed.
         let content_length = response.content_length();
         if content_length == Some(0) {
             return Err(anyhow::anyhow!("Empty file or unable to get file size"));
         }
 
-        // Create audio buffer based on storage mode configuration
         let mut audio_buffer = AudioBuffer::new(
             &state.config,
             content_length.unwrap_or(0),
@@ -83,7 +77,6 @@ pub(super) async fn download_and_send_music(
         let max_download_size = if audio_buffer.is_memory() {
             state.config.memory_max_file_mb * 1024 * 1024
         } else {
-            // Maximum reasonable media size (2GB) to prevent disk exhaustion
             2000 * 1024 * 1024
         };
 
@@ -182,7 +175,6 @@ pub(super) async fn download_and_send_music(
         thumbnail_status
     );
 
-    // Validate file size using downloaded byte count
     if downloaded == 0 {
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;
@@ -205,15 +197,13 @@ pub(super) async fn download_and_send_music(
 
     tracing::debug!("File validation passed: {} bytes", downloaded);
 
-    // 封面处理：使用320x320图片嵌入文件，缩略图用于Telegram显示
-    // Overlap tag processing with upload client acquisition — they are independent.
-    tracing::debug!("Processing tags for {} format", file_ext);
+    tracing::debug!("Processing tags for {} format", audio_format);
     let tag_perf_ctx = perf_ctx.clone();
     let tag_future = async {
         let tags_start = std::time::Instant::now();
         let result = apply_tags_in_blocking(
             audio_buffer,
-            file_ext,
+            audio_format,
             song_detail,
             cover_artwork_data,
             cover_policy.embed_cover,
@@ -255,18 +245,13 @@ pub(super) async fn download_and_send_music(
         }
     };
 
-    // Get file size for database and logging
     let file_size = audio_buffer.size().await;
     let audio_file_size = file_size as i64;
     let duration_sec = (duration_ms.unwrap_or(0) / 1000) as i64;
 
-    // Calculate actual bitrate from file size and duration
-    // API's song_url.br is often theoretical (e.g., 1411kbps for FLAC) but
-    // actual file may be compressed (e.g., 960kbps). Use real calculated value.
     let actual_bitrate_bps = if duration_sec > 0 {
         (8 * audio_file_size) / duration_sec
     } else {
-        // Fallback to API value if duration is missing
         song_url.br as i64
     };
 
@@ -277,7 +262,6 @@ pub(super) async fn download_and_send_music(
         duration_sec
     );
 
-    // Create song info for database
     let now = chrono::Utc::now();
     let program_id = match link_target {
         MusicLinkTarget::Program(program_id) => Some(program_id as i64),
@@ -310,10 +294,8 @@ pub(super) async fn download_and_send_music(
         ..Default::default()
     };
 
-    // Log final thumbnail status
     tracing::debug!("Final thumbnail status: {}", thumbnail_status);
 
-    // Send the audio file
     let caption = build_caption(
         &song_info.song_name,
         &song_info.song_artists,
@@ -352,8 +334,6 @@ pub(super) async fn download_and_send_music(
     log_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
     perf_ctx.log_stage(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
 
-    // Acquire the upload permit only when we are ready to send bytes to Telegram.
-    // This keeps slow downloads/tagging from occupying the upload lane.
     let upload_permit_wait_start = std::time::Instant::now();
     let _upload_permit =
         match acquire_upload_permit_owned(Arc::clone(&state.upload_semaphore)).await {
@@ -369,25 +349,20 @@ pub(super) async fn download_and_send_music(
         upload_permit_wait_start.elapsed(),
     );
 
-    // Send audio file with enhanced error handling and proper MIME type
     tracing::debug!(
         "Sending audio file: {} ({:.2} MB)",
         audio_buffer.filename(),
         file_size as f64 / 1024.0 / 1024.0
     );
 
-    // Simple approach: send as audio only
-    let is_flac = file_ext == "flac";
+    let is_flac = audio_format == AudioFormat::Flac;
 
     tracing::debug!("File format: {}", if is_flac { "FLAC" } else { "MP3" });
 
-    // Serialize reply_markup once for reuse across attempts
     let reply_markup_json = serde_json::to_string(&keyboard).ok();
 
-    // Move memory audio data to Bytes for upload without copying the full buffer.
     let audio_bytes = audio_buffer.take_memory_bytes_for_upload();
 
-    // Send as audio only.
     let in_flight = state
         .upload_counters
         .in_flight
@@ -444,7 +419,6 @@ pub(super) async fn download_and_send_music(
             if is_flac { "FLAC" } else { "MP3" }
         );
 
-        // Extract file_id from raw API response
         if let Some(file_id) = extract_file_id_from_response(resp_json) {
             song_info.file_id = Some(file_id);
         }
@@ -468,7 +442,6 @@ pub(super) async fn download_and_send_music(
     cleanup_audio_buffer(audio_buffer).await;
     cleanup_thumbnail_buffer(thumbnail_buffer).await;
 
-    // Save to database unless this upload is partially degraded.
     let db_save_start = std::time::Instant::now();
     let db_save_result = if should_remove_song_cache {
         if let Err(e) = state.database.delete_song_by_music_id(song_id as i64).await {
@@ -514,7 +487,6 @@ pub(super) async fn download_and_send_music(
         }
     }
 
-    // Delete status message
     delete_status_message_resilient(bot, msg.chat.id, status_msg.id).await;
 
     Ok(())

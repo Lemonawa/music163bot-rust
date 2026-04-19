@@ -2,12 +2,11 @@ use super::*;
 
 pub(super) async fn apply_tags_in_blocking(
     mut audio_buffer: AudioBuffer,
-    file_ext: &str,
+    audio_format: AudioFormat,
     song_detail: Arc<crate::music_api::SongDetail>,
     artwork_data: Option<Bytes>,
     embed_cover: bool,
 ) -> Result<AudioBuffer> {
-    let file_ext = file_ext.to_string(); // move into blocking task
     tokio::task::spawn_blocking(move || {
         let embed_artwork = if embed_cover {
             artwork_data.as_ref().map(std::convert::AsRef::as_ref)
@@ -15,8 +14,8 @@ pub(super) async fn apply_tags_in_blocking(
             None
         };
 
-        match file_ext.as_str() {
-            "mp3" => {
+        match audio_format {
+            AudioFormat::Mp3 => {
                 let cover_label = if embed_cover { "320" } else { "none" };
                 tracing::debug!("Adding ID3 tags to MP3 (cover: {})", cover_label);
                 match audio_buffer.add_id3_tags(&song_detail, embed_artwork) {
@@ -24,16 +23,13 @@ pub(super) async fn apply_tags_in_blocking(
                     Err(e) => tracing::warn!("Failed to add MP3 tags: {}", e),
                 }
             }
-            "flac" => {
+            AudioFormat::Flac => {
                 let cover_label = if embed_cover { "320" } else { "none" };
                 tracing::debug!("Adding FLAC metadata (cover: {})", cover_label);
                 match audio_buffer.add_flac_metadata(&song_detail, embed_artwork) {
                     Ok(()) => tracing::debug!("FLAC metadata added successfully"),
                     Err(e) => tracing::warn!("Failed to add FLAC metadata: {}", e),
                 }
-            }
-            _ => {
-                tracing::debug!("Unknown format {}, skipping tag embedding", file_ext);
             }
         }
 
@@ -549,25 +545,19 @@ pub(super) struct UploadBotBundle {
     pub(super) api_base_url: String,
 }
 
-/// Streaming chunk size for raw uploads (256 KiB).
-/// Matches the benchmark script's chunk size that achieves ~14 MB/s.
 pub(super) const RAW_UPLOAD_CHUNK_SIZE: usize = 256 * 1024;
 
-/// Parameters for raw Telegram file upload.
 pub(super) struct RawUploadParams<'a> {
     pub(super) chat_id: i64,
     pub(super) caption: &'a str,
     pub(super) reply_to_message_id: i32,
     pub(super) reply_markup_json: Option<String>,
-    /// sendAudio-specific fields
     pub(super) title: Option<&'a str>,
     pub(super) performer: Option<&'a str>,
     pub(super) duration: Option<u32>,
-    /// Thumbnail data (already in memory as bytes)
     pub(super) thumbnail: Option<&'a ThumbnailBuffer>,
 }
 
-/// Parameters for raw Telegram document upload.
 pub(super) struct RawDocumentParams<'a> {
     pub(super) chat_id: i64,
     pub(super) caption: Option<&'a str>,

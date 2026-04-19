@@ -61,7 +61,11 @@ fn parse_telegram_api_response_returns_parse_error_for_non_json_body() {
     .expect_err("non-JSON body should fail response parsing");
     let err_msg = err.to_string();
 
-    assert!(err_msg.contains("Failed to parse upload response"));
+    // BotError::Serialization wraps serde_json::Error directly; check it's a parse error
+    assert!(
+        err_msg.contains("expected") || err_msg.contains("invalid") || err_msg.contains("EOF"),
+        "unexpected error message: {err_msg}"
+    );
 }
 
 #[test]
@@ -182,10 +186,10 @@ async fn singleflight_claim_helper_waits_for_existing_leader() {
 }
 
 #[tokio::test]
-async fn tagging_wrapper_returns_buffer_for_unknown_format() {
+async fn tagging_wrapper_returns_buffer_for_mp3_without_artwork() {
     let buffer = crate::audio_buffer::AudioBuffer::Memory {
         data: vec![1, 2, 3],
-        filename: "sample.bin".to_string(),
+        filename: "sample.mp3".to_string(),
     };
     let detail = crate::music_api::SongDetail {
         id: 1,
@@ -195,11 +199,17 @@ async fn tagging_wrapper_returns_buffer_for_unknown_format() {
         al: None,
     };
 
-    let tagged = super::apply_tags_in_blocking(buffer, "bin", Arc::new(detail), None, false)
-        .await
-        .expect("unknown format should keep buffer unchanged");
+    let tagged = super::apply_tags_in_blocking(
+        buffer,
+        super::AudioFormat::Mp3,
+        Arc::new(detail),
+        None,
+        false,
+    )
+    .await
+    .expect("mp3 format should keep buffer");
 
-    assert_eq!(tagged.size().await, 3);
+    assert!(tagged.size().await >= 3);
 }
 
 #[tokio::test]
@@ -223,9 +233,15 @@ async fn tagging_wrapper_adds_mp3_id3_header() {
         }),
     };
 
-    let tagged = super::apply_tags_in_blocking(buffer, "mp3", Arc::new(detail), None, false)
-        .await
-        .expect("mp3 tagging should succeed");
+    let tagged = super::apply_tags_in_blocking(
+        buffer,
+        super::AudioFormat::Mp3,
+        Arc::new(detail),
+        None,
+        false,
+    )
+    .await
+    .expect("mp3 tagging should succeed");
     let data = tagged.get_data().await.expect("read tagged data");
     assert!(data.starts_with(b"ID3"));
 }

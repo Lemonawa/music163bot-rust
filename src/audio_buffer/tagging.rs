@@ -205,30 +205,20 @@ impl AudioBuffer {
         use crate::music_api::format_artists;
         use metaflac::block::{Picture, PictureType};
 
-        // Add Vorbis Comments (text metadata)
-        // Title
         tag.set_vorbis("TITLE", vec![song_detail.name.clone()]);
 
-        // Album
         let album_name = song_detail
             .al
             .as_ref()
             .map_or("Unknown Album", |al| al.name.as_str());
         tag.set_vorbis("ALBUM", vec![album_name.to_string()]);
 
-        // Artist (Performer)
         let artist = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
         tag.set_vorbis("ARTIST", vec![artist]);
 
-        // Description (163 key) - preserve existing value if present, otherwise don't add
-        // The original FLAC file from NetEase may already contain the 163 key
-        // We don't generate a fake key, just preserve what's already there
-
-        // Add album artwork if provided
         if let Some(artwork_data) = artwork_data {
             tag.remove_picture_type(PictureType::CoverFront);
 
-            // Use ImageReader to avoid full decode and reduce memory usage.
             let (width, height) = image::ImageReader::new(std::io::Cursor::new(artwork_data))
                 .with_guessed_format()
                 .ok()
@@ -249,14 +239,12 @@ impl AudioBuffer {
         }
     }
 
-    /// Find the start of FLAC audio frames (after all metadata blocks)
     pub(super) fn find_flac_audio_start(data: &[u8]) -> Result<usize> {
-        // FLAC format: "fLaC" (4 bytes) + metadata blocks + audio frames
         if data.len() < 8 || &data[0..4] != b"fLaC" {
             return Err(anyhow::anyhow!("Not a valid FLAC file"));
         }
 
-        let mut pos = 4; // Skip magic
+        let mut pos = 4;
 
         loop {
             if pos + 4 > data.len() {
@@ -266,11 +254,10 @@ impl AudioBuffer {
             let header = data[pos];
             let is_last = (header & 0x80) != 0;
 
-            // Block length is 3 bytes big-endian
             let block_len =
                 u32::from_be_bytes([0, data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
 
-            pos += 4 + block_len; // Skip header + block data
+            pos += 4 + block_len;
 
             if is_last {
                 break;

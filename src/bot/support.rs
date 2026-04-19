@@ -32,7 +32,6 @@ pub(super) async fn handle_lyric_command(
                 return Ok(());
             }
 
-            // Get song detail for filename
             let song_detail = match detail_result {
                 Ok(detail) => detail,
                 Err(e) => {
@@ -197,7 +196,6 @@ pub(super) async fn handle_rmcache_command(
     if let Some(music_id) = parse_music_id(&args) {
         let music_id_i64 = music_id as i64;
 
-        // Get song info before deletion
         if let Ok(Some(song_info)) = state.database.get_song_by_music_id(music_id_i64).await {
             match state.database.delete_song_by_music_id(music_id_i64).await {
                 Ok(deleted) => {
@@ -260,7 +258,6 @@ pub(super) async fn handle_clearallcache_confirm_command(
 
     match state.database.clear_all_songs().await {
         Ok(count) => {
-            // Optimize database after bulk deletion
             if let Err(e) = state.database.optimize().await {
                 tracing::warn!("Database optimization failed after clear: {}", e);
             }

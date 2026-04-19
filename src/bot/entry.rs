@@ -144,14 +144,11 @@ pub(super) async fn build_startup_update_listener(
 pub(super) async fn run(config: Config) -> Result<()> {
     tracing::info!("Starting Telegram bot...");
 
-    // Ensure cache directory exists
     ensure_dir(&config.cache_dir)?;
 
-    // Initialize database
     let database = Database::new(&config.database).await?;
     tracing::info!("Database initialized");
 
-    // Initialize music API
     let music_api = Arc::new(MusicApi::new_with_config(&config));
     tracing::info!("Music API initialized");
 
@@ -162,9 +159,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         maintenance_worker(maintenance_rx, maintenance_database, maintenance_music_api).await;
     });
 
-    // Initialize bot with custom API URL support
     let bot = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org" {
-        // 使用自定义API URL
         // API URL must be base URL without "/bot" suffix - teloxide appends "bot<TOKEN>/" automatically
         let api_url_str = format!("{}/", config.bot_api.trim_end_matches("/bot"));
 
@@ -186,10 +181,8 @@ pub(super) async fn run(config: Config) -> Result<()> {
                     .no_gzip();
                 let client = build_http_client(client_builder)?;
 
-                // Create bot with custom client and API URL
                 let bot = Bot::with_client(&config.bot_token, client).set_api_url(api_url.clone());
 
-                // Test the connection with timeout and better error handling
                 tracing::info!("Testing custom API connection...");
                 match tokio::time::timeout(std::time::Duration::from_secs(15), bot.get_me()).await {
                     Ok(Ok(_)) => {
@@ -249,7 +242,6 @@ pub(super) async fn run(config: Config) -> Result<()> {
         Bot::with_client(&config.bot_token, client)
     };
 
-    // Log the API configuration
     tracing::info!(
         "Music API configured: {}",
         sanitize_sensitive_text(&config.music_api)
@@ -262,7 +254,6 @@ pub(super) async fn run(config: Config) -> Result<()> {
         .unwrap_or_else(|| "Music163bot".to_string());
     tracing::info!("Bot @{} started successfully!", bot_username);
 
-    // Create bot state (needs bot username)
     let max_concurrent_downloads = config.max_concurrent_downloads;
     let upload_max_concurrent = config.upload_max_concurrent;
     let is_official_api = is_official_telegram_api(&config.bot_api);
@@ -300,7 +291,6 @@ pub(super) async fn run(config: Config) -> Result<()> {
         let _ = run_upload_prewarm(|| acquire_upload_client(&prewarm_state)).await;
     });
 
-    // Create dispatcher
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(handle_message))
         .branch(Update::filter_callback_query().endpoint(handle_callback))
@@ -349,8 +339,6 @@ pub(super) async fn handle_message(
         let msg = msg.clone();
         let state = state.clone();
 
-        // Spawn a new task to handle the message concurrently
-        // This allows multiple messages to be processed in parallel
         tokio::spawn(async move {
             let _permit = permit;
 
@@ -386,7 +374,6 @@ pub(super) async fn handle_command(
 ) -> ResponseResult<()> {
     let (command, args) = parse_command_and_args(text);
 
-    // Only log music/search commands and admin commands
     if should_log_command(command) {
         tracing::info!("Command: /{} from chat {}", command, msg.chat.id);
     }
@@ -407,10 +394,7 @@ pub(super) async fn handle_command(
                 handle_clearallcache_command(bot, msg, state).await
             }
         }
-        _ => {
-            // Unknown commands: don't respond (as requested)
-            Ok(())
-        }
+        _ => Ok(()),
     }
 }
 

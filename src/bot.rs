@@ -89,10 +89,10 @@ use upload::{
 };
 use upload_document::raw_send_document_bytes;
 use wiring::{
-    BotState, CACHE_PRUNE_INTERVAL_REQUESTS, CacheSnapshot, InflightClaim, InflightDownloads,
-    InflightLeaderGuard, MAINTENANCE_QUEUE_CAPACITY, MIN_DOWNLOAD_CHUNK_BYTES, MaintenanceCounters,
-    MaintenanceSignal, MusicLinkTarget, PERF_STAGE_CACHE_LOOKUP, PERF_STAGE_COVER_DOWNLOAD,
-    PERF_STAGE_DB_SAVE, PERF_STAGE_DOWNLOAD_AUDIO, PERF_STAGE_E2E_TOTAL,
+    AudioFormat, BotState, CACHE_PRUNE_INTERVAL_REQUESTS, CacheSnapshot, InflightClaim,
+    InflightDownloads, InflightLeaderGuard, MAINTENANCE_QUEUE_CAPACITY, MIN_DOWNLOAD_CHUNK_BYTES,
+    MaintenanceCounters, MaintenanceSignal, MusicLinkTarget, PERF_STAGE_CACHE_LOOKUP,
+    PERF_STAGE_COVER_DOWNLOAD, PERF_STAGE_DB_SAVE, PERF_STAGE_DOWNLOAD_AUDIO, PERF_STAGE_E2E_TOTAL,
     PERF_STAGE_SINGLEFLIGHT_WAIT, PERF_STAGE_TAG_PROCESS, PERF_STAGE_UPLOAD_CLIENT_ACQUIRE,
     PERF_STAGE_UPLOAD_PERMIT_WAIT, PERF_STAGE_UPLOAD_SEND, PerfTraceContext, ResourceSnapshot,
     RuntimeMetrics, STATUS_RESOURCE_CACHE, STATUS_RESOURCE_REFRESH_INTERVAL, SpeedSnapshot,

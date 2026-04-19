@@ -31,6 +31,29 @@ pub(super) struct UploadCounters {
     pub peak_in_flight: AtomicU32,
 }
 
+/// Audio file format — replaces stringly-typed `file_ext` dispatch in the tagging path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AudioFormat {
+    Mp3,
+    Flac,
+}
+
+impl AudioFormat {
+    /// Canonical lowercase extension string, used for filenames and DB storage.
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::Flac => "flac",
+        }
+    }
+}
+
+impl std::fmt::Display for AudioFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MusicLinkTarget {
     Song(u64),
