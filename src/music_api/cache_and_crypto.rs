@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aes::Aes128;
-use cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, block_padding::Pkcs7};
+use cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyInit, block_padding::Pkcs7};
 use dashmap::DashMap;
 use ecb::{Decryptor, Encryptor};
 use hex::encode_upper;
@@ -291,7 +291,7 @@ impl MusicApi {
         buf[..data_len].copy_from_slice(data.as_bytes());
         let encrypted = Encryptor::<Aes128>::new_from_slice(key)
             .map_err(|_| BotError::MusicApi("Invalid eapi key length".to_string()))?
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, data_len)
+            .encrypt_padded::<Pkcs7>(&mut buf, data_len)
             .map_err(|_| BotError::MusicApi("Failed to encrypt eapi payload".to_string()))?;
         Ok(encode_upper(encrypted))
     }
@@ -304,7 +304,7 @@ impl MusicApi {
         let mut bytes = hex::decode(hex_data).map_err(|e| BotError::MusicApi(e.to_string()))?;
         let decrypted = Decryptor::<Aes128>::new_from_slice(key)
             .map_err(|_| BotError::MusicApi("Invalid eapi key length".to_string()))?
-            .decrypt_padded_mut::<Pkcs7>(&mut bytes)
+            .decrypt_padded::<Pkcs7>(&mut bytes)
             .map_err(|e| BotError::MusicApi(e.to_string()))?;
         String::from_utf8(decrypted.to_vec()).map_err(|e| BotError::MusicApi(e.to_string()))
     }
