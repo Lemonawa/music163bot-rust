@@ -1,6 +1,6 @@
 [package]
 name = "music163bot-rust"
-version = "1.1.20"
+version = "1.1.21"
 edition = "2024"
 license = "WTFPL"
 
@@ -56,7 +56,7 @@ id3 = "1.0"
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
-# FLAC 元数据（写入封面）
+# FLAC metadata (cover art embedding)
 metaflac = "0.2"
 
 # System info (for memory detection in smart storage)
@@ -68,20 +68,20 @@ tikv-jemallocator = { version = "0.6" }
 tikv-jemalloc-sys = { version = "0.6" }
 
 [profile.release]
-# 优化级别: 3=最大速度 (TLS/memcpy/序列化等热路径均受益)
+# Optimization level: 3 = max speed (benefits TLS, memcpy, serde hot paths)
 opt-level = 3
 
-# 链接时优化
+# Link-time optimization
 lto = true
 
-# 单一代码生成单元（更好优化但编译更慢）
+# Single codegen unit (better optimization, slower compile)
 codegen-units = 1
 
-# 移除 panic 展开代码
+# Remove panic unwinding code
 panic = "abort"
 
-# 启用 strip 移除符号表
+# Strip symbol table
 strip = true
 
-# 禁用增量编译（对于 release 构建更好优化）
+# Disable incremental compilation (better optimization for release builds)
 incremental = false

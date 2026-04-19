@@ -60,9 +60,9 @@ impl Database {
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(database_url)
             .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal) // 启用 WAL 模式
-            .busy_timeout(Duration::from_secs(30)) // 忙等待超时
-            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal) // 平衡性能和耐久性
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(30))
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new()

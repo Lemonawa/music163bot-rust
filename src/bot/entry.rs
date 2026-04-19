@@ -231,7 +231,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
             }
         }
     } else {
-        // 使用默认API URL，但配置连接池以提高效率
+        // Default API URL with connection pool tuning
         tracing::info!("Using default Telegram API URL: https://api.telegram.org");
         let client_builder = reqwest::Client::builder()
             .use_rustls_tls()

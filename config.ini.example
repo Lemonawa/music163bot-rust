@@ -1,94 +1,94 @@
-# 全局日志级别
-# 可选: trace/debug/info/warn/error
-# 优先级: --log-level > RUST_LOG > config.loglevel > 默认 info
-# 上传链路日志也由这里统一控制
+# Global log level
+# Options: trace/debug/info/warn/error
+# Priority: --log-level > RUST_LOG > config.loglevel > default (info)
+# Upload pipeline logs are also controlled here
 loglevel = info
 
 [bot]
-# Telegram Bot Token (从 @BotFather 获取)
+# Telegram Bot Token (obtain from @BotFather)
 token = YOUR_BOT_TOKEN_HERE
 
-# API基础URL (你的自定义Telegram API，如果有的话)
-# 默认使用官方API，如果你有自定义API服务器，可以替换这个URL
-# 注意：不需要在URL末尾添加/bot，程序会自动处理
+# API base URL (custom Telegram Bot API server, if any)
+# Defaults to the official API; replace if you run a local bot-api server
+# Note: do not append /bot to the URL — the program handles that automatically
 api = https://api.telegram.org
 
-# 管理员用户ID (逗号分隔，用于删除缓存等管理功能)
-# 获取方法：发送消息给 @userinfobot 获取你的用户ID
-# 示例: botadmin = 123456789,987654321
-# 或者使用 bot.admin = 123456789,987654321
-botadmin = 
+# Admin user IDs (comma-separated; grants access to cache deletion and other admin commands)
+# To find your user ID, send a message to @userinfobot
+# Example: botadmin = 123456789,987654321
+# Or use: bot.admin = 123456789,987654321
+botadmin =
 
 [music]
-# 网易云音乐API基础URL (你的自定义NetEase API，如果有的话)
-# 默认使用官方API，如果你有自定义API服务器，可以替换这个URL
+# NetEase Cloud Music API base URL (custom API server, if any)
+# Defaults to the official API; replace if you run a custom API server
 api = https://music.163.com
 
-# 网易云音乐MUSIC_U Cookie (用于访问付费歌曲和无损音质，可选)
-# 获取方法：登录网易云音乐网页版，查看Cookie中的MUSIC_U值
-music_u = 
+# NetEase Cloud Music MUSIC_U cookie (optional; enables paid tracks and lossless quality)
+# To obtain: log in to the NetEase Cloud Music web client and copy the MUSIC_U value from cookies
+music_u =
 
 [database]
-# 数据库文件路径
+# Database file path
 url = ./data/music_bot.db
 
 [download]
-# 下载目录
+# Download directory
 dir = ./downloads
 
-# 临时文件存储模式 (v1.1.0+)
-# - disk: 传统磁盘文件方式 (推荐默认，稳定，低内存占用)
-# - memory: 全程内存处理 (仅建议小文件场景，需足够RAM)
-# - hybrid: 智能选择 (小文件用内存，大文件用磁盘)
+# Temporary file storage mode (v1.1.0+)
+# - disk: traditional disk files (recommended default; stable, low memory usage)
+# - memory: in-memory processing (only for small files; requires sufficient RAM)
+# - hybrid: automatic selection (small files in memory, large files on disk)
 storage_mode = disk
 
-# 封面模式
-# - thumbnail: 默认，仅下载 320x320 缩略图；嵌入封面始终为 320x320 JPEG (Telegram 规范)
-# - original: 下载并嵌入原始高分辨率封面
-# - both: 嵌入高分辨率封面，同时生成 320x320 缩略图用于 Telegram 预览
+# Cover art mode
+# - thumbnail: default; downloads 320x320 thumbnail only; embedded cover is always 320x320 JPEG (Telegram spec)
+# - original: downloads and embeds the original high-resolution cover
+# - both: embeds high-res cover and generates a 320x320 thumbnail for Telegram preview
 cover_mode = thumbnail
 
-# 混合模式阈值 (MB)，文件大于此值使用磁盘模式
+# Hybrid mode threshold (MB); files larger than this use disk mode
 memory_threshold = 100
 
-# 内存安全缓冲区 (MB)，确保系统有足够可用内存
-# 系统可用内存必须 > (文件大小 + 此缓冲区) 才使用内存模式
+# Memory safety buffer (MB); ensures enough free system memory
+# System available memory must exceed (file size + this buffer) to use memory mode
 memory_buffer = 100
 
-# 内存模式文件大小上限 (MB)
-# 无论 memory 或 hybrid，文件大于此值都强制使用磁盘模式
-# 若需要稳定优先，可设置为更小值（如 16~32）避免大文件走内存上传链路
+# Maximum file size for memory mode (MB)
+# Regardless of memory or hybrid mode, files larger than this always use disk mode
+# For stability, consider a smaller value (e.g. 16–32) to avoid large files going through the in-memory upload pipeline
 memory_max_file_mb = 100
 
-# 最大并发下载数 (v1.1.9+)
-# 控制同时下载的歌曲数量，较低的值减少内存峰值
-# 推荐值: 3-5 (默认值: 3)
+# Maximum concurrent downloads (v1.1.9+)
+# Controls how many songs download simultaneously; lower values reduce peak memory usage
+# Recommended: 3–5 (default: 3)
 max_concurrent = 3
 
-# 单次歌单/专辑下载的最大曲目数（默认 20）
-# 当歌单/专辑曲目数超过该值时，将拒绝整单下载
+# Maximum tracks per playlist/album download (default: 20)
+# Requests exceeding this limit are rejected
 max_batch_tracks = 20
 
 [upload]
-# 上传客户端复用请求次数 (v1.1.14+)
-# 推荐值: 0
-# 设置为 0 表示不按请求次数刷新（仅初始化后持续复用）
+# Upload client reuse request count (v1.1.14+)
+# Recommended: 0
+# Set to 0 to never refresh by request count (reuse the client indefinitely after init)
 client_reuse_requests = 0
 
-# 最大并发上传数 (v1.1.16+)
-# 推荐值: 1
+# Maximum concurrent uploads (v1.1.16+)
+# Recommended: 1
 max_concurrent = 1
 
-# 本地文件 URI 上传 (需 telegram-bot-api --local，默认 false)
+# Local file URI upload (requires telegram-bot-api --local; default: false)
 local_file_uri = false
 
-# 上传连接池每主机最大空闲连接数 (v1.1.14+)
-# 推荐值: 1
+# Upload connection pool max idle connections per host (v1.1.14+)
+# Recommended: 1
 pool_max_idle_per_host = 1
 
-# 上传连接池空闲超时秒数 (v1.1.14+)
-# 推荐值: 300
+# Upload connection pool idle timeout in seconds (v1.1.14+)
+# Recommended: 300
 pool_idle_timeout_secs = 300
 
-# 上传超时时间 (秒)
+# Upload timeout (seconds)
 timeout_secs = 300
