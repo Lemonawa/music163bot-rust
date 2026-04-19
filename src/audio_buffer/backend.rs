@@ -45,8 +45,7 @@ impl AudioBuffer {
         } else {
             tokio::fs::metadata(path)
                 .await
-                .map(|metadata| metadata.len())
-                .unwrap_or(0)
+                .map_or(0, |metadata| metadata.len())
         }
     }
 
@@ -55,8 +54,7 @@ impl AudioBuffer {
             written_bytes
         } else {
             std::fs::metadata(path)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0)
+                .map_or(0, |metadata| metadata.len())
         }
     }
 
