@@ -359,7 +359,13 @@ pub(super) async fn download_and_send_music(
 
     tracing::debug!("File format: {}", if is_flac { "FLAC" } else { "MP3" });
 
-    let reply_markup_json = serde_json::to_string(&keyboard).ok();
+    let reply_markup_json = match serde_json::to_string(&keyboard) {
+        Ok(json) => Some(json),
+        Err(e) => {
+            tracing::warn!("Failed to serialize reply keyboard: {}", e);
+            None
+        }
+    };
 
     let audio_bytes = audio_buffer.take_memory_bytes_for_upload();
 
