@@ -10,6 +10,9 @@ sqlite::memory:*
 *.log
 music163bot-go-temp/
 
+# docs (local only)
+docs/superpowers/
+
 # opencode
 .opencode/
 .worktrees/
