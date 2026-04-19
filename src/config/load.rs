@@ -20,14 +20,17 @@ impl Config {
         let mut config_map = HashMap::with_capacity(32);
         let mut current_section = String::new();
 
+        // Parse INI-like format with sections
         for line in reader.lines() {
             let line = line?;
             let line = line.trim();
 
+            // Skip comments and empty lines
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
 
+            // Check for section headers [section]
             if line.starts_with('[') {
                 current_section = line
                     .strip_prefix('[')
@@ -37,10 +40,12 @@ impl Config {
                 continue;
             }
 
+            // Parse key=value pairs
             if let Some((raw_key, raw_value)) = line.split_once('=') {
                 let key = raw_key.trim().to_lowercase();
                 let value = raw_value.trim().to_string();
 
+                // Create full key with section prefix
                 let full_key = if current_section.is_empty() {
                     key
                 } else {
@@ -51,6 +56,7 @@ impl Config {
             }
         }
 
+        // Map configuration values
         if let Some(token) = config_map.get("bot.token") {
             config.bot_token.clone_from(token);
         }
@@ -224,6 +230,7 @@ impl Config {
             );
         }
 
+        // Validate required fields
         if config.bot_token.is_empty() {
             return Err(anyhow::anyhow!("BOT_TOKEN is required"));
         }

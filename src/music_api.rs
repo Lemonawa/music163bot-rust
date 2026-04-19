@@ -24,7 +24,7 @@ use self::media::resize_image_with_padding;
 use self::media::rewrite_media_url;
 use self::models::{
     AlbumSongsResponse, DjProgramDetailResponse, DjProgramItem, DjProgramListResponse,
-    PlaylistDetailResponse,
+    EapiSearchResponse, PlaylistDetailResponse,
 };
 
 #[derive(Debug)]
@@ -40,9 +40,9 @@ pub struct MusicApi {
     song_lyric_cache: DashMap<u64, TimedCacheEntry<String>>,
 }
 
-const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_mins(5);
+const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_secs(300);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
-const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_mins(5);
+const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_secs(300);
 pub(crate) const ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS: u32 = 5;
 const PERF_API_LOG_PREFIX: &str = "PERF_API";
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";

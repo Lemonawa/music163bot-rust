@@ -90,7 +90,10 @@ fn parse_telegram_api_response_preserves_retry_after_hint_for_429() {
     let err_msg = err.to_string();
 
     assert!(err_msg.contains("HTTP 429"));
-    assert_eq!(extract_retry_after_seconds(&err_msg), Some(26));
+    assert_eq!(
+        crate::utils::extract_retry_after_seconds(&err_msg),
+        Some(26)
+    );
 }
 
 #[test]
@@ -180,11 +183,11 @@ async fn singleflight_claim_helper_waits_for_existing_leader() {
 
 #[tokio::test]
 async fn tagging_wrapper_returns_buffer_for_unknown_format() {
-    let buffer = AudioBuffer::Memory {
+    let buffer = crate::audio_buffer::AudioBuffer::Memory {
         data: vec![1, 2, 3],
         filename: "sample.bin".to_string(),
     };
-    let detail = SongDetail {
+    let detail = crate::music_api::SongDetail {
         id: 1,
         name: "Song".to_string(),
         dt: Some(1_000),
@@ -201,19 +204,19 @@ async fn tagging_wrapper_returns_buffer_for_unknown_format() {
 
 #[tokio::test]
 async fn tagging_wrapper_adds_mp3_id3_header() {
-    let buffer = AudioBuffer::Memory {
+    let buffer = crate::audio_buffer::AudioBuffer::Memory {
         data: vec![0xFF, 0xFB, 0x90, 0x64],
         filename: "sample.mp3".to_string(),
     };
-    let detail = SongDetail {
+    let detail = crate::music_api::SongDetail {
         id: 2,
         name: "Song".to_string(),
         dt: Some(120_000),
-        ar: Some(vec![Artist {
+        ar: Some(vec![crate::music_api::Artist {
             id: 1,
             name: "Artist".to_string(),
         }]),
-        al: Some(Album {
+        al: Some(crate::music_api::Album {
             id: 1,
             name: "Album".to_string(),
             pic_url: None,

@@ -36,7 +36,7 @@ fn parse_direct_music_target_detects_song_program_and_collection() {
     assert!(matches!(
         super::parse_direct_music_target("https://music.163.com/playlist?id=17607381913"),
         Some(super::ParsedMusicTarget::Collection(
-            MusicCollectionTarget::Playlist(17_607_381_913)
+            crate::utils::MusicCollectionTarget::Playlist(17_607_381_913)
         ))
     ));
 }
@@ -165,6 +165,14 @@ fn about_text_includes_build_commit_in_version_line() {
     let text = super::build_about_text();
     assert!(text.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
     assert!(text.contains(&format!("({})", super::BUILD_GIT_COMMIT)));
+}
+
+#[test]
+fn is_spawnable_command_text_requires_leading_slash() {
+    assert!(super::is_spawnable_command_text("/start"));
+    assert!(super::is_spawnable_command_text("/music 123"));
+    assert!(!super::is_spawnable_command_text("  /start"));
+    assert!(!super::is_spawnable_command_text("hello"));
 }
 
 #[test]

@@ -249,6 +249,53 @@ async fn save_song_info_upsert_updates_fields_for_existing_music_id() {
 }
 
 #[tokio::test]
+async fn update_file_ids_only_changes_target_file_fields() {
+    let (db, temp_path) = create_temp_db("music163bot_update_file_ids").await;
+
+    let mut original = sample_song_info(7_002);
+    original.song_name = "No Field Drift".to_string();
+    original.song_artists = "Artist Stable".to_string();
+    original.song_album = "Album Stable".to_string();
+    original.file_ext = "ogg".to_string();
+    original.bit_rate = 192_000;
+    original.duration = 222;
+    original.file_id = Some("file_before".to_string());
+    original.thumb_file_id = Some("thumb_before".to_string());
+
+    db.save_song_info(&original).await.expect("insert song");
+    db.update_file_ids(
+        original.music_id,
+        Some("file_after".to_string()),
+        Some("thumb_after".to_string()),
+    )
+    .await
+    .expect("update file ids");
+
+    let fetched = db
+        .get_song_by_music_id(original.music_id)
+        .await
+        .expect("get song")
+        .expect("song exists");
+
+    assert_eq!(fetched.file_id.as_deref(), Some("file_after"));
+    assert_eq!(fetched.thumb_file_id.as_deref(), Some("thumb_after"));
+    assert_eq!(fetched.song_name, original.song_name);
+    assert_eq!(fetched.song_artists, original.song_artists);
+    assert_eq!(fetched.song_album, original.song_album);
+    assert_eq!(fetched.file_ext, original.file_ext);
+    assert_eq!(fetched.bit_rate, original.bit_rate);
+    assert_eq!(fetched.duration, original.duration);
+    assert_eq!(fetched.music_size, original.music_size);
+    assert_eq!(fetched.pic_size, original.pic_size);
+    assert_eq!(fetched.emb_pic_size, original.emb_pic_size);
+    assert_eq!(fetched.from_user_id, original.from_user_id);
+    assert_eq!(fetched.from_chat_id, original.from_chat_id);
+
+    drop(db);
+    cleanup_db_files(&temp_path);
+}
+
+#[tokio::test]
 async fn delete_song_by_music_id_returns_true_when_deleted_and_false_when_missing() {
     let (db, temp_path) = create_temp_db("music163bot_delete_semantics").await;
     let song = sample_song_info(7_003);

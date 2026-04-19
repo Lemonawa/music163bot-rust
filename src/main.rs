@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
     info!("Music163bot-Rust starting...");
     info!("Configuration loaded from {}", args.config);
 
+    // Start the bot
     bot::run(config).await?;
 
     Ok(())

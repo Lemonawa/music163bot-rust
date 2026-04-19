@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use super::{AudioBuffer, remove_file_if_exists};
 
 impl AudioBuffer {
+    /// Write a chunk of data to the buffer.
     pub async fn write_chunk(&mut self, chunk: &[u8]) -> Result<()> {
         match self {
             Self::Disk {
@@ -27,6 +28,7 @@ impl AudioBuffer {
         Ok(())
     }
 
+    /// Finish writing and flush any buffers.
     pub async fn finish(&mut self) -> Result<()> {
         if let Self::Disk { file, .. } = self
             && let Some(file) = file
@@ -43,7 +45,8 @@ impl AudioBuffer {
         } else {
             tokio::fs::metadata(path)
                 .await
-                .map_or(0, |metadata| metadata.len())
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
         }
     }
 
@@ -51,7 +54,9 @@ impl AudioBuffer {
         if written_bytes > 0 {
             written_bytes
         } else {
-            std::fs::metadata(path).map_or(0, |metadata| metadata.len())
+            std::fs::metadata(path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
         }
     }
 
@@ -91,6 +96,7 @@ impl AudioBuffer {
         }
     }
 
+    /// Cleanup resources.
     pub async fn cleanup(self) -> Result<()> {
         match self {
             Self::Disk { path, file, .. } => {

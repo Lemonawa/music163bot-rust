@@ -4,8 +4,8 @@ pub(super) async fn download_and_send_music(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
-    song_detail: Arc<SongDetail>,
-    song_url: &SongUrl,
+    song_detail: Arc<crate::music_api::SongDetail>,
+    song_url: &crate::music_api::SongUrl,
     status_msg: &Message,
     pre_upload_path_start: std::time::Instant,
     perf_ctx: &PerfTraceContext,
@@ -297,7 +297,7 @@ pub(super) async fn download_and_send_music(
         duration: duration_sec,
         file_id: None,
         thumb_file_id: None,
-        from_user_id: msg.from.as_ref().map_or(-1, |u| u.id.0 as i64),
+        from_user_id: msg.from.as_ref().map_or(0, |u| u.id.0 as i64),
         from_user_name: msg
             .from
             .as_ref()
@@ -450,14 +450,14 @@ pub(super) async fn download_and_send_music(
         }
     } else if let Err(e) = upload_result {
         let upload_mbps = throughput_mbps(file_size, upload_duration);
-        tracing::error!(
+        tracing::warn!(
             "Upload failed after {:.2}s ({:.2} MB/s, inflight: {}, peak: {})",
             upload_duration.as_secs_f64(),
             upload_mbps,
             in_flight_after,
             peak_in_flight
         );
-        tracing::error!("Upload failed: {}", sanitize_sensitive_text(&e.to_string()));
+        tracing::warn!("Upload failed: {}", sanitize_sensitive_text(&e.to_string()));
 
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;

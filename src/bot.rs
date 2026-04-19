@@ -24,9 +24,7 @@ use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
-use crate::music_api::{
-    Album, Artist, MusicApi, ProgramMainTrack, SongDetail, SongUrl, format_artists,
-};
+use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
 use crate::utils::{
     MusicCollectionTarget, build_http_client, clean_filename, ensure_dir,
     extract_first_trusted_music_share_url, extract_retry_after_seconds,
@@ -113,7 +111,8 @@ use target_resolution::ParsedMusicTarget;
 use telegram_api::{parse_telegram_api_response, redact_bot_token_in_error_message};
 #[cfg(test)]
 use upload::{
-    build_music_url, build_program_url, format_perf, is_command_text, maybe_local_file_uri,
+    build_music_url, build_program_url, format_perf, is_command_text, is_spawnable_command_text,
+    maybe_local_file_uri,
 };
 #[cfg(test)]
 use wiring::{

@@ -160,6 +160,12 @@ pub struct SearchResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub(super) struct EapiSearchResponse {
+    pub(super) code: i32,
+    pub(super) result: SearchResult,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResult {
     pub songs: Vec<SearchSong>,
     #[serde(rename = "songCount")]

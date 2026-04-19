@@ -3,7 +3,7 @@ use super::*;
 pub(super) async fn apply_tags_in_blocking(
     mut audio_buffer: AudioBuffer,
     file_ext: &str,
-    song_detail: Arc<SongDetail>,
+    song_detail: Arc<crate::music_api::SongDetail>,
     artwork_data: Option<Bytes>,
     embed_cover: bool,
 ) -> Result<AudioBuffer> {
@@ -95,29 +95,24 @@ pub(super) fn create_music_keyboard_for_target(
     InlineKeyboardMarkup::new(rows)
 }
 
-fn build_entity_url(
-    base_url: &str,
-    path_segment: &str,
-    entity_id: u64,
-) -> std::result::Result<reqwest::Url, url::ParseError> {
-    let mut url = reqwest::Url::parse(base_url)?;
-    url.set_path(path_segment);
-    url.set_query(Some(&format!("id={entity_id}")));
-    Ok(url)
-}
-
 pub(super) fn build_music_url(
     base_url: &str,
     music_id: u64,
 ) -> std::result::Result<reqwest::Url, url::ParseError> {
-    build_entity_url(base_url, "song", music_id)
+    let mut url = reqwest::Url::parse(base_url)?;
+    url.set_path("song");
+    url.set_query(Some(&format!("id={music_id}")));
+    Ok(url)
 }
 
 pub(super) fn build_program_url(
     base_url: &str,
     program_id: u64,
 ) -> std::result::Result<reqwest::Url, url::ParseError> {
-    build_entity_url(base_url, "program", program_id)
+    let mut url = reqwest::Url::parse(base_url)?;
+    url.set_path("program");
+    url.set_query(Some(&format!("id={program_id}")));
+    Ok(url)
 }
 
 pub(super) fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseError> {
@@ -125,10 +120,8 @@ pub(super) fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, 
 }
 
 pub(super) fn is_admin(msg: &Message, config: &Config) -> bool {
-    let Some(user) = &msg.from else {
-        return false;
-    };
-    config.bot_admin.contains(&(user.id.0 as i64))
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    config.bot_admin.contains(&user_id)
 }
 
 pub(super) async fn ensure_admin(
@@ -213,12 +206,16 @@ pub(super) fn contains_music_link_hint(text: &str) -> bool {
         .any(|hint| text.contains(hint))
 }
 
+pub(super) fn is_spawnable_command_text(text: &str) -> bool {
+    text.starts_with('/')
+}
+
 pub(super) fn is_command_text(text: &str) -> bool {
     text.starts_with('/')
 }
 
 pub(super) fn should_spawn_message_task(text: &str) -> bool {
-    is_command_text(text) || contains_music_link_hint(text)
+    is_spawnable_command_text(text) || contains_music_link_hint(text)
 }
 
 pub(super) fn should_log_command(command: &str) -> bool {
@@ -505,7 +502,7 @@ pub(super) fn append_search_result_line(
     use std::fmt::Write;
 
     if let Err(e) = writeln!(results, "{index}.「{song_name}」 - {artists}") {
-        tracing::warn!("Failed to format search result line: {}", e);
+        tracing::error!("Failed to format search result line: {}", e);
     }
 }
 
@@ -535,10 +532,14 @@ pub(super) async fn cleanup_thumbnail_buffer(buffer: Option<ThumbnailBuffer>) {
 }
 
 pub(super) fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
-    upload_state
-        .bot
-        .clone()
-        .ok_or_else(|| BotError::Other(anyhow::anyhow!("upload bot not initialized")))
+    if let Some(bot) = upload_state.bot.clone() {
+        Ok(bot)
+    } else {
+        tracing::error!("Upload bot not initialized");
+        Err(BotError::Other(anyhow::anyhow!(
+            "upload bot not initialized"
+        )))
+    }
 }
 
 pub(super) struct UploadBotBundle {

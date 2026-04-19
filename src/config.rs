@@ -106,9 +106,11 @@ fn parse_admin_list(admins: &str) -> Vec<i64> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    // Required fields
     pub bot_token: String,
     pub music_u: Option<String>,
 
+    // Optional fields with defaults
     pub bot_api: String,
     pub music_api: String,
     pub bot_admin: Vec<i64>,

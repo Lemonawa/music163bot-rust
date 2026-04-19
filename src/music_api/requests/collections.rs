@@ -2,7 +2,6 @@ use super::super::{
     AlbumSongsResponse, DjProgramDetailResponse, DjProgramListResponse, MusicApi,
     PlaylistDetailResponse, ProgramMainTrack, Result,
 };
-use super::api_code_error;
 use crate::error::BotError;
 
 impl MusicApi {
@@ -20,7 +19,10 @@ impl MusicApi {
         let data: PlaylistDetailResponse = response.json().await?;
 
         if data.code != 200 {
-            return Err(api_code_error(data.code));
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
         }
 
         let playlist = data
@@ -43,7 +45,10 @@ impl MusicApi {
         let data: AlbumSongsResponse = response.json().await?;
 
         if data.code != 200 {
-            return Err(api_code_error(data.code));
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
         }
 
         Ok(data.songs.into_iter().map(|song| song.id).collect())
@@ -59,7 +64,10 @@ impl MusicApi {
         let data: DjProgramDetailResponse = response.json().await?;
 
         if data.code != 200 {
-            return Err(api_code_error(data.code));
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
         }
 
         let program = data
@@ -89,7 +97,10 @@ impl MusicApi {
         let data: DjProgramListResponse = response.json().await?;
 
         if data.code != 200 {
-            return Err(api_code_error(data.code));
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
         }
 
         let mut tracks = Vec::with_capacity(data.programs.len());

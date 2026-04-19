@@ -242,7 +242,7 @@ pub(super) async fn process_djradio_collection(
 
 pub(super) async fn download_cover_assets(
     state: &Arc<BotState>,
-    song_detail: &SongDetail,
+    song_detail: &crate::music_api::SongDetail,
     song_id: u64,
     cover_mode: CoverMode,
     download_cover: bool,

@@ -4,7 +4,6 @@ use super::super::{
     DjProgramItem, MusicApi, ProgramMainTrack, Result, SongDetail, SongDetailResponse, SongUrl,
     SongUrlResponse,
 };
-use super::api_code_error;
 use crate::error::BotError;
 
 impl MusicApi {
@@ -52,7 +51,10 @@ impl MusicApi {
         let data: SongDetailResponse = response.json().await?;
 
         if data.code != 200 {
-            return Err(api_code_error(data.code));
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
         }
 
         let detail = data
@@ -85,7 +87,10 @@ impl MusicApi {
         let data: SongUrlResponse = response.json().await?;
 
         if data.code != 200 {
-            return Err(api_code_error(data.code));
+            return Err(BotError::MusicApi(format!(
+                "API returned code {}",
+                data.code
+            )));
         }
 
         let song_url = data
