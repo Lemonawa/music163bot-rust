@@ -109,7 +109,12 @@ pub(super) async fn handle_lyric_command(
 
             match upload_result {
                 Ok(_) => {
-                    bot.delete_message(msg.chat.id, status_msg.id).await.ok();
+                    if let Err(e) = bot.delete_message(msg.chat.id, status_msg.id).await {
+                        tracing::debug!(
+                            "Failed to delete lyric status message: {}",
+                            sanitize_sensitive_text(&e.to_string())
+                        );
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
