@@ -9,8 +9,17 @@ pub(super) async fn try_send_cached_song(
 ) -> ResponseResult<bool> {
     let music_id_i64 = music_id as i64;
 
-    let Ok(Some(cached_song)) = state.database.get_song_by_music_id(music_id_i64).await else {
-        return Ok(false);
+    let cached_song = match state.database.get_song_by_music_id(music_id_i64).await {
+        Ok(Some(song)) => song,
+        Ok(None) => return Ok(false),
+        Err(e) => {
+            tracing::warn!(
+                "Database error looking up music_id {}: {}",
+                music_id,
+                sanitize_sensitive_text(&e.to_string())
+            );
+            return Ok(false);
+        }
     };
 
     let Some(file_id) = &cached_song.file_id else {
