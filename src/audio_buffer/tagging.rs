@@ -25,8 +25,7 @@ impl AudioBuffer {
             } => {
                 tag.write_to_path(path.as_path(), Version::Id3v24)
                     .context("Failed to write ID3 tags to disk file")?;
-                *written_bytes = std::fs::metadata(path.as_path())
-                    .map_or(0, |m| m.len());
+                *written_bytes = std::fs::metadata(path.as_path()).map_or(0, |m| m.len());
             }
             Self::Memory { data, .. } => {
                 // Memory mode: create new tag and prepend to audio data
@@ -117,8 +116,7 @@ impl AudioBuffer {
             } => {
                 // Disk mode: use metaflac directly
                 Self::add_flac_metadata_disk(path.as_path(), song_detail, artwork_data)?;
-                *written_bytes = std::fs::metadata(path.as_path())
-                    .map_or(0, |m| m.len());
+                *written_bytes = std::fs::metadata(path.as_path()).map_or(0, |m| m.len());
                 Ok(())
             }
             Self::Memory { data, .. } => {

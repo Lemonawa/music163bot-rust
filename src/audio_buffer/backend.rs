@@ -53,8 +53,7 @@ impl AudioBuffer {
         if written_bytes > 0 {
             written_bytes
         } else {
-            std::fs::metadata(path)
-                .map_or(0, |metadata| metadata.len())
+            std::fs::metadata(path).map_or(0, |metadata| metadata.len())
         }
     }
 
