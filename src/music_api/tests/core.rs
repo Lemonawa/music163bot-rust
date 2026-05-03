@@ -185,3 +185,41 @@ async fn download_album_art_accepts_trusted_cdn_host() {
         );
     }
 }
+
+// --- resolve_share_link URL validation tests ---
+
+#[tokio::test]
+async fn resolve_share_link_rejects_untrusted_host() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    let result = api
+        .resolve_share_link("https://evil.example.com/share/abc")
+        .await;
+    assert!(result.is_err(), "should reject untrusted share-link host");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Untrusted share-link host"),
+        "error should mention untrusted host: {err}"
+    );
+}
+
+#[tokio::test]
+async fn resolve_share_link_rejects_invalid_url() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    let result = api.resolve_share_link("not a url").await;
+    assert!(result.is_err(), "should reject invalid URL");
+}
+
+#[tokio::test]
+async fn resolve_share_link_accepts_trusted_music163_domain() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    // Will fail with connection error, not SSRF guard rejection.
+    let result = api
+        .resolve_share_link("https://music.163.com/song?id=123")
+        .await;
+    if let Err(e) = &result {
+        assert!(
+            !e.to_string().contains("Untrusted share-link host"),
+            "trusted music.163.com should pass SSRF guard: {e}"
+        );
+    }
+}

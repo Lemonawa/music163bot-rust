@@ -111,6 +111,11 @@ async fn remove_file_if_exists(path: &Path) -> Result<()> {
 
 pub(super) fn ensure_safe_cache_filename(filename: &str) -> Result<()> {
     use std::path::Component;
+
+    if filename.is_empty() {
+        return Err(anyhow::anyhow!("Empty filename for cache path"));
+    }
+
     let path = Path::new(filename);
 
     for component in path.components() {

@@ -657,3 +657,12 @@ async fn create_thumbnail_buffer_rejects_dot_dot_traversal() {
         "thumbnail buffer should reject parent traversal filenames"
     );
 }
+
+#[test]
+fn ensure_safe_cache_filename_rejects_empty_string() {
+    let result = super::ensure_safe_cache_filename("");
+    assert!(
+        result.is_err(),
+        "empty filename should be rejected for cache safety"
+    );
+}

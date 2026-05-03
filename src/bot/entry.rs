@@ -2,6 +2,9 @@ use super::*;
 
 pub(super) fn percentile_95(samples: &VecDeque<f64>) -> f64 {
     let mut values: Vec<f64> = samples.iter().copied().collect();
+    if values.is_empty() {
+        return 0.0;
+    }
     values.sort_by(f64::total_cmp);
     let len = values.len();
     let idx = ((len * 95).div_ceil(100)).saturating_sub(1);

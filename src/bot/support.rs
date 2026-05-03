@@ -245,6 +245,7 @@ pub(super) async fn handle_clearallcache_command(
 
     send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
     let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    prune_expired_confirmations(&state.clearallcache_confirms);
     state
         .clearallcache_confirms
         .insert((user_id, msg.chat.id), std::time::Instant::now());
@@ -266,7 +267,7 @@ pub(super) async fn handle_clearallcache_confirm_command(
     let should_allow = state
         .clearallcache_confirms
         .remove(&(user_id, msg.chat.id))
-        .and_then(|(_, at)| (at.elapsed() <= std::time::Duration::from_secs(30)).then_some(()))
+        .and_then(|(_, at)| (at.elapsed() <= CLEARALLCACHE_CONFIRM_WINDOW).then_some(()))
         .is_some();
     if !should_allow {
         send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
@@ -460,6 +461,15 @@ pub(super) async fn handle_inline_query(
     }
 
     Ok(())
+}
+
+pub(super) const CLEARALLCACHE_CONFIRM_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(30);
+
+pub(super) fn prune_expired_confirmations(
+    confirms: &dashmap::DashMap<(i64, teloxide::types::ChatId), std::time::Instant>,
+) {
+    confirms.retain(|_, at| at.elapsed() <= CLEARALLCACHE_CONFIRM_WINDOW);
 }
 
 /// Build caption with exact format:

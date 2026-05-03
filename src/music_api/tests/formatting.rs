@@ -160,3 +160,104 @@ fn resize_image_with_padding_zero_source_returns_blank_canvas() {
     assert_eq!(result.dimensions(), (320, 320));
 }
 use super::*;
+
+// --- deserialize_string_or_null edge-case tests ---
+
+#[test]
+fn song_detail_deserializes_missing_name_field_to_default() {
+    // The `name` field has #[serde(default)] + deserialize_string_or_null.
+    // A missing key should yield "".
+    let payload = r#"{"id":1}"#;
+    let parsed: SongDetail = serde_json::from_str(payload).expect("deserialize song detail");
+    assert_eq!(parsed.name, "");
+    assert!(parsed.ar.is_none());
+    assert!(parsed.al.is_none());
+}
+
+#[test]
+fn song_detail_deserializes_empty_string_name() {
+    let payload = r#"{"id":1,"name":""}"#;
+    let parsed: SongDetail = serde_json::from_str(payload).expect("deserialize song detail");
+    assert_eq!(parsed.name, "");
+}
+
+#[test]
+fn song_detail_deserializes_normal_name() {
+    let payload = r#"{"id":1,"name":"Hello"}"#;
+    let parsed: SongDetail = serde_json::from_str(payload).expect("deserialize song detail");
+    assert_eq!(parsed.name, "Hello");
+}
+
+#[test]
+fn artist_deserializes_null_name() {
+    let payload = r#"{"id":1,"name":null}"#;
+    let parsed: Artist = serde_json::from_str(payload).expect("deserialize artist");
+    assert_eq!(parsed.name, "");
+}
+
+#[test]
+fn artist_deserializes_missing_name_to_default() {
+    let payload = r#"{"id":1}"#;
+    let parsed: Artist = serde_json::from_str(payload).expect("deserialize artist");
+    assert_eq!(parsed.name, "");
+}
+
+#[test]
+fn album_deserializes_null_name() {
+    let payload = r#"{"id":1,"name":null}"#;
+    let parsed: Album = serde_json::from_str(payload).expect("deserialize album");
+    assert_eq!(parsed.name, "");
+}
+
+#[test]
+fn album_deserializes_missing_name_to_default() {
+    let payload = r#"{"id":1}"#;
+    let parsed: Album = serde_json::from_str(payload).expect("deserialize album");
+    assert_eq!(parsed.name, "");
+}
+
+#[test]
+fn song_url_deserializes_missing_optional_fields_to_default() {
+    // url, md5, format all have #[serde(default)] + deserialize_string_or_null.
+    let payload = r#"{"id":1,"br":320000,"size":123}"#;
+    let parsed: SongUrl = serde_json::from_str(payload).expect("deserialize song url");
+    assert_eq!(parsed.url, "");
+    assert_eq!(parsed.md5, "");
+    assert_eq!(parsed.format, "");
+}
+
+#[test]
+fn song_url_deserializes_normal_values() {
+    let payload = r#"{"id":1,"url":"https://example.com/song.mp3","br":320000,"size":12345,"md5":"abc123","type":"mp3"}"#;
+    let parsed: SongUrl = serde_json::from_str(payload).expect("deserialize song url");
+    assert_eq!(parsed.url, "https://example.com/song.mp3");
+    assert_eq!(parsed.md5, "abc123");
+    assert_eq!(parsed.format, "mp3");
+}
+
+#[test]
+fn song_detail_accepts_duration_alias() {
+    // `dt` field has #[serde(alias = "duration")]
+    let payload = r#"{"id":1,"name":"test","duration":180000}"#;
+    let parsed: SongDetail = serde_json::from_str(payload).expect("deserialize song detail");
+    assert_eq!(parsed.dt, Some(180_000));
+}
+
+#[test]
+fn song_detail_accepts_artists_alias() {
+    // `ar` field has #[serde(alias = "artists")]
+    let payload = r#"{"id":1,"name":"test","artists":[{"id":2,"name":"Bob"}]}"#;
+    let parsed: SongDetail = serde_json::from_str(payload).expect("deserialize song detail");
+    let artists = parsed.ar.expect("artists should be present");
+    assert_eq!(artists.len(), 1);
+    assert_eq!(artists[0].name, "Bob");
+}
+
+#[test]
+fn song_detail_accepts_album_alias() {
+    // `al` field has #[serde(alias = "album")]
+    let payload = r#"{"id":1,"name":"test","album":{"id":3,"name":"Test Album"}}"#;
+    let parsed: SongDetail = serde_json::from_str(payload).expect("deserialize song detail");
+    let album = parsed.al.expect("album should be present");
+    assert_eq!(album.name, "Test Album");
+}
