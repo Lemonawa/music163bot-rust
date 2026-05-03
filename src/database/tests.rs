@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Database, SongInfo};
 use chrono::{TimeZone, Timelike, Utc};
+use sqlx::Row;
 
 fn cleanup_db_files(path: &Path) {
     let _ = std::fs::remove_file(path);
@@ -297,6 +298,146 @@ async fn clear_all_songs_returns_deleted_count_and_empties_table() {
             .await
             .expect("query cleared song")
             .is_none()
+    );
+
+    drop(db);
+    cleanup_db_files(&temp_path);
+}
+
+#[tokio::test]
+async fn in_memory_dsn_does_not_create_file_in_cwd() {
+    let original_dir = std::env::current_dir().expect("get cwd");
+    let temp_dir = std::env::temp_dir().join(format!(
+        "music163bot_memtest_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+    std::env::set_current_dir(&temp_dir).expect("chdir to temp");
+
+    let db = Database::new("sqlite::memory:")
+        .await
+        .expect("in-memory DB should succeed");
+
+    let suspect = temp_dir.join("sqlite::memory:");
+    assert!(
+        !suspect.exists(),
+        "sqlite::memory: DSN must not create a file in the working directory"
+    );
+
+    drop(db);
+    std::env::set_current_dir(&original_dir).expect("restore cwd");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn colon_memory_dsn_does_not_create_file_in_cwd() {
+    let db = Database::new(":memory:")
+        .await
+        .expect(":memory: DB should succeed");
+
+    let cwd = std::env::current_dir().expect("get cwd");
+    let suspect = cwd.join(":memory:");
+    assert!(
+        !suspect.exists(),
+        ":memory: DSN must not create a file in the current directory"
+    );
+
+    drop(db);
+}
+
+#[tokio::test]
+async fn migrate_add_program_id_column_to_existing_db() {
+    let temp_path = build_temp_db_path("music163bot_migrate_program_id");
+    let temp_path_str = temp_path.to_string_lossy().to_string();
+
+    {
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&temp_path_str)
+            .create_if_missing(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_with(options)
+            .await
+            .expect("connect");
+
+        sqlx::query(
+            "CREATE TABLE song_infos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                music_id INTEGER UNIQUE NOT NULL,
+                song_name TEXT NOT NULL,
+                song_artists TEXT NOT NULL,
+                song_album TEXT NOT NULL,
+                file_ext TEXT NOT NULL,
+                music_size INTEGER NOT NULL,
+                pic_size INTEGER NOT NULL,
+                emb_pic_size INTEGER NOT NULL,
+                bit_rate INTEGER NOT NULL,
+                duration INTEGER NOT NULL,
+                file_id TEXT,
+                thumb_file_id TEXT,
+                from_user_id INTEGER NOT NULL,
+                from_user_name TEXT NOT NULL,
+                from_chat_id INTEGER NOT NULL,
+                from_chat_name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create legacy schema");
+
+        pool.close().await;
+    }
+
+    let db = Database::new(&temp_path_str)
+        .await
+        .expect("DB init should run migration");
+
+    let mut song = sample_song_info(99_001);
+    song.program_id = Some(42);
+    db.save_song_info(&song)
+        .await
+        .expect("save with program_id");
+
+    let row = sqlx::query("SELECT program_id FROM song_infos WHERE music_id = 99001")
+        .fetch_one(&db.pool)
+        .await
+        .expect("fetch");
+    let pid: Option<i64> = row.get("program_id");
+    assert_eq!(pid, Some(42), "program_id should be stored after migration");
+
+    drop(db);
+    cleanup_db_files(&temp_path);
+}
+
+#[tokio::test]
+async fn decode_sqlite_datetime_warns_on_unparseable_format() {
+    let (db, temp_path) = create_temp_db("music163bot_ts_warn").await;
+
+    let song = sample_song_info(99_002);
+    db.save_song_info(&song).await.expect("insert row");
+
+    sqlx::query("UPDATE song_infos SET created_at = ? WHERE music_id = ?")
+        .bind("not-a-timestamp")
+        .bind(song.music_id)
+        .execute(&db.pool)
+        .await
+        .expect("set bad timestamp");
+
+    let fetched = db
+        .get_song_by_music_id(99_002)
+        .await
+        .expect("fetch")
+        .expect("row exists");
+
+    let now = chrono::Utc::now();
+    let diff = (now - fetched.created_at).num_seconds().unsigned_abs();
+    assert!(
+        diff < 5,
+        "should fall back to approximately Utc::now(); diff = {diff}s"
     );
 
     drop(db);

@@ -606,3 +606,54 @@ async fn disk_written_bytes_tracks_sequential_writes() {
 
     buffer.cleanup().await.expect("cleanup disk buffer");
 }
+
+#[tokio::test]
+async fn create_disk_buffer_rejects_dot_dot_traversal() {
+    let temp_name = format!(
+        "music163bot_traversal_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let filename = format!("../{temp_name}.mp3");
+    let cache_dir = std::env::temp_dir();
+
+    let result = AudioBuffer::new_disk(filename, cache_dir.to_str().unwrap()).await;
+    assert!(
+        result.is_err(),
+        "should reject filenames with parent traversal"
+    );
+}
+
+#[tokio::test]
+async fn create_disk_buffer_rejects_absolute_path() {
+    let filename = "/tmp/evil.mp3".to_string();
+    let cache_dir = std::env::temp_dir();
+
+    let result = AudioBuffer::new_disk(filename, cache_dir.to_str().unwrap()).await;
+    assert!(result.is_err(), "should reject absolute paths as filenames");
+}
+
+#[tokio::test]
+async fn create_disk_buffer_rejects_intermediate_traversal() {
+    let filename = "subdir/../../evil.mp3".to_string();
+    let cache_dir = std::env::temp_dir();
+
+    let result = AudioBuffer::new_disk(filename, cache_dir.to_str().unwrap()).await;
+    assert!(
+        result.is_err(),
+        "should reject intermediate parent traversal"
+    );
+}
+
+#[tokio::test]
+async fn create_thumbnail_buffer_rejects_dot_dot_traversal() {
+    let config = crate::config::Config::default();
+    let data = bytes::Bytes::from(vec![0u8; 16]);
+    let filename = "../evil.jpg".to_string();
+    let cache_dir = std::env::temp_dir();
+
+    let result = ThumbnailBuffer::new(&config, data, cache_dir.to_str().unwrap(), &filename).await;
+    assert!(
+        result.is_err(),
+        "thumbnail buffer should reject parent traversal filenames"
+    );
+}

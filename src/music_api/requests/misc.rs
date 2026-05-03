@@ -5,7 +5,7 @@ use super::super::{
     resize_album_art_to_thumbnail, rewrite_media_url,
 };
 use crate::error::BotError;
-use crate::utils::is_trusted_music_share_url;
+use crate::utils::{is_trusted_music_media_url, is_trusted_music_share_url};
 
 impl MusicApi {
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
@@ -94,6 +94,10 @@ impl MusicApi {
         // Apply host replacement similar to the original Go project.
         // VPS sampling shows the original m704/m804 hosts can return 403 while m701 succeeds.
         let processed_url = rewrite_media_url(url);
+        if !is_trusted_music_media_url(processed_url.as_ref()) {
+            tracing::warn!("Media download rejected: untrusted host in URL");
+            return Err(BotError::MusicApi("Untrusted media host".to_string()));
+        }
         let response = self
             .build_audio_download_request(processed_url.as_ref())
             .send()
@@ -175,6 +179,10 @@ impl MusicApi {
         if pic_url.is_empty() {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));
         }
+        if !is_trusted_music_media_url(pic_url) {
+            tracing::warn!("Album art download rejected: untrusted host in URL");
+            return Err(BotError::MusicApi("Untrusted album art host".to_string()));
+        }
 
         let total_attempts = Self::album_art_total_attempts();
         let mut last_error = None;
@@ -214,7 +222,21 @@ impl MusicApi {
             )));
         }
 
+        if let Some(len) = response.content_length()
+            && len > 10 * 1024 * 1024
+        {
+            return Err(BotError::MusicApi(format!(
+                "Album art too large: {len} bytes"
+            )));
+        }
+
         let bytes = response.bytes().await?;
+        let byte_len = bytes.len();
+        if byte_len > 10 * 1024 * 1024 {
+            return Err(BotError::MusicApi(format!(
+                "Album art too large: {byte_len} bytes"
+            )));
+        }
 
         if resize {
             // Process image in spawn_blocking to avoid blocking async runtime

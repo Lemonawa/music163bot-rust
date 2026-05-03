@@ -26,6 +26,7 @@ impl ThumbnailBuffer {
         if use_memory {
             Ok(Self::Memory { data })
         } else {
+            super::ensure_safe_cache_filename(filename)?;
             let path = PathBuf::from(cache_dir).join(filename);
             tokio::fs::write(&path, data.as_ref())
                 .await

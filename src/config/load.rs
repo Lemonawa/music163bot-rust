@@ -11,8 +11,7 @@ impl Config {
         let mut config = Config::default();
 
         if !std::path::Path::new(config_path).exists() {
-            tracing::warn!("Config file {} not found, using defaults", config_path);
-            return Ok(config);
+            return Err(anyhow::anyhow!("Config file not found: {config_path}"));
         }
 
         let file = File::open(config_path)?;
@@ -33,7 +32,7 @@ impl Config {
                     .strip_prefix('[')
                     .and_then(|section| section.strip_suffix(']'))
                     .unwrap_or("")
-                    .to_string();
+                    .to_lowercase();
                 continue;
             }
 

@@ -121,3 +121,67 @@ fn request_policy_keeps_other_hosts_unchanged() {
     assert_eq!(super::rewrite_media_url(url), url);
 }
 use super::*;
+
+#[tokio::test]
+async fn download_file_rejects_untrusted_host() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    let result = api.download_file("https://evil.example.com/song.mp3").await;
+    assert!(result.is_err(), "should reject untrusted media host");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Untrusted media host"),
+        "error should mention untrusted host: {err}"
+    );
+}
+
+#[tokio::test]
+async fn download_file_accepts_trusted_cdn_host() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    // This will fail with a connection error (no server running) but should
+    // pass the SSRF guard check — the error must NOT be "Untrusted media host".
+    let result = api
+        .download_file("https://m701.music.126.net/song.mp3")
+        .await;
+    if let Err(e) = &result {
+        assert!(
+            !e.to_string().contains("Untrusted media host"),
+            "trusted CDN host should pass SSRF guard: {e}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn download_album_art_rejects_untrusted_host() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    let result = api
+        .download_album_art_data("https://evil.example.com/pic.jpg", false)
+        .await;
+    assert!(result.is_err(), "should reject untrusted album art host");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Untrusted album art host"),
+        "error should mention untrusted host: {err}"
+    );
+}
+
+#[tokio::test]
+async fn download_album_art_rejects_empty_url() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    let result = api.download_album_art_data("", false).await;
+    assert!(result.is_err(), "should reject empty album art URL");
+}
+
+#[tokio::test]
+async fn download_album_art_accepts_trusted_cdn_host() {
+    let api = MusicApi::new(None, "http://127.0.0.1:0".to_string());
+    // Will fail with connection error, not SSRF guard rejection.
+    let result = api
+        .download_album_art_data("https://p1.music.126.net/img.jpg", false)
+        .await;
+    if let Err(e) = &result {
+        assert!(
+            !e.to_string().contains("Untrusted album art host"),
+            "trusted CDN host should pass SSRF guard: {e}"
+        );
+    }
+}

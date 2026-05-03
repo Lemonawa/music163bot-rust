@@ -244,6 +244,10 @@ pub(super) async fn handle_clearallcache_command(
     };
 
     send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    state
+        .clearallcache_confirms
+        .insert((user_id, msg.chat.id), std::time::Instant::now());
 
     Ok(())
 }
@@ -258,6 +262,16 @@ pub(super) async fn handle_clearallcache_confirm_command(
     else {
         return Ok(());
     };
+
+    let should_allow = state
+        .clearallcache_confirms
+        .remove(&(user_id, msg.chat.id))
+        .and_then(|(_, at)| (at.elapsed() <= std::time::Duration::from_secs(30)).then_some(()))
+        .is_some();
+    if !should_allow {
+        send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
+        return Ok(());
+    }
 
     let status_msg = send_reply_message(bot, msg, "🗑️ 正在清除所有缓存...").await?;
 

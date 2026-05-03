@@ -239,3 +239,54 @@ upload.log_level=debug\n";
 
     assert_eq!(loaded.log_level, default_config.log_level);
 }
+
+#[test]
+fn load_returns_error_when_file_missing() {
+    let result = Config::load("/tmp/music163bot_missing_config_does_not_exist.ini");
+    assert!(
+        result.is_err(),
+        "should return error for missing config file"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Config file not found"),
+        "error should mention missing file: {err_msg}"
+    );
+}
+
+#[test]
+fn ini_section_names_are_case_insensitive() {
+    let content = "[Bot]\n\
+token=case_insensitive_token\n\
+[Music]\n\
+api=https://custom.api\n";
+
+    let loaded = load_temp_config("case_insensitive_section", content);
+
+    assert_eq!(loaded.bot_token, "case_insensitive_token");
+    assert_eq!(loaded.music_api, "https://custom.api");
+}
+
+#[test]
+fn ini_section_uppercase_matches_lookups() {
+    let content = "[BOT]\n\
+token=case_insensitive_token\n\
+[DATABASE]\n\
+url=postgresql://localhost/db\n";
+
+    let loaded = load_temp_config("uppercase_section", content);
+
+    assert_eq!(loaded.bot_token, "case_insensitive_token");
+    assert_eq!(loaded.database, "postgresql://localhost/db");
+}
+
+#[test]
+fn max_concurrent_downloads_parses_from_download_section() {
+    let content = "bot.token=token\n\
+[download]\n\
+max_concurrent=7\n";
+
+    let loaded = load_temp_config("max_concurrent_download", content);
+
+    assert_eq!(loaded.max_concurrent_downloads, 7);
+}

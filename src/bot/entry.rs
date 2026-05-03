@@ -284,6 +284,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         upload_counters: UploadCounters::default(),
         runtime_metrics: RuntimeMetrics::new(),
         is_official_api,
+        clearallcache_confirms: Arc::new(DashMap::new()),
     });
 
     let prewarm_state = Arc::clone(&bot_state);

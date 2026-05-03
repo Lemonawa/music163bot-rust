@@ -311,3 +311,46 @@ fn extract_retry_after_seconds_rejects_unrelated_messages() {
         None
     );
 }
+
+#[test]
+fn is_trusted_music_media_url_accepts_netease_cdn_domains() {
+    assert!(super::is_trusted_music_media_url(
+        "https://m701.music.126.net/song.mp3"
+    ));
+    assert!(super::is_trusted_music_media_url(
+        "https://p1.music.126.net/image.jpg"
+    ));
+    assert!(super::is_trusted_music_media_url(
+        "https://music.126.net/audio.flac"
+    ));
+    assert!(super::is_trusted_music_media_url(
+        "http://music.126.net/audio.flac"
+    ));
+}
+
+#[test]
+fn is_trusted_music_media_url_rejects_non_media_domains() {
+    assert!(!super::is_trusted_music_media_url(
+        "https://music.163.com/song?id=123"
+    ));
+    assert!(!super::is_trusted_music_media_url(
+        "https://example.com/audio.mp3"
+    ));
+    assert!(!super::is_trusted_music_media_url(
+        "https://attacker.126.net/audio.mp3"
+    ));
+}
+
+#[test]
+fn is_trusted_music_media_url_rejects_non_http_schemes() {
+    assert!(!super::is_trusted_music_media_url(
+        "ftp://music.126.net/song.mp3"
+    ));
+}
+
+#[test]
+fn is_trusted_music_media_url_rejects_malformed_urls() {
+    assert!(!super::is_trusted_music_media_url(""));
+    assert!(!super::is_trusted_music_media_url("not-a-url"));
+    assert!(!super::is_trusted_music_media_url("://missing-scheme"));
+}

@@ -58,6 +58,7 @@ impl AudioBuffer {
         cache_dir: &str,
         mode_label: &str,
     ) -> Result<Self> {
+        super::ensure_safe_cache_filename(&filename)?;
         let file_path = PathBuf::from(cache_dir).join(&filename);
 
         tracing::debug!(

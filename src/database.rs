@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
+use std::{path::Path, str::FromStr};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::{SqlitePoolOptions, SqliteRow};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 
 use crate::error::Result;
@@ -48,8 +49,11 @@ fn log_db_perf(op: &str, duration: Duration) {
 impl Database {
     /// Create a new database connection with limited pool size
     pub async fn new(database_url: &str) -> Result<Self> {
-        // Create database directory if it doesn't exist
-        if let Some(parent) = std::path::Path::new(database_url).parent()
+        let is_sqlite_dsn = database_url.starts_with("sqlite:") || database_url == ":memory:";
+
+        // Create database directory if it doesn't exist (file-path mode only)
+        if !is_sqlite_dsn
+            && let Some(parent) = Path::new(database_url).parent()
             && !parent.exists()
         {
             tokio::fs::create_dir_all(parent).await?;
@@ -57,8 +61,13 @@ impl Database {
 
         // Configure connection pool with WAL mode for better concurrency
         // WAL mode allows readers and writers to operate concurrently
-        let options = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(database_url)
+        let mut options = if is_sqlite_dsn {
+            SqliteConnectOptions::from_str(database_url)?
+        } else {
+            SqliteConnectOptions::new().filename(database_url)
+        };
+
+        options = options
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(30))
@@ -102,15 +111,7 @@ impl Database {
         .await?;
 
         // Migration for existing databases created before podcast support.
-        if let Err(e) = sqlx::query("ALTER TABLE song_infos ADD COLUMN program_id INTEGER")
-            .execute(&pool)
-            .await
-        {
-            let message = e.to_string();
-            if !message.contains("duplicate column name: program_id") {
-                return Err(e.into());
-            }
-        }
+        ensure_song_infos_has_program_id(&pool).await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_song_infos_from_user_id ON song_infos(from_user_id)",
@@ -285,10 +286,21 @@ fn decode_sqlite_datetime(row: &SqliteRow, column: &'static str) -> DateTime<Utc
         return dt;
     }
 
-    row.try_get::<String, _>(column)
-        .ok()
-        .and_then(|value| parse_sqlite_timestamp(&value))
-        .unwrap_or_else(Utc::now)
+    match row.try_get::<String, _>(column).ok() {
+        Some(value) => {
+            if let Some(dt) = parse_sqlite_timestamp(&value) {
+                dt
+            } else {
+                tracing::warn!(
+                    column,
+                    value = crate::utils::sanitize_sensitive_text(&value),
+                    "Failed to parse sqlite timestamp; falling back to Utc::now()"
+                );
+                Utc::now()
+            }
+        }
+        None => Utc::now(),
+    }
 }
 
 fn map_song_info_row(row: &SqliteRow) -> SongInfo {
@@ -314,6 +326,26 @@ fn map_song_info_row(row: &SqliteRow) -> SongInfo {
         created_at: decode_sqlite_datetime(row, "created_at"),
         updated_at: decode_sqlite_datetime(row, "updated_at"),
     }
+}
+
+async fn ensure_song_infos_has_program_id(pool: &SqlitePool) -> Result<()> {
+    // Prefer schema inspection over matching error strings from ALTER TABLE.
+    let rows = sqlx::query("PRAGMA table_info(song_infos)")
+        .fetch_all(pool)
+        .await?;
+
+    let has_program_id = rows.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .is_ok_and(|name| name == "program_id")
+    });
+
+    if !has_program_id {
+        sqlx::query("ALTER TABLE song_infos ADD COLUMN program_id INTEGER")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

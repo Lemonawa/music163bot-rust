@@ -261,6 +261,27 @@ pub fn ensure_dir(path: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(Path::new(path))
 }
 
+/// Return whether URL uses HTTP(S) and host belongs to trusted NetEase media domains.
+#[must_use]
+pub fn is_trusted_music_media_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+
+    matches!(
+        host,
+        "music.126.net" | "p1.music.126.net" | "p2.music.126.net"
+    ) || host.ends_with(".music.126.net")
+}
+
 /// Clean filename for safe file operations
 #[must_use]
 pub fn clean_filename(name: &str) -> String {

@@ -15,6 +15,7 @@ pub(super) struct BotState {
     pub upload_counters: UploadCounters,
     pub runtime_metrics: RuntimeMetrics,
     pub is_official_api: bool,
+    pub clearallcache_confirms: Arc<DashMap<(i64, teloxide::types::ChatId), std::time::Instant>>,
 }
 
 #[derive(Debug)]
