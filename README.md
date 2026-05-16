@@ -114,7 +114,7 @@ url = cache.db
 | Key | Default | Description |
 |-----|---------|-------------|
 | `loglevel` | `info` | Log level (trace/debug/info/warn/error) |
-| `botdebug` | `false` | Enable teloxide debug logging |
+| `botdebug` | `false` | Enable bot debug logging |
 
 ### Storage modes
 

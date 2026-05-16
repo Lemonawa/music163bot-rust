@@ -20,7 +20,7 @@ pub(super) fn build_about_text() -> String {
 • 📊 使用统计
 
 技术栈：
-• 🦀 Rust + Teloxide
+• 🦀 Rust + Reqwest
 • 🔧 高并发处理
 • 📦 轻量级部署
 
