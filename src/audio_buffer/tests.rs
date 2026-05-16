@@ -759,4 +759,11 @@ fn boterror_other_string_includes_underlying_source_chain() {
         formatted.contains("stream reset by peer"),
         "underlying io::Error should appear in the formatted chain: {formatted}"
     );
+    assert_eq!(
+        formatted
+            .matches("Failed to stream download to disk")
+            .count(),
+        1,
+        "context should not be duplicated when anyhow source mirrors top message: {formatted}"
+    );
 }

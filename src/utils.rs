@@ -89,9 +89,14 @@ pub fn format_error_chain(err: &dyn std::error::Error) -> String {
 
     let mut buf = String::new();
     let _ = write!(buf, "{err}");
+    let mut last = err.to_string();
     let mut source = err.source();
     while let Some(src) = source {
-        let _ = write!(buf, ": {src}");
+        let rendered = src.to_string();
+        if rendered != last && !last.contains(&rendered) {
+            let _ = write!(buf, ": {rendered}");
+            last = rendered;
+        }
         source = src.source();
     }
     buf
