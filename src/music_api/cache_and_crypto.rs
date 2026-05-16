@@ -13,13 +13,40 @@ use uuid::Uuid;
 
 use super::shared::song_url_has_download_url;
 use super::{
-    ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS, BROWSER_USER_AGENT, CachePruneStats, MusicApi,
-    SHORT_USER_AGENT, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL, SONG_URL_CACHE_TTL, SongDetail,
-    SongUrl, TimedCacheEntry, song_url_cache_key,
+    ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS, BROWSER_USER_AGENT, CachePruneStats,
+    MUSIC_API_CACHE_MAX_ENTRIES, MusicApi, SHORT_USER_AGENT, SONG_DETAIL_CACHE_TTL,
+    SONG_LYRIC_CACHE_TTL, SONG_URL_CACHE_TTL, SongDetail, SongUrl, TimedCacheEntry,
+    song_url_cache_key,
 };
 use crate::config::Config;
 use crate::error::{BotError, Result};
 use crate::utils::build_http_client;
+
+fn enforce_cache_capacity<K, V>(cache: &DashMap<K, TimedCacheEntry<V>>, max_entries: usize)
+where
+    K: std::hash::Hash + Eq + Clone,
+{
+    if max_entries == 0 || cache.len() < max_entries {
+        return;
+    }
+
+    let now = Instant::now();
+    cache.retain(|_, entry| entry.is_fresh_at(now));
+
+    while cache.len() >= max_entries {
+        let oldest_key = cache
+            .iter()
+            .min_by_key(|entry| entry.value().created_at())
+            .map(|entry| entry.key().clone());
+
+        match oldest_key {
+            Some(key) => {
+                cache.remove(&key);
+            }
+            None => break,
+        }
+    }
+}
 
 impl MusicApi {
     #[must_use]
@@ -110,6 +137,7 @@ impl MusicApi {
     }
 
     pub(super) fn cache_song_detail_shared(&self, song_id: u64, detail: Arc<SongDetail>) {
+        enforce_cache_capacity(&self.song_detail_cache, MUSIC_API_CACHE_MAX_ENTRIES);
         self.song_detail_cache
             .insert(song_id, TimedCacheEntry::new(detail, SONG_DETAIL_CACHE_TTL));
     }
@@ -149,6 +177,7 @@ impl MusicApi {
 
     pub(super) fn cache_song_url_shared(&self, song_id: u64, br: u64, song_url: Arc<SongUrl>) {
         let key = song_url_cache_key(song_id, br);
+        enforce_cache_capacity(&self.song_url_cache, MUSIC_API_CACHE_MAX_ENTRIES);
         self.song_url_cache
             .insert(key, TimedCacheEntry::new(song_url, SONG_URL_CACHE_TTL));
     }
@@ -166,6 +195,7 @@ impl MusicApi {
     }
 
     pub(super) fn cache_song_lyric(&self, song_id: u64, lyric: String) {
+        enforce_cache_capacity(&self.song_lyric_cache, MUSIC_API_CACHE_MAX_ENTRIES);
         self.song_lyric_cache
             .insert(song_id, TimedCacheEntry::new(lyric, SONG_LYRIC_CACHE_TTL));
     }
@@ -214,6 +244,10 @@ impl MusicApi {
         if let Some(music_u) = music_u {
             cookie_parts.push(format!("MUSIC_U={music_u}"));
         } else {
+            // Public anonymous MUSIC_A token carried over from the upstream Go project
+            // (Music163bot-Go). It is intentionally hard-coded so a fresh deployment can
+            // hit the search/eapi endpoints without per-user login. When operators
+            // configure their own `music.music_u`, that value takes precedence above.
             cookie_parts.push("MUSIC_A=4ee5f776c9ed1e4d5f031b09e084c6cb333e43ee4a841afeebbef9bbf4b7e4152b51ff20ecb9e8ee9e89ab23044cf50d1609e4781e805e73a138419e5583bc7fd1e5933c52368d9127ba9ce4e2f233bf5a77ba40ea6045ae1fc612ead95d7b0e0edf70a74334194e1a190979f5fc12e9968c3666a981495b33a649814e309366".to_string());
         }
 

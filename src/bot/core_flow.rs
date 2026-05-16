@@ -365,20 +365,21 @@ pub(super) async fn process_music_with_context(
     }
 
     let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
-    {
+    let initial_status_text = format!("📥 正在下载: {} - {}", song_detail.name, artists);
+    let mut pending_initial_edit = {
         let bot_clone = bot.clone();
         let chat_id = msg.chat.id;
         let status_id = status_msg.id;
-        let text = format!("📥 正在下载: {} - {}", song_detail.name, artists);
-        tokio::spawn(async move {
+        let text = initial_status_text;
+        Some(async move {
             edit_status_message_resilient(&bot_clone, chat_id, status_id, text).await;
-        });
-    }
+        })
+    };
 
     let mut process_attempt = 0u32;
     loop {
         let pre_upload_path_start = std::time::Instant::now();
-        match download_and_send_music(
+        let download_fut = download_and_send_music(
             bot,
             msg,
             state,
@@ -389,9 +390,13 @@ pub(super) async fn process_music_with_context(
             &perf_ctx,
             &artists,
             link_target,
-        )
-        .await
-        {
+        );
+        let result = if let Some(edit_fut) = pending_initial_edit.take() {
+            await_with_status_edit(edit_fut, download_fut).await
+        } else {
+            download_fut.await
+        };
+        match result {
             Ok(()) => break,
             Err(e) => {
                 let sanitized = sanitize_sensitive_text(&format_error_chain(&e));
@@ -442,4 +447,50 @@ pub(super) async fn process_music_with_context(
 
     perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
     Ok(())
+}
+
+pub(super) async fn await_with_status_edit<E, W, R>(edit: E, work: W) -> R
+where
+    E: std::future::Future<Output = ()>,
+    W: std::future::Future<Output = R>,
+{
+    let (_, result) = tokio::join!(edit, work);
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn await_with_status_edit_observes_both_futures() {
+        let edit_done = Arc::new(AtomicBool::new(false));
+        let work_done = Arc::new(AtomicBool::new(false));
+
+        let edit_flag = Arc::clone(&edit_done);
+        let work_flag = Arc::clone(&work_done);
+
+        let result = super::await_with_status_edit(
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                edit_flag.store(true, Ordering::SeqCst);
+            },
+            async move {
+                work_flag.store(true, Ordering::SeqCst);
+                42_u32
+            },
+        )
+        .await;
+
+        assert_eq!(result, 42);
+        assert!(
+            edit_done.load(Ordering::SeqCst),
+            "edit future should be awaited before returning"
+        );
+        assert!(
+            work_done.load(Ordering::SeqCst),
+            "work future should be awaited before returning"
+        );
+    }
 }

@@ -91,7 +91,7 @@ pub(super) async fn download_and_send_music(
         let max_download_size = if audio_buffer.is_memory() {
             state.config.memory_max_file_mb * 1024 * 1024
         } else {
-            2000 * 1024 * 1024
+            state.config.max_disk_download_mb * 1024 * 1024
         };
 
         let downloaded = if audio_buffer.is_disk() {

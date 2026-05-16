@@ -1,8 +1,9 @@
 use serde::Serialize;
 
 use super::super::{
-    EapiSearchResponse, LyricResponse, MusicApi, Result, SHORT_USER_AGENT, SearchSong,
-    resize_album_art_to_thumbnail, rewrite_media_url,
+    ALBUM_ART_DOWNLOAD_OVERALL_TIMEOUT, EapiSearchResponse, LyricResponse, MusicApi, Result,
+    SHORT_USER_AGENT, SearchSong, resize_album_art_to_thumbnail, rewrite_media_url,
+    run_with_attempts_and_overall_timeout_with_err,
 };
 use crate::error::BotError;
 use crate::utils::{is_trusted_music_media_url, is_trusted_music_share_url};
@@ -185,28 +186,34 @@ impl MusicApi {
         }
 
         let total_attempts = Self::album_art_total_attempts();
-        let mut last_error = None;
+        let pic_url_owned = pic_url.to_string();
 
-        for attempt in 1..=total_attempts {
-            match self.download_album_art_data_once(pic_url, resize).await {
-                Ok(data) => return Ok(data),
-                Err(e) => {
-                    if attempt < total_attempts {
-                        tracing::warn!(
-                            "Album art download attempt {}/{} failed for {}: {}",
-                            attempt,
-                            total_attempts,
-                            crate::utils::sanitize_sensitive_text(pic_url),
-                            crate::utils::sanitize_sensitive_text(&e.to_string())
-                        );
+        run_with_attempts_and_overall_timeout_with_err(
+            total_attempts,
+            ALBUM_ART_DOWNLOAD_OVERALL_TIMEOUT,
+            |attempt| {
+                let pic_url = pic_url_owned.clone();
+                async move {
+                    match self.download_album_art_data_once(&pic_url, resize).await {
+                        Ok(data) => Ok(data),
+                        Err(e) => {
+                            if attempt < total_attempts {
+                                tracing::warn!(
+                                    "Album art download attempt {}/{} failed for {}: {}",
+                                    attempt,
+                                    total_attempts,
+                                    crate::utils::sanitize_sensitive_text(&pic_url),
+                                    crate::utils::sanitize_sensitive_text(&e.to_string())
+                                );
+                            }
+                            Err(e)
+                        }
                     }
-                    last_error = Some(e);
                 }
-            }
-        }
-
-        Err(last_error
-            .unwrap_or_else(|| BotError::MusicApi("Album art download failed".to_string())))
+            },
+            |elapsed| BotError::MusicApi(format!("Album art download timed out after {elapsed:?}")),
+        )
+        .await
     }
 
     async fn download_album_art_data_once(&self, pic_url: &str, resize: bool) -> Result<Vec<u8>> {

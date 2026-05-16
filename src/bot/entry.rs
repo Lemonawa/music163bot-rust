@@ -257,7 +257,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
 
     let max_concurrent_downloads = config.max_concurrent_downloads;
     let upload_max_concurrent = config.upload_max_concurrent;
-    let is_official_api = is_official_telegram_api(&config.bot_api);
+    let is_official_api = is_official_telegram_api(bot.api_url());
 
     let bot_state = Arc::new(BotState {
         config,

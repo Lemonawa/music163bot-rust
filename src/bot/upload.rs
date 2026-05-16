@@ -123,8 +123,10 @@ pub(super) fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, 
 }
 
 pub(super) fn is_admin(msg: &Message, config: &Config) -> bool {
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id);
-    config.bot_admin.contains(&user_id)
+    let Some(user) = msg.from.as_ref() else {
+        return false;
+    };
+    config.bot_admin.contains(&user.id)
 }
 
 pub(super) async fn ensure_admin(
@@ -141,7 +143,17 @@ pub(super) async fn ensure_admin(
 }
 
 pub(super) fn is_official_telegram_api(api_url: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(api_url) else {
+    let trimmed = api_url.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let normalized = trimmed.trim_end_matches('/').trim_end_matches("/bot");
+    let Ok(url) = reqwest::Url::parse(if normalized.is_empty() {
+        trimmed
+    } else {
+        normalized
+    }) else {
         return false;
     };
 

@@ -100,7 +100,15 @@ fn parse_admin_list(admins: &str) -> Vec<i64> {
     }
     admins
         .split(',')
-        .filter_map(|s| s.trim().parse().ok())
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .filter(|id| {
+            if *id <= 0 {
+                tracing::warn!("Ignoring non-positive admin id {id} in bot.admin list");
+                false
+            } else {
+                true
+            }
+        })
         .collect()
 }
 
@@ -129,6 +137,8 @@ pub struct Config {
     pub memory_buffer_mb: u64,
     /// Maximum file size in MB allowed for memory mode (larger files use disk)
     pub memory_max_file_mb: u64,
+    /// Maximum total download size in MB allowed when streaming to disk (hard cap to prevent runaway downloads)
+    pub max_disk_download_mb: u64,
     /// Maximum concurrent downloads (lower = less memory, higher = more throughput)
     pub max_concurrent_downloads: u32,
     /// Maximum tracks allowed for a single playlist/album download request
@@ -179,6 +189,7 @@ impl Default for Config {
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
             memory_max_file_mb: 100,
+            max_disk_download_mb: 2000,
             max_concurrent_downloads: 4,
             max_batch_download_tracks: 20,
             download_pool_max_idle_per_host: 2,

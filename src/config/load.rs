@@ -126,6 +126,13 @@ impl Config {
             config.memory_max_file_mb =
                 parse_field(v, config.memory_max_file_mb, "download.memory_max_file_mb");
         }
+        if let Some(v) = config_map.get("download.max_disk_download_mb") {
+            config.max_disk_download_mb = parse_field(
+                v,
+                config.max_disk_download_mb,
+                "download.max_disk_download_mb",
+            );
+        }
         if let Some(v) = config_map.get("download.max_concurrent") {
             config.max_concurrent_downloads = parse_field(
                 v,

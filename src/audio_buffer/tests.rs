@@ -239,6 +239,55 @@ async fn audio_buffer_hybrid_uses_disk_when_threshold_exceeded() {
 }
 
 #[tokio::test]
+async fn audio_buffer_hybrid_uses_disk_when_content_length_unknown() {
+    let temp_name = format!(
+        "music163bot_audio_buffer_hybrid_unknown_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let cache_dir = std::env::temp_dir();
+    let mut config = Config::default();
+    config.storage_mode = StorageMode::Hybrid;
+    config.memory_threshold_mb = 1024;
+    config.memory_max_file_mb = u64::MAX;
+    config.memory_buffer_mb = 0;
+
+    let buffer = AudioBuffer::new(&config, 0, temp_name.clone(), cache_dir.to_str().unwrap())
+        .await
+        .expect("create hybrid buffer with unknown size");
+
+    assert!(
+        buffer.is_disk(),
+        "hybrid mode must use disk when content_length is unknown to avoid unbounded memory growth"
+    );
+
+    buffer.cleanup().await.expect("cleanup hybrid disk buffer");
+}
+
+#[tokio::test]
+async fn audio_buffer_memory_uses_disk_when_content_length_unknown() {
+    let temp_name = format!(
+        "music163bot_audio_buffer_memory_unknown_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let cache_dir = std::env::temp_dir();
+    let mut config = Config::default();
+    config.storage_mode = StorageMode::Memory;
+    config.memory_max_file_mb = u64::MAX;
+    config.memory_buffer_mb = 0;
+
+    let buffer = AudioBuffer::new(&config, 0, temp_name.clone(), cache_dir.to_str().unwrap())
+        .await
+        .expect("create memory buffer with unknown size");
+
+    assert!(
+        buffer.is_disk(),
+        "memory mode must fall back to disk when content_length is unknown"
+    );
+
+    buffer.cleanup().await.expect("cleanup disk buffer");
+}
+
+#[tokio::test]
 async fn write_chunk_errors_without_disk_handle() {
     let path = std::env::temp_dir().join(format!(
         "music163bot_audio_buffer_none_{}",

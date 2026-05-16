@@ -305,6 +305,37 @@ async fn clear_all_songs_returns_deleted_count_and_empties_table() {
 }
 
 #[tokio::test]
+async fn clear_all_songs_truncates_wal_sidecar() {
+    let (db, temp_path) = create_temp_db("music163bot_clear_truncates_wal").await;
+
+    for music_id in 8_000_i64..8_050_i64 {
+        db.save_song_info(&sample_song_info(music_id))
+            .await
+            .expect("insert song");
+    }
+
+    let wal_path = format!("{}-wal", temp_path.display());
+    let wal_size_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    assert!(
+        wal_size_before > 0,
+        "precondition: WAL sidecar should be non-empty after writes ({wal_size_before} bytes)"
+    );
+
+    db.clear_all_songs().await.expect("clear all songs");
+
+    let wal_size_after = std::fs::metadata(&wal_path)
+        .map(|m| m.len())
+        .expect("wal sidecar should exist after clear");
+    assert_eq!(
+        wal_size_after, 0,
+        "WAL sidecar should be truncated after clearallcache (was {wal_size_after} bytes)"
+    );
+
+    drop(db);
+    cleanup_db_files(&temp_path);
+}
+
+#[tokio::test]
 async fn in_memory_dsn_does_not_create_file_in_cwd() {
     let original_dir = std::env::current_dir().expect("get cwd");
     let temp_dir = std::env::temp_dir().join(format!(

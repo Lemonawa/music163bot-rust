@@ -84,20 +84,25 @@ impl AudioBuffer {
         match config.storage_mode {
             StorageMode::Disk => false,
             StorageMode::Memory => {
-                if content_length > 0 {
-                    let file_size_mb = content_length / (1024 * 1024);
-                    if file_size_mb > config.memory_max_file_mb {
-                        tracing::debug!(
-                            "Memory mode: file size {}MB exceeds max {}MB, using disk",
-                            file_size_mb,
-                            config.memory_max_file_mb
-                        );
-                        return false;
-                    }
+                if content_length == 0 {
+                    tracing::debug!(
+                        "Memory mode: content_length unknown, falling back to disk to avoid unbounded buffering"
+                    );
+                    return false;
+                }
+
+                let file_size_mb = content_length / (1024 * 1024);
+                if file_size_mb > config.memory_max_file_mb {
+                    tracing::debug!(
+                        "Memory mode: file size {}MB exceeds max {}MB, using disk",
+                        file_size_mb,
+                        config.memory_max_file_mb
+                    );
+                    return false;
                 }
 
                 let available_mb = Self::get_available_memory_mb();
-                let required_mb = (content_length / (1024 * 1024)) + config.memory_buffer_mb;
+                let required_mb = file_size_mb + config.memory_buffer_mb;
 
                 if available_mb >= required_mb {
                     true
@@ -111,6 +116,13 @@ impl AudioBuffer {
                 }
             }
             StorageMode::Hybrid => {
+                if content_length == 0 {
+                    tracing::debug!(
+                        "Hybrid mode: content_length unknown, using disk to avoid unbounded buffering"
+                    );
+                    return false;
+                }
+
                 let file_size_mb = content_length / (1024 * 1024);
 
                 if file_size_mb > config.memory_threshold_mb {

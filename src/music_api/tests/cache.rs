@@ -47,6 +47,43 @@ fn album_art_download_uses_five_attempt_budget() {
     assert_eq!(MusicApi::album_art_total_attempts(), 5);
 }
 
+#[tokio::test]
+async fn run_with_attempts_and_overall_timeout_fails_when_attempts_outlast_overall() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
+    let attempts = std::sync::Arc::new(AtomicU32::new(0));
+    let attempts_clone = attempts.clone();
+
+    let started = std::time::Instant::now();
+    let result: std::result::Result<(), String> =
+        crate::music_api::run_with_attempts_and_overall_timeout(
+            5,
+            Duration::from_millis(50),
+            move |_attempt| {
+                let counter = attempts_clone.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Err::<(), String>("never reached".to_string())
+                }
+            },
+        )
+        .await;
+    let elapsed = started.elapsed();
+
+    assert!(result.is_err(), "overall timeout should produce an error");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("timed out") || err.contains("timeout"),
+        "error should mention timeout, got: {err}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "helper must abort promptly via overall timeout, took {elapsed:?}"
+    );
+}
+
 #[test]
 fn fallback_candidates_skip_primary_after_attempt() {
     let candidates = [320_000, 192_000, 128_000];
@@ -261,4 +298,68 @@ fn prune_expired_cache_entries_removes_stale_entries_only() {
     );
     assert!(api.song_lyric_cache.get(&2).is_some());
 }
+
+#[test]
+fn song_detail_cache_capped_at_configured_max_entries() {
+    let api = MusicApi::new(None, "http://localhost".to_string());
+    let cap = super::MUSIC_API_CACHE_MAX_ENTRIES;
+
+    for id in 0..(cap as u64 + 50) {
+        let detail = super::SongDetail {
+            id,
+            name: format!("Song {id}"),
+            dt: None,
+            ar: None,
+            al: None,
+        };
+        api.cache_song_detail(id, detail);
+    }
+
+    assert!(
+        api.song_detail_cache.len() <= cap,
+        "song_detail_cache should be capped at {cap}, got {}",
+        api.song_detail_cache.len()
+    );
+}
+
+#[test]
+fn song_url_cache_capped_at_configured_max_entries() {
+    let api = MusicApi::new(None, "http://localhost".to_string());
+    let cap = super::MUSIC_API_CACHE_MAX_ENTRIES;
+
+    for id in 0..(cap as u64 + 50) {
+        let url = super::SongUrl {
+            id,
+            url: format!("https://example.com/{id}.mp3"),
+            br: 320_000,
+            size: 3_000_000,
+            md5: "x".to_string(),
+            format: "mp3".to_string(),
+        };
+        api.cache_song_url(id, 320_000, url);
+    }
+
+    assert!(
+        api.song_url_cache.len() <= cap,
+        "song_url_cache should be capped at {cap}, got {}",
+        api.song_url_cache.len()
+    );
+}
+
+#[test]
+fn song_lyric_cache_capped_at_configured_max_entries() {
+    let api = MusicApi::new(None, "http://localhost".to_string());
+    let cap = super::MUSIC_API_CACHE_MAX_ENTRIES;
+
+    for id in 0..(cap as u64 + 50) {
+        api.cache_song_lyric(id, format!("lyric-{id}"));
+    }
+
+    assert!(
+        api.song_lyric_cache.len() <= cap,
+        "song_lyric_cache should be capped at {cap}, got {}",
+        api.song_lyric_cache.len()
+    );
+}
+
 use super::*;

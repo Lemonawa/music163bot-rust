@@ -215,4 +215,54 @@ async fn acquire_download_permit_returns_error_when_closed() {
     assert!(err_str.contains("download semaphore closed"));
 }
 
+#[test]
+fn is_admin_rejects_message_with_no_sender_even_if_admin_list_contains_zero() {
+    use crate::bot::upload::is_admin;
+    use crate::config::Config;
+    use crate::telegram::{Chat, ChatId, Message, MessageId};
+
+    let mut config = Config::default();
+    config.bot_admin = vec![0_i64];
+
+    let msg = Message {
+        id: MessageId(1),
+        chat: Chat {
+            id: ChatId(42),
+            type_: "private".to_string(),
+            username: None,
+        },
+        from: None,
+        date: 0,
+        text: None,
+        reply_to_message: None,
+    };
+
+    assert!(
+        !is_admin(&msg, &config),
+        "messages without sender must never be treated as admin"
+    );
+}
+
+#[test]
+fn is_official_telegram_api_treats_empty_string_as_official() {
+    assert!(
+        super::is_official_telegram_api(""),
+        "empty bot_api means default upstream (api.telegram.org), which is the official API"
+    );
+}
+
+#[test]
+fn is_official_telegram_api_recognizes_default_official_url() {
+    assert!(super::is_official_telegram_api("https://api.telegram.org"));
+    assert!(super::is_official_telegram_api("https://api.telegram.org/"));
+}
+
+#[test]
+fn is_official_telegram_api_rejects_local_or_custom_hosts() {
+    assert!(!super::is_official_telegram_api("http://localhost:8081"));
+    assert!(!super::is_official_telegram_api(
+        "https://tg-api.example.com"
+    ));
+}
+
 use super::*;

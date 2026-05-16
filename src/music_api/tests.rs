@@ -10,9 +10,9 @@ use tokio::time::Duration;
 use super::resize_image_with_padding;
 use super::{Album, Artist, MusicApi, SongDetail, SongUrl};
 use super::{
-    CachePruneStats, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL, SONG_URL_CACHE_TTL,
-    TimedCacheEntry, cache_entry_is_fresh, format_artists, requests, resize_album_art_to_thumbnail,
-    rewrite_media_url, shared, song_url_cache_key,
+    CachePruneStats, MUSIC_API_CACHE_MAX_ENTRIES, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL,
+    SONG_URL_CACHE_TTL, TimedCacheEntry, cache_entry_is_fresh, format_artists, requests,
+    resize_album_art_to_thumbnail, rewrite_media_url, shared, song_url_cache_key,
 };
 use crate::config::Config;
 use crate::error::BotError;

@@ -245,6 +245,13 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        if let Err(err) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!("WAL checkpoint after clear_all_songs failed: {err}");
+        }
+
         Ok(result.rows_affected())
     }
 

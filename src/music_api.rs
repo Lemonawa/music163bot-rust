@@ -44,6 +44,8 @@ const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_mins(5);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_mins(5);
 pub(crate) const ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS: u32 = 5;
+pub(crate) const ALBUM_ART_DOWNLOAD_OVERALL_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const MUSIC_API_CACHE_MAX_ENTRIES: usize = 4096;
 const PERF_API_LOG_PREFIX: &str = "PERF_API";
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 const SHORT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
@@ -77,6 +79,10 @@ impl<T> TimedCacheEntry<T> {
     fn is_fresh_at(&self, now: Instant) -> bool {
         cache_entry_is_fresh(self.created_at, self.ttl, now)
     }
+
+    fn created_at(&self) -> Instant {
+        self.created_at
+    }
 }
 
 fn cache_entry_is_fresh(created_at: Instant, ttl: Duration, now: Instant) -> bool {
@@ -89,6 +95,54 @@ fn cache_entry_is_fresh(created_at: Instant, ttl: Duration, now: Instant) -> boo
 
 fn song_url_cache_key(song_id: u64, br: u64) -> (u64, u64) {
     (song_id, br)
+}
+
+pub(crate) async fn run_with_attempts_and_overall_timeout<F, Fut, T, E>(
+    total_attempts: u32,
+    overall_timeout: Duration,
+    make_attempt: F,
+) -> std::result::Result<T, E>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, E>>,
+    E: From<String>,
+{
+    run_with_attempts_and_overall_timeout_with_err(
+        total_attempts,
+        overall_timeout,
+        make_attempt,
+        |elapsed| E::from(format!("operation timed out after {elapsed:?}")),
+    )
+    .await
+}
+
+pub(crate) async fn run_with_attempts_and_overall_timeout_with_err<F, Fut, T, E, M>(
+    total_attempts: u32,
+    overall_timeout: Duration,
+    mut make_attempt: F,
+    on_timeout: M,
+) -> std::result::Result<T, E>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, E>>,
+    M: FnOnce(Duration) -> E,
+{
+    let attempts = total_attempts.max(1);
+    let inner = async {
+        let mut last_err: Option<E> = None;
+        for attempt in 1..=attempts {
+            match make_attempt(attempt).await {
+                Ok(value) => return Ok(value),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.expect("attempt budget exhausted without producing an error"))
+    };
+
+    match tokio::time::timeout(overall_timeout, inner).await {
+        Ok(result) => result,
+        Err(_) => Err(on_timeout(overall_timeout)),
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

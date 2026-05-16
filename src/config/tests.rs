@@ -41,6 +41,25 @@ fn memory_max_file_has_default() {
 }
 
 #[test]
+fn max_disk_download_has_default() {
+    let config = Config::default();
+    assert!(
+        config.max_disk_download_mb >= 100,
+        "default disk download cap should be at least 100 MB"
+    );
+}
+
+#[test]
+fn max_disk_download_parses() {
+    let content = "bot.token=token\n\
+download.max_disk_download_mb=512\n";
+
+    let loaded = load_temp_config("disk_cap", content);
+
+    assert_eq!(loaded.max_disk_download_mb, 512);
+}
+
+#[test]
 fn upload_defaults_use_reuse_settings() {
     let config = Config::default();
     assert_eq!(config.upload_client_reuse_requests, 0);
@@ -289,4 +308,16 @@ max_concurrent=7\n";
     let loaded = load_temp_config("max_concurrent_download", content);
 
     assert_eq!(loaded.max_concurrent_downloads, 7);
+}
+
+#[test]
+fn parse_admin_list_drops_zero_and_negative_ids() {
+    let parsed = super::parse_admin_list("123,0,-5,456");
+
+    assert_eq!(parsed, vec![123_i64, 456_i64]);
+}
+
+#[test]
+fn parse_admin_list_returns_empty_when_only_invalid_entries() {
+    assert!(super::parse_admin_list("0,-1,abc").is_empty());
 }
