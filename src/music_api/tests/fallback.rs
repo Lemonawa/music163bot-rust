@@ -126,11 +126,13 @@ async fn get_song_detail_and_best_url_accepts_fallback_without_retrying_primary_
         ]),
     )
     .await;
-    let mut config = Config::default();
-    config.music_api = server.base_url();
-    config.music_u = Some("cookie".to_string());
-    config.auto_retry = true;
-    config.max_retry_times = 1;
+    let config = Config {
+        music_api: server.base_url(),
+        music_u: Some("cookie".to_string()),
+        auto_retry: true,
+        max_retry_times: 1,
+        ..Config::default()
+    };
     let api = MusicApi::new_with_config(&config);
     api.cache_song_detail(song_id, sample_song_detail(song_id));
 

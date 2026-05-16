@@ -315,7 +315,7 @@ async fn clear_all_songs_truncates_wal_sidecar() {
     }
 
     let wal_path = format!("{}-wal", temp_path.display());
-    let wal_size_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_before = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
     assert!(
         wal_size_before > 0,
         "precondition: WAL sidecar should be non-empty after writes ({wal_size_before} bytes)"

@@ -28,7 +28,7 @@ async fn get_album_song_ids_returns_track_ids() {
 
 #[tokio::test]
 async fn get_program_main_track_returns_metadata() {
-    let song_id = 3354598175;
+    let song_id = 3_354_598_175;
     let server = MockMusicApiServer::start(song_id, HashMap::new()).await;
     let api = MusicApi::new(None, server.base_url());
 
@@ -50,7 +50,7 @@ async fn get_program_main_track_returns_metadata() {
 
 #[tokio::test]
 async fn get_djradio_program_main_tracks_returns_tracks_and_sets_referer() {
-    let song_id = 3354598175;
+    let song_id = 3_354_598_175;
     let server = MockMusicApiServer::start(song_id, HashMap::new()).await;
     let api = MusicApi::new(None, server.base_url());
 

@@ -67,14 +67,14 @@ fn build_program_url_accepts_valid_base() {
 
 #[test]
 fn cached_music_link_target_prefers_program_when_present() {
-    let target = super::cached_music_link_target(Some(3714760479), 1962146519);
-    assert_eq!(target, super::MusicLinkTarget::Program(3714760479));
+    let target = super::cached_music_link_target(Some(3_714_760_479), 1_962_146_519);
+    assert_eq!(target, super::MusicLinkTarget::Program(3_714_760_479));
 }
 
 #[test]
 fn cached_music_link_target_falls_back_to_song() {
-    let target = super::cached_music_link_target(None, 1962146519);
-    assert_eq!(target, super::MusicLinkTarget::Song(1962146519));
+    let target = super::cached_music_link_target(None, 1_962_146_519);
+    assert_eq!(target, super::MusicLinkTarget::Song(1_962_146_519));
 }
 
 #[test]
@@ -90,8 +90,10 @@ fn parse_api_url_rejects_invalid_base() {
 
 #[tokio::test]
 async fn local_file_uri_disabled_by_default() {
-    let mut config = crate::config::Config::default();
-    config.bot_api = "http://localhost:8081".to_string();
+    let config = crate::config::Config {
+        bot_api: "http://localhost:8081".to_string(),
+        ..crate::config::Config::default()
+    };
 
     let path = create_temp_file();
     let uri = super::maybe_local_file_uri(&config, false, &path).await;
@@ -102,8 +104,10 @@ async fn local_file_uri_disabled_by_default() {
 
 #[tokio::test]
 async fn local_file_uri_skips_official_api() {
-    let mut config = crate::config::Config::default();
-    config.upload_local_file_uri = true;
+    let config = crate::config::Config {
+        upload_local_file_uri: true,
+        ..crate::config::Config::default()
+    };
 
     let path = create_temp_file();
     let uri = super::maybe_local_file_uri(&config, true, &path).await;
@@ -114,8 +118,10 @@ async fn local_file_uri_skips_official_api() {
 
 #[tokio::test]
 async fn local_file_uri_builds_from_existing_path() {
-    let mut config = crate::config::Config::default();
-    config.upload_local_file_uri = true;
+    let config = crate::config::Config {
+        upload_local_file_uri: true,
+        ..crate::config::Config::default()
+    };
 
     let path = create_temp_file();
     let uri = super::maybe_local_file_uri(&config, false, &path).await;
@@ -129,8 +135,10 @@ async fn local_file_uri_builds_from_existing_path() {
 
 #[tokio::test]
 async fn local_file_uri_returns_none_for_missing_path() {
-    let mut config = crate::config::Config::default();
-    config.upload_local_file_uri = true;
+    let config = crate::config::Config {
+        upload_local_file_uri: true,
+        ..crate::config::Config::default()
+    };
 
     let path = std::env::temp_dir().join(format!("missing_{}", Uuid::new_v4()));
     if path.exists() {
@@ -153,8 +161,10 @@ async fn upload_target_defaults_to_multipart() {
 
 #[tokio::test]
 async fn upload_target_uses_local_uri_when_enabled() {
-    let mut config = Config::default();
-    config.upload_local_file_uri = true;
+    let config = Config {
+        upload_local_file_uri: true,
+        ..Config::default()
+    };
 
     let path = create_temp_file();
     let target = super::select_local_upload_target(&config, false, &path).await;
@@ -207,9 +217,8 @@ async fn acquire_download_permit_returns_error_when_closed() {
     let semaphore = tokio::sync::Semaphore::new(1);
     semaphore.close();
 
-    let err = match acquire_download_permit(&semaphore).await {
-        Ok(_) => panic!("expected error for closed semaphore"),
-        Err(err) => err,
+    let Err(err) = acquire_download_permit(&semaphore).await else {
+        panic!("expected error for closed semaphore");
     };
     let err_str = format!("{err}");
     assert!(err_str.contains("download semaphore closed"));
@@ -221,8 +230,10 @@ fn is_admin_rejects_message_with_no_sender_even_if_admin_list_contains_zero() {
     use crate::config::Config;
     use crate::telegram::{Chat, ChatId, Message, MessageId};
 
-    let mut config = Config::default();
-    config.bot_admin = vec![0_i64];
+    let config = Config {
+        bot_admin: vec![0_i64],
+        ..Config::default()
+    };
 
     let msg = Message {
         id: MessageId(1),

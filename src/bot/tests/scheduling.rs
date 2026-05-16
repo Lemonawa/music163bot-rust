@@ -32,8 +32,10 @@ fn structured_perf_line_contains_required_fields() {
 
 #[test]
 fn upload_topology_label_matches_mode() {
-    let mut config = Config::default();
-    config.upload_local_file_uri = false;
+    let mut config = Config {
+        upload_local_file_uri: false,
+        ..Config::default()
+    };
     assert_eq!(super::upload_topology_label(&config, true), "official_api");
 
     config.upload_local_file_uri = true;
@@ -102,9 +104,11 @@ fn batch_download_limit_rejects_only_when_over_limit() {
 #[test]
 fn maintenance_scheduler_emits_expected_signals() {
     let counters = super::MaintenanceCounters::new();
-    let mut config = crate::config::Config::default();
-    config.db_analyze_interval_requests = 2;
-    config.memory_release_interval_requests = 3;
+    let config = crate::config::Config {
+        db_analyze_interval_requests: 2,
+        memory_release_interval_requests: 3,
+        ..crate::config::Config::default()
+    };
 
     assert!(super::collect_maintenance_signals(&counters, &config).is_empty());
 
@@ -118,9 +122,11 @@ fn maintenance_scheduler_emits_expected_signals() {
 #[test]
 fn maintenance_scheduler_emits_cache_prune_signal_on_interval() {
     let counters = super::MaintenanceCounters::new();
-    let mut config = crate::config::Config::default();
-    config.db_analyze_interval_requests = 0;
-    config.memory_release_interval_requests = 0;
+    let config = crate::config::Config {
+        db_analyze_interval_requests: 0,
+        memory_release_interval_requests: 0,
+        ..crate::config::Config::default()
+    };
 
     for _ in 0..super::CACHE_PRUNE_INTERVAL_REQUESTS.saturating_sub(1) {
         let _ = super::collect_maintenance_signals(&counters, &config);
@@ -138,16 +144,20 @@ fn upload_pool_idle_timeout_disabled_when_zero() {
 
 #[test]
 fn download_chunk_bytes_uses_configured_kib() {
-    let mut config = Config::default();
-    config.download_chunk_size_kb = 512;
+    let config = Config {
+        download_chunk_size_kb: 512,
+        ..Config::default()
+    };
 
     assert_eq!(super::download_chunk_bytes(&config), 512 * 1024);
 }
 
 #[test]
 fn download_chunk_bytes_clamps_zero_to_minimum() {
-    let mut config = Config::default();
-    config.download_chunk_size_kb = 0;
+    let config = Config {
+        download_chunk_size_kb: 0,
+        ..Config::default()
+    };
 
     assert_eq!(
         super::download_chunk_bytes(&config),

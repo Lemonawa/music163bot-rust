@@ -454,7 +454,7 @@ where
     E: std::future::Future<Output = ()>,
     W: std::future::Future<Output = R>,
 {
-    let (_, result) = tokio::join!(edit, work);
+    let ((), result) = tokio::join!(edit, work);
     result
 }
 

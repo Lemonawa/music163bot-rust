@@ -13,11 +13,9 @@ fn eapi_cookie_device_id_is_stable_per_instance() {
             .to_string()
     };
 
-    assert_eq!(
-        get_device_id(&cookie1),
-        get_device_id(&cookie2),
-        "device_id should be stable"
-    );
+    let id1 = get_device_id(cookie1);
+    let id2 = get_device_id(cookie2);
+    assert_eq!(id1, id2, "device_id should be stable");
 }
 
 #[test]

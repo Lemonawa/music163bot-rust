@@ -19,7 +19,7 @@ impl std::io::Write for BufferGuard {
         let mut buffer = self
             .buffer
             .lock()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock poisoned"))?;
+            .map_err(|_| std::io::Error::other("lock poisoned"))?;
         buffer.extend_from_slice(buf);
         Ok(buf.len())
     }
@@ -191,10 +191,12 @@ async fn audio_buffer_is_disk() {
     assert!(!disk_buffer.is_memory());
     disk_buffer.cleanup().await.expect("cleanup disk buffer");
 
-    let mut config = Config::default();
-    config.storage_mode = StorageMode::Memory;
-    config.memory_buffer_mb = 0;
-    config.memory_max_file_mb = u64::MAX;
+    let config = Config {
+        storage_mode: StorageMode::Memory,
+        memory_buffer_mb: 0,
+        memory_max_file_mb: u64::MAX,
+        ..Config::default()
+    };
 
     let memory_buffer = AudioBuffer::new(
         &config,
@@ -216,11 +218,13 @@ async fn audio_buffer_hybrid_uses_disk_when_threshold_exceeded() {
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     );
     let cache_dir = std::env::temp_dir();
-    let mut config = Config::default();
-    config.storage_mode = StorageMode::Hybrid;
-    config.memory_threshold_mb = 1;
-    config.memory_max_file_mb = u64::MAX;
-    config.memory_buffer_mb = 0;
+    let config = Config {
+        storage_mode: StorageMode::Hybrid,
+        memory_threshold_mb: 1,
+        memory_max_file_mb: u64::MAX,
+        memory_buffer_mb: 0,
+        ..Config::default()
+    };
 
     let buffer = AudioBuffer::new(
         &config,
@@ -245,11 +249,13 @@ async fn audio_buffer_hybrid_uses_disk_when_content_length_unknown() {
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     );
     let cache_dir = std::env::temp_dir();
-    let mut config = Config::default();
-    config.storage_mode = StorageMode::Hybrid;
-    config.memory_threshold_mb = 1024;
-    config.memory_max_file_mb = u64::MAX;
-    config.memory_buffer_mb = 0;
+    let config = Config {
+        storage_mode: StorageMode::Hybrid,
+        memory_threshold_mb: 1024,
+        memory_max_file_mb: u64::MAX,
+        memory_buffer_mb: 0,
+        ..Config::default()
+    };
 
     let buffer = AudioBuffer::new(&config, 0, temp_name.clone(), cache_dir.to_str().unwrap())
         .await
@@ -270,10 +276,12 @@ async fn audio_buffer_memory_uses_disk_when_content_length_unknown() {
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     );
     let cache_dir = std::env::temp_dir();
-    let mut config = Config::default();
-    config.storage_mode = StorageMode::Memory;
-    config.memory_max_file_mb = u64::MAX;
-    config.memory_buffer_mb = 0;
+    let config = Config {
+        storage_mode: StorageMode::Memory,
+        memory_max_file_mb: u64::MAX,
+        memory_buffer_mb: 0,
+        ..Config::default()
+    };
 
     let buffer = AudioBuffer::new(&config, 0, temp_name.clone(), cache_dir.to_str().unwrap())
         .await
@@ -338,8 +346,10 @@ async fn thumbnail_buffer_uses_disk_for_large_thumbnail() {
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     );
     let cache_dir = std::env::temp_dir();
-    let mut config = Config::default();
-    config.storage_mode = StorageMode::Hybrid;
+    let config = Config {
+        storage_mode: StorageMode::Hybrid,
+        ..Config::default()
+    };
     let data = bytes::Bytes::from(vec![7u8; 6 * 1024 * 1024]);
 
     let buf = ThumbnailBuffer::new(
@@ -362,10 +372,12 @@ async fn thumbnail_buffer_uses_disk_for_large_thumbnail() {
 async fn audio_buffer_public_facade_methods_remain_usable() {
     let cache_dir = std::env::temp_dir();
 
-    let mut memory_config = Config::default();
-    memory_config.storage_mode = StorageMode::Memory;
-    memory_config.memory_buffer_mb = 0;
-    memory_config.memory_max_file_mb = u64::MAX;
+    let memory_config = Config {
+        storage_mode: StorageMode::Memory,
+        memory_buffer_mb: 0,
+        memory_max_file_mb: u64::MAX,
+        ..Config::default()
+    };
 
     let mut memory = AudioBuffer::new(
         &memory_config,
@@ -627,7 +639,7 @@ fn get_available_memory_mb_is_consistent() {
     let mb2 = AudioBuffer::get_available_memory_mb();
     // Within the same second, throttled calls should return similar values
     // (exact same if within throttle window)
-    let diff = if mb1 > mb2 { mb1 - mb2 } else { mb2 - mb1 };
+    let diff = mb1.abs_diff(mb2);
     assert!(
         diff < 1024,
         "Two rapid calls should return similar values: {mb1} vs {mb2}"

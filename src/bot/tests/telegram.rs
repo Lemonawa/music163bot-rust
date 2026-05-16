@@ -273,7 +273,6 @@ struct MockTelegramPollingServerState {
 
 struct MockTelegramPollingServer {
     base_url: String,
-    state: Arc<Mutex<MockTelegramPollingServerState>>,
     accept_loop_task: JoinHandle<()>,
 }
 
@@ -299,21 +298,12 @@ impl MockTelegramPollingServer {
 
         Self {
             base_url: format!("http://{address}/"),
-            state,
             accept_loop_task,
         }
     }
 
     fn base_url(&self) -> String {
         self.base_url.clone()
-    }
-
-    fn get_updates_offsets(&self) -> Vec<i64> {
-        self.state
-            .lock()
-            .expect("lock mock telegram polling server state")
-            .get_updates_offsets
-            .clone()
     }
 }
 
@@ -400,11 +390,11 @@ fn mock_message_update_json(update_id: u32) -> serde_json::Value {
             "message_id": update_id,
             "date": 0,
             "chat": {
-                "id": 123456,
+                "id": 123_456,
                 "type": "private"
             },
             "from": {
-                "id": 123456,
+                "id": 123_456,
                 "is_bot": false,
                 "first_name": "tester"
             },

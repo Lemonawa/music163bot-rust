@@ -199,13 +199,13 @@ fn message_task_route_prefers_commands_over_music_links() {
 #[test]
 fn percentile_95_single_element_returns_that_element() {
     let samples: VecDeque<f64> = VecDeque::from([42.0]);
-    assert_eq!(super::percentile_95(&samples), 42.0);
+    assert!((super::percentile_95(&samples) - 42.0).abs() < f64::EPSILON);
 }
 
 #[test]
 fn percentile_95_two_elements_returns_higher() {
     let samples: VecDeque<f64> = VecDeque::from([1.0, 10.0]);
-    assert_eq!(super::percentile_95(&samples), 10.0);
+    assert!((super::percentile_95(&samples) - 10.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn percentile_95_unsorted_input() {
 #[test]
 fn percentile_95_empty_returns_zero() {
     let samples: VecDeque<f64> = VecDeque::new();
-    assert_eq!(super::percentile_95(&samples), 0.0);
+    assert!(super::percentile_95(&samples).abs() < f64::EPSILON);
 }
 
 // --- should_download_cover tests ---
@@ -374,7 +374,7 @@ fn format_uptime_zero() {
 
 #[test]
 fn format_uptime_one_hour() {
-    assert_eq!(super::format_uptime(Duration::from_secs(3600)), "01:00:00");
+    assert_eq!(super::format_uptime(Duration::from_hours(1)), "01:00:00");
 }
 
 #[test]
@@ -507,7 +507,9 @@ fn clearallcache_prune_removes_expired_entries() {
     let confirms: DashMap<(i64, ChatId), std::time::Instant> = DashMap::new();
 
     // Insert an expired entry (60 seconds ago, well beyond the 30s window)
-    let expired = std::time::Instant::now() - std::time::Duration::from_secs(60);
+    let expired = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_mins(1))
+        .expect("instant - 1m should not underflow");
     confirms.insert((1, ChatId(10)), expired);
     confirms.insert((2, ChatId(20)), std::time::Instant::now()); // fresh
 

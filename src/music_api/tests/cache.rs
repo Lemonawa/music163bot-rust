@@ -64,7 +64,7 @@ async fn run_with_attempts_and_overall_timeout_fails_when_attempts_outlast_overa
                 let counter = attempts_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    tokio::time::sleep(Duration::from_mins(1)).await;
                     Err::<(), String>("never reached".to_string())
                 }
             },
@@ -227,7 +227,10 @@ fn prune_expired_cache_entries_removes_stale_entries_only() {
         1,
         super::TimedCacheEntry {
             value: Arc::new(sample_song_detail(1)),
-            created_at: now - super::SONG_DETAIL_CACHE_TTL - Duration::from_secs(1),
+            created_at: now
+                .checked_sub(super::SONG_DETAIL_CACHE_TTL)
+                .and_then(|t| t.checked_sub(Duration::from_secs(1)))
+                .expect("instant subtraction should not underflow"),
             ttl: super::SONG_DETAIL_CACHE_TTL,
         },
     );
@@ -243,7 +246,10 @@ fn prune_expired_cache_entries_removes_stale_entries_only() {
         super::song_url_cache_key(1, 320_000),
         super::TimedCacheEntry {
             value: Arc::new(sample_song_url(1, 320_000, "https://stale.example/1.mp3")),
-            created_at: now - super::SONG_URL_CACHE_TTL - Duration::from_secs(1),
+            created_at: now
+                .checked_sub(super::SONG_URL_CACHE_TTL)
+                .and_then(|t| t.checked_sub(Duration::from_secs(1)))
+                .expect("instant subtraction should not underflow"),
             ttl: super::SONG_URL_CACHE_TTL,
         },
     );
@@ -259,7 +265,10 @@ fn prune_expired_cache_entries_removes_stale_entries_only() {
         1,
         super::TimedCacheEntry {
             value: "stale lyric".to_string(),
-            created_at: now - super::SONG_LYRIC_CACHE_TTL - Duration::from_secs(1),
+            created_at: now
+                .checked_sub(super::SONG_LYRIC_CACHE_TTL)
+                .and_then(|t| t.checked_sub(Duration::from_secs(1)))
+                .expect("instant subtraction should not underflow"),
             ttl: super::SONG_LYRIC_CACHE_TTL,
         },
     );

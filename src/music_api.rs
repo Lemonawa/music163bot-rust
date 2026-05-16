@@ -44,7 +44,7 @@ const SONG_DETAIL_CACHE_TTL: Duration = Duration::from_mins(5);
 const SONG_URL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SONG_LYRIC_CACHE_TTL: Duration = Duration::from_mins(5);
 pub(crate) const ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS: u32 = 5;
-pub(crate) const ALBUM_ART_DOWNLOAD_OVERALL_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const ALBUM_ART_DOWNLOAD_OVERALL_TIMEOUT: Duration = Duration::from_mins(1);
 pub(crate) const MUSIC_API_CACHE_MAX_ENTRIES: usize = 4096;
 const PERF_API_LOG_PREFIX: &str = "PERF_API";
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
@@ -97,6 +97,7 @@ fn song_url_cache_key(song_id: u64, br: u64) -> (u64, u64) {
     (song_id, br)
 }
 
+#[cfg(test)]
 pub(crate) async fn run_with_attempts_and_overall_timeout<F, Fut, T, E>(
     total_attempts: u32,
     overall_timeout: Duration,

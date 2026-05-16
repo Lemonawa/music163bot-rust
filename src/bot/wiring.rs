@@ -325,8 +325,11 @@ pub(super) fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::Mute
 }
 
 #[cfg(test)]
+type InflightWaitHook = Box<dyn FnOnce() + Send + 'static>;
+
+#[cfg(test)]
 pub(super) static INFLIGHT_WAIT_HOOK: std::sync::OnceLock<
-    std::sync::Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
+    std::sync::Mutex<Option<InflightWaitHook>>,
 > = std::sync::OnceLock::new();
 
 #[cfg(test)]
@@ -337,7 +340,7 @@ pub(super) fn set_inflight_wait_hook(hook: impl FnOnce() + Send + 'static) {
 }
 
 #[cfg(test)]
-pub(super) fn take_inflight_wait_hook() -> Option<Box<dyn FnOnce() + Send + 'static>> {
+pub(super) fn take_inflight_wait_hook() -> Option<InflightWaitHook> {
     let slot = INFLIGHT_WAIT_HOOK.get_or_init(|| std::sync::Mutex::new(None));
     let mut guard = lock_unpoisoned(slot);
     guard.take()
