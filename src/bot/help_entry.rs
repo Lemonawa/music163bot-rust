@@ -1,4 +1,8 @@
-use super::{Bot, Message, Arc, BotState, ResponseResult, ParseMode, ReplyParameters, require_command_args_or_reply, parse_direct_music_target, dispatch_parsed_music_target, parse_song_id_or_search_first_result, process_music};
+use super::{
+    Arc, Bot, BotState, Message, ParseMode, ReplyParameters, ResponseResult,
+    dispatch_parsed_music_target, parse_direct_music_target, parse_song_id_or_search_first_result,
+    process_music, require_command_args_or_reply,
+};
 
 pub(super) async fn handle_help_command(
     bot: &Bot,

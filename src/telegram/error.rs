@@ -4,7 +4,10 @@ pub enum TelegramError {
     Http(#[from] reqwest::Error),
 
     #[error("API error {error_code}: {description}")]
-    Api { error_code: i32, description: String },
+    Api {
+        error_code: i32,
+        description: String,
+    },
 
     #[error("Deserialization error: {0}")]
     Deserialize(#[from] serde_json::Error),

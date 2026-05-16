@@ -1,4 +1,8 @@
-use super::{Config, Database, Arc, MusicApi, Mutex, DashMap, ChatId, Bot, AtomicU32, AtomicU64, Ordering, Instant, VecDeque, LazyLock, System, sample_current_process_memory_mb, Notify, AtomicBool, throughput_mbps, percentile_95};
+use super::{
+    Arc, AtomicBool, AtomicU32, AtomicU64, Bot, ChatId, Config, DashMap, Database, Instant,
+    LazyLock, MusicApi, Mutex, Notify, Ordering, System, VecDeque, percentile_95,
+    sample_current_process_memory_mb, throughput_mbps,
+};
 
 pub(super) struct BotState {
     pub config: Config,

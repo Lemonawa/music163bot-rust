@@ -35,7 +35,7 @@ pub enum ParseMode {
 }
 
 impl ParseMode {
-    #[must_use] 
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Html => "HTML",
@@ -52,7 +52,7 @@ pub struct ReplyParameters {
 }
 
 impl ReplyParameters {
-    #[must_use] 
+    #[must_use]
     pub fn new(message_id: MessageId) -> Self {
         Self {
             message_id: message_id.0,
@@ -68,7 +68,7 @@ pub struct InlineKeyboardMarkup {
 }
 
 impl InlineKeyboardMarkup {
-    #[must_use] 
+    #[must_use]
     pub fn new(inline_keyboard: Vec<Vec<InlineKeyboardButton>>) -> Self {
         Self { inline_keyboard }
     }
@@ -124,7 +124,7 @@ pub enum InputFile {
 }
 
 impl InputFile {
-    #[must_use] 
+    #[must_use]
     pub fn file_id(id: FileId) -> Self {
         Self::FileId(id.0)
     }

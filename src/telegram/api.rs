@@ -4,7 +4,10 @@ use std::pin::Pin;
 use serde::Deserialize;
 
 use super::error::{ResponseResult, TelegramError};
-use super::types::{ChatId, InputFile, MessageId, InlineQueryResult, User, Update, ParseMode, ReplyParameters, InlineKeyboardMarkup, Message};
+use super::types::{
+    ChatId, InlineKeyboardMarkup, InlineQueryResult, InputFile, Message, MessageId, ParseMode,
+    ReplyParameters, Update, User,
+};
 
 #[derive(Debug, Clone)]
 pub struct TelegramBot {
@@ -30,7 +33,7 @@ impl TelegramBot {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn set_api_url(mut self, url: reqwest::Url) -> Self {
         let mut s = url.to_string();
         // Remove trailing slash for consistent formatting
@@ -41,17 +44,17 @@ impl TelegramBot {
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn api_url(&self) -> &str {
         &self.api_url
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn token(&self) -> &str {
         &self.token
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn client(&self) -> &reqwest::Client {
         &self.client
     }
@@ -80,12 +83,12 @@ impl TelegramBot {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_me(&self) -> GetMeRequest<'_> {
         GetMeRequest { bot: self }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_updates(
         &self,
         offset: i64,
@@ -96,7 +99,10 @@ impl TelegramBot {
             bot: self,
             offset,
             timeout,
-            allowed_updates: allowed_updates.iter().map(std::string::ToString::to_string).collect(),
+            allowed_updates: allowed_updates
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
         }
     }
 
@@ -116,11 +122,7 @@ impl TelegramBot {
         }
     }
 
-    pub fn send_audio(
-        &self,
-        chat_id: impl Into<ChatId>,
-        audio: InputFile,
-    ) -> SendAudioRequest<'_> {
+    pub fn send_audio(&self, chat_id: impl Into<ChatId>, audio: InputFile) -> SendAudioRequest<'_> {
         SendAudioRequest {
             bot: self,
             chat_id: chat_id.into(),
@@ -191,8 +193,13 @@ impl TelegramBot {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ApiResponse<T> {
-    Ok { result: T },
-    Err { error_code: i32, description: String },
+    Ok {
+        result: T,
+    },
+    Err {
+        error_code: i32,
+        description: String,
+    },
 }
 
 // --- GetMe ---

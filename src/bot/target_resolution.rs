@@ -1,4 +1,8 @@
-use super::{MusicCollectionTarget, parse_music_id, parse_music_program_id, parse_music_collection_target, Bot, Message, Arc, BotState, ResponseResult, process_music, process_program, process_music_collection, send_reply_text, sanitize_sensitive_text};
+use super::{
+    Arc, Bot, BotState, Message, MusicCollectionTarget, ResponseResult,
+    parse_music_collection_target, parse_music_id, parse_music_program_id, process_music,
+    process_music_collection, process_program, sanitize_sensitive_text, send_reply_text,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ParsedMusicTarget {

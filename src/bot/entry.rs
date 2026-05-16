@@ -1,4 +1,18 @@
-use super::{VecDeque, ResourceSnapshot, lock_unpoisoned, STATUS_RESOURCE_CACHE, STATUS_RESOURCE_REFRESH_INTERVAL, Instant, System, get_current_pid, ProcessesToUpdate, ProcessRefreshKind, CacheSnapshot, SpeedSnapshot, CoverMode, Config, Result, ensure_dir, Database, Arc, MusicApi, MAINTENANCE_QUEUE_CAPACITY, maintenance_worker, sanitize_sensitive_text, build_http_client, Bot, is_official_telegram_api, BotState, InflightDownloads, upload_task_limit, message_task_limit, Mutex, UploadClientState, MaintenanceCounters, UploadCounters, RuntimeMetrics, DashMap, run_upload_prewarm, acquire_upload_client, Update, handle_callback, handle_inline_query, Message, ResponseResult, should_spawn_message_task, classify_message_task, MessageTaskRoute, handle_music_url, should_log_command, handle_help_command, handle_music_command, handle_search_command, handle_about_command, handle_lyric_command, handle_status_command, handle_rmcache_command, is_clearallcache_confirm, handle_clearallcache_confirm_command, handle_clearallcache_command, process_music, ParseMode, ReplyParameters};
+use super::{
+    Arc, Bot, BotState, CacheSnapshot, Config, CoverMode, DashMap, Database, InflightDownloads,
+    Instant, MAINTENANCE_QUEUE_CAPACITY, MaintenanceCounters, Message, MessageTaskRoute, MusicApi,
+    Mutex, ParseMode, ProcessRefreshKind, ProcessesToUpdate, ReplyParameters, ResourceSnapshot,
+    ResponseResult, Result, RuntimeMetrics, STATUS_RESOURCE_CACHE,
+    STATUS_RESOURCE_REFRESH_INTERVAL, SpeedSnapshot, System, Update, UploadClientState,
+    UploadCounters, VecDeque, acquire_upload_client, build_http_client, classify_message_task,
+    ensure_dir, get_current_pid, handle_about_command, handle_callback,
+    handle_clearallcache_command, handle_clearallcache_confirm_command, handle_help_command,
+    handle_inline_query, handle_lyric_command, handle_music_command, handle_music_url,
+    handle_rmcache_command, handle_search_command, handle_status_command, is_clearallcache_confirm,
+    is_official_telegram_api, lock_unpoisoned, maintenance_worker, message_task_limit,
+    process_music, run_upload_prewarm, sanitize_sensitive_text, should_log_command,
+    should_spawn_message_task, upload_task_limit,
+};
 
 pub(super) fn percentile_95(samples: &VecDeque<f64>) -> f64 {
     let mut values: Vec<f64> = samples.iter().copied().collect();
@@ -324,12 +338,13 @@ async fn dispatch_update(bot: Bot, update: Update, state: Arc<BotState>) {
             );
         }
     } else if let Some(query) = update.inline_query
-        && let Err(e) = handle_inline_query(bot, query, state).await {
-            tracing::error!(
-                "Error handling inline query: {}",
-                sanitize_sensitive_text(&e.to_string())
-            );
-        }
+        && let Err(e) = handle_inline_query(bot, query, state).await
+    {
+        tracing::error!(
+            "Error handling inline query: {}",
+            sanitize_sensitive_text(&e.to_string())
+        );
+    }
 }
 
 pub(super) async fn handle_message(

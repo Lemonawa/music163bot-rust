@@ -1,4 +1,4 @@
-use super::{Bot, Message, Arc, BotState, ResponseResult, ReplyParameters};
+use super::{Arc, Bot, BotState, Message, ReplyParameters, ResponseResult};
 
 pub(super) const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
     Some(value) => value,

@@ -437,9 +437,9 @@ fn build_caption_handles_empty_strings() {
 // Exercises the same DashMap + elapsed pattern used by
 // handle_clearallcache_confirm_command without needing a Bot instance.
 
+use crate::telegram::ChatId;
 use dashmap::DashMap;
 use std::sync::Arc;
-use crate::telegram::ChatId;
 
 /// Mirrors the expiry check from support.rs using the shared constant.
 fn is_clearallcache_confirmation_valid(
