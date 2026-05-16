@@ -15,9 +15,9 @@ api = https://api.telegram.org
 
 # Admin user IDs (comma-separated; grants access to cache deletion and other admin commands)
 # To find your user ID, send a message to @userinfobot
-# Example: botadmin = 123456789,987654321
-# Or use: bot.admin = 123456789,987654321
-botadmin =
+# Non-positive IDs are ignored. Either key works: `botadmin` or `admin`.
+# Example: admin = 123456789,987654321
+admin =
 
 [music]
 # NetEase Cloud Music API base URL (custom API server, if any)
@@ -30,11 +30,11 @@ music_u =
 
 [database]
 # Database file path
-url = ./data/music_bot.db
+url = cache.db
 
 [download]
-# Download directory
-dir = ./downloads
+# Download cache directory
+dir = ./cache
 
 # Temporary file storage mode (v1.1.0+)
 # - disk: traditional disk files (recommended default; stable, low memory usage)
@@ -60,6 +60,10 @@ memory_buffer = 100
 # For stability, consider a smaller value (e.g. 16–32) to avoid large files going through the in-memory upload pipeline
 memory_max_file_mb = 100
 
+# Hard cap for total bytes streamed to disk per download (MB; default: 2000)
+# Prevents runaway downloads when content_length is unknown or misreported
+max_disk_download_mb = 2000
+
 # Maximum concurrent downloads (v1.1.9+)
 # Controls how many songs download simultaneously; lower values reduce peak memory usage
 # Recommended: 3–5 (default: 3)
@@ -68,6 +72,15 @@ max_concurrent = 3
 # Maximum tracks per playlist/album download (default: 20)
 # Requests exceeding this limit are rejected
 max_batch_tracks = 20
+
+# Download connection pool max idle connections per host (default: 2)
+pool_max_idle_per_host = 2
+
+# Download connect timeout in seconds (default: 10)
+connect_timeout_secs = 10
+
+# Download chunk size in KB (default: 256)
+chunk_size_kb = 256
 
 [upload]
 # Upload client reuse request count (v1.1.14+)
@@ -92,3 +105,10 @@ pool_idle_timeout_secs = 300
 
 # Upload timeout (seconds)
 timeout_secs = 300
+
+[maintenance]
+# Run memory release every N handled requests (default: 10)
+memory_release_interval_requests = 10
+
+# Run SQLite ANALYZE every N handled requests (default: 20)
+db_analyze_interval_requests = 20

@@ -87,6 +87,7 @@ url = cache.db
 | `memory_threshold` | `100` | MB, hybrid mode threshold |
 | `memory_buffer` | `100` | MB, memory safety buffer |
 | `memory_max_file_mb` | `100` | MB, hard cap per file in memory mode |
+| `max_disk_download_mb` | `2000` | MB, hard cap on total bytes streamed to disk per download |
 | `connect_timeout_secs` | `10` | Download connection timeout |
 | `chunk_size_kb` | `256` | Download chunk size |
 | `pool_max_idle_per_host` | `2` | Download pool idle connections |
