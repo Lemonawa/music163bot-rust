@@ -30,6 +30,8 @@ struct MockMusicApiServerState {
     song_id: u64,
     song_url_sequences: HashMap<u64, VecDeque<MockSongUrlReply>>,
     calls_by_bitrate: HashMap<u64, usize>,
+    eapi_calls_by_bitrate: HashMap<u64, usize>,
+    legacy_calls_by_bitrate: HashMap<u64, usize>,
     byradio_referer_seen: bool,
 }
 
@@ -43,6 +45,8 @@ impl MockMusicApiServerState {
             song_id,
             song_url_sequences,
             calls_by_bitrate: HashMap::new(),
+            eapi_calls_by_bitrate: HashMap::new(),
+            legacy_calls_by_bitrate: HashMap::new(),
             byradio_referer_seen: false,
         }
     }
@@ -88,6 +92,18 @@ impl MockMusicApiServer {
         *state.calls_by_bitrate.get(&bitrate).unwrap_or(&0)
     }
 
+    #[allow(dead_code)]
+    fn eapi_calls_for_bitrate(&self, bitrate: u64) -> usize {
+        let state = self.state.lock().expect("lock mock server state");
+        *state.eapi_calls_by_bitrate.get(&bitrate).unwrap_or(&0)
+    }
+
+    #[allow(dead_code)]
+    fn legacy_calls_for_bitrate(&self, bitrate: u64) -> usize {
+        let state = self.state.lock().expect("lock mock server state");
+        *state.legacy_calls_by_bitrate.get(&bitrate).unwrap_or(&0)
+    }
+
     fn saw_byradio_referer(&self) -> bool {
         let state = self.state.lock().expect("lock mock server state");
         state.byradio_referer_seen
@@ -112,7 +128,23 @@ async fn handle_mock_music_api_connection(
         let song_id = state.lock().expect("lock mock server state").song_id;
         mock_song_detail_response_json(song_id)
     } else if path == "/api/song/enhance/player/url" {
+        {
+            let mut guard = state.lock().expect("lock mock server state");
+            let bitrate = parse_form_field_as_u64(&request_body, "br").unwrap_or_default();
+            *guard.legacy_calls_by_bitrate.entry(bitrate).or_insert(0) += 1;
+        }
         mock_song_url_response_json(&state, &request_body)
+    } else if path == "/eapi/song/enhance/player/url/v1" {
+        match decode_eapi_song_url_request(&request_body) {
+            Some(bitrate) => {
+                {
+                    let mut guard = state.lock().expect("lock mock server state");
+                    *guard.eapi_calls_by_bitrate.entry(bitrate).or_insert(0) += 1;
+                }
+                mock_song_url_response_json(&state, &format!("br={bitrate}"))
+            }
+            None => r#"{"code":400}"#.to_string(),
+        }
     } else if path == "/api/v6/playlist/detail" {
         mock_playlist_detail_response_json(&state)
     } else if path.starts_with("/api/v1/album/") {
@@ -226,6 +258,27 @@ fn parse_form_field_as_u64(body: &str, field: &str) -> Option<u64> {
             None
         }
     })
+}
+
+fn decode_eapi_song_url_request(body: &str) -> Option<u64> {
+    let params_hex = url::form_urlencoded::parse(body.as_bytes())
+        .find_map(|(k, v)| (k == "params").then(|| v.into_owned()))?;
+    let plaintext = MusicApi::eapi_decrypt(&params_hex).ok()?;
+    let json_blob = plaintext.split("-36cd479b6b5-").nth(1)?;
+    let parsed: serde_json::Value = serde_json::from_str(json_blob).ok()?;
+    let level = parsed.get("level").and_then(|v| v.as_str())?;
+    Some(eapi_level_to_bitrate(level))
+}
+
+fn eapi_level_to_bitrate(level: &str) -> u64 {
+    match level {
+        "standard" => 128_000,
+        "higher" => 192_000,
+        "exhigh" => 320_000,
+        "lossless" => 999_000,
+        "hires" | "jyeffect" | "sky" | "jymaster" => 1_999_000,
+        _ => 0,
+    }
 }
 
 fn parse_query_field_as_u64(path: &str, field: &str) -> Option<u64> {
@@ -345,5 +398,6 @@ fn sample_song_url(song_id: u64, bitrate: u64, url: &str) -> SongUrl {
 
 mod cache;
 mod core;
+mod eapi;
 mod fallback;
 mod formatting;

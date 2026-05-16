@@ -72,19 +72,42 @@ impl MusicApi {
             return Ok(cached);
         }
 
-        let url = format!("{}/api/song/enhance/player/url", self.base_url);
+        let path = "/api/song/enhance/player/url/v1";
+        let url = format!("{}/eapi/song/enhance/player/url/v1", self.base_url);
         let ids_str = format!("[{song_id}]");
-        let br_str = br.to_string();
+        let payload = serde_json::json!({
+            "ids": ids_str,
+            "level": bitrate_to_eapi_level(br),
+            "encodeType": "mp3",
+            "header": "{}",
+        });
+        let payload_str = serde_json::to_string(&payload)?;
+        let body = Self::eapi_params(path, &payload_str)?;
 
-        let mut request = self
+        let response = self
             .client
             .post(url)
-            .form(&[("ids", &*ids_str), ("br", &*br_str)]);
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("User-Agent", Self::choose_eapi_user_agent())
+            .header("Cookie", self.build_eapi_cookie())
+            .body(body)
+            .send()
+            .await?
+            .error_for_status()?;
 
-        request = self.apply_music_u_cookie(request);
-
-        let response = request.send().await?.error_for_status()?;
-        let data: SongUrlResponse = response.json().await?;
+        let raw_bytes = response.bytes().await?;
+        let trimmed_bytes = raw_bytes
+            .iter()
+            .position(|&b| !b.is_ascii_whitespace())
+            .map_or(&raw_bytes[..], |pos| &raw_bytes[pos..]);
+        let data: SongUrlResponse = if trimmed_bytes.first() == Some(&b'{') {
+            serde_json::from_slice(trimmed_bytes)?
+        } else {
+            let trimmed_str = std::str::from_utf8(trimmed_bytes)
+                .map_err(|e| BotError::MusicApi(format!("Invalid UTF-8 in response: {e}")))?;
+            let decrypted = Self::eapi_decrypt(trimmed_str)?;
+            serde_json::from_str(&decrypted)?
+        };
 
         if data.code != 200 {
             return Err(BotError::MusicApi(format!(
@@ -106,5 +129,15 @@ impl MusicApi {
     /// Get song details
     pub async fn get_song_detail(&self, song_id: u64) -> Result<Arc<SongDetail>> {
         self.get_song_detail_shared(song_id).await
+    }
+}
+
+fn bitrate_to_eapi_level(br: u64) -> &'static str {
+    match br {
+        0..=128_000 => "standard",
+        128_001..=192_000 => "higher",
+        192_001..=320_000 => "exhigh",
+        320_001..=999_000 => "lossless",
+        _ => "hires",
     }
 }
