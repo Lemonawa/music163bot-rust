@@ -45,7 +45,7 @@ pub(super) async fn process_music_collection(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch {collection_name} songs: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             send_reply_text(
                 bot,
@@ -113,7 +113,7 @@ pub(super) async fn process_music_collection(
                         song_id,
                         collection_name,
                         collection_id,
-                        sanitize_sensitive_text(&e.to_string())
+                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                     );
                     break;
                 }
@@ -150,7 +150,7 @@ pub(super) async fn process_djradio_collection(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch djradio program list for {radio_id}: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             send_reply_text(bot, msg, "❌ 获取播客声音列表失败，请稍后重试").await?;
             return Ok(());

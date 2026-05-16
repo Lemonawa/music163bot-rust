@@ -94,15 +94,23 @@ impl AudioBuffer {
     }
 
     /// Cleanup resources.
-    pub async fn cleanup(self) -> Result<()> {
+    pub async fn cleanup(mut self) -> Result<()> {
+        self.cleanup_in_place().await
+    }
+
+    /// Cleanup without consuming. Leaves the buffer in a drained state so that
+    /// the `Drop` impl performs no further action.
+    pub async fn cleanup_in_place(&mut self) -> Result<()> {
         match self {
             Self::Disk { path, file, .. } => {
-                drop(file);
-                remove_file_if_exists(&path).await?;
+                file.take();
+                let path = std::mem::take(path);
+                if !path.as_os_str().is_empty() {
+                    remove_file_if_exists(&path).await?;
+                }
             }
             Self::Memory { .. } => {}
         }
-
         Ok(())
     }
 }

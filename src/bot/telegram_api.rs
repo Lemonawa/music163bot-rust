@@ -24,7 +24,7 @@ pub(super) async fn send_raw_upload_form(
     let body = resp.text().await.map_err(|e| {
         BotError::Other(anyhow::anyhow!(
             "Failed to read upload response: {}",
-            sanitize_sensitive_text(&e.to_string())
+            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
         ))
     })?;
     parse_telegram_api_response(&body, status, method)
@@ -214,7 +214,7 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
             tracing::warn!(
                 "Invalid upload API URL '{}': {}. Using default.",
                 sanitize_sensitive_text(&api_url_str),
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             match parse_api_url("https://api.telegram.org/") {
                 Ok(url) => url,
@@ -351,7 +351,7 @@ where
         Err(e) => {
             tracing::warn!(
                 "Upload prewarm failed, continuing startup: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             false
         }

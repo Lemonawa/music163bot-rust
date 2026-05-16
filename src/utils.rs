@@ -83,6 +83,20 @@ pub fn extract_retry_after_seconds(text: &str) -> Option<u64> {
     captures.get(1)?.as_str().parse::<u64>().ok()
 }
 
+#[must_use]
+pub fn format_error_chain(err: &dyn std::error::Error) -> String {
+    use std::fmt::Write as _;
+
+    let mut buf = String::new();
+    let _ = write!(buf, "{err}");
+    let mut source = err.source();
+    while let Some(src) = source {
+        let _ = write!(buf, ": {src}");
+        source = src.source();
+    }
+    buf
+}
+
 /// Global regex patterns for URL parsing
 static SONG_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"music\.163\.com/.*?song.*?[?&]id=(\d+)").expect("song id regex should be valid")

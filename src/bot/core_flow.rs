@@ -4,8 +4,8 @@ use super::{
     ReplyParameters, ResponseResult, acquire_download_leader, build_caption,
     build_perf_trace_context, cached_music_link_target, create_music_keyboard_for_target,
     delete_status_message_resilient, download_and_send_music, edit_status_message_resilient,
-    extract_retry_after_seconds, format_artists, log_perf, sanitize_sensitive_text,
-    send_reply_text, url_bitrate_candidates,
+    extract_retry_after_seconds, format_artists, format_error_chain, log_perf,
+    sanitize_sensitive_text, send_reply_text, url_bitrate_candidates,
 };
 
 pub(super) async fn try_send_cached_song(
@@ -24,7 +24,7 @@ pub(super) async fn try_send_cached_song(
             tracing::warn!(
                 "Database error looking up music_id {}: {}",
                 music_id,
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&format_error_chain(&e))
             );
             return Ok(false);
         }
@@ -44,7 +44,7 @@ pub(super) async fn try_send_cached_song(
             tracing::warn!(
                 "Failed to delete invalid cache for music_id {}: {}",
                 music_id,
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&format_error_chain(&e))
             );
         }
         return Ok(false);
@@ -97,7 +97,7 @@ pub(super) async fn try_send_cached_song(
                     tracing::warn!(
                         "Failed to delete stale file_id cache for music_id {}: {}",
                         music_id,
-                        sanitize_sensitive_text(&e.to_string())
+                        sanitize_sensitive_text(&format_error_chain(&e))
                     );
                 }
                 Ok(false)
@@ -119,7 +119,7 @@ pub(super) async fn process_program(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch program detail for {program_id}: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&format_error_chain(&e))
             );
             send_reply_text(bot, msg, "❌ 获取声音详情失败，请稍后重试").await?;
             return Ok(());
@@ -302,7 +302,7 @@ pub(super) async fn process_music_with_context(
     let status_msg = match status_result {
         Ok(status_msg) => status_msg,
         Err(e) => {
-            let sanitized = sanitize_sensitive_text(&e.to_string());
+            let sanitized = sanitize_sensitive_text(&format_error_chain(&e));
             if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
                 let retry_delay_secs = delay_secs.saturating_add(1);
                 tracing::warn!(
@@ -329,7 +329,7 @@ pub(super) async fn process_music_with_context(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch {media_label} detail/url for {music_id}: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&format_error_chain(&e))
             );
             edit_status_message_resilient(
                 bot,
@@ -394,7 +394,7 @@ pub(super) async fn process_music_with_context(
         {
             Ok(()) => break,
             Err(e) => {
-                let sanitized = sanitize_sensitive_text(&e.to_string());
+                let sanitized = sanitize_sensitive_text(&format_error_chain(&e));
                 if process_attempt == 0
                     && let Some(delay_secs) = extract_retry_after_seconds(&sanitized)
                 {

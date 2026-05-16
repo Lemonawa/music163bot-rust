@@ -58,7 +58,7 @@ pub(super) async fn search_first_song_id_or_reply(
             tracing::warn!(
                 "{}: {}",
                 log_context,
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             send_reply_text(bot, msg, "搜索失败，请稍后重试").await?;
             Ok(None)

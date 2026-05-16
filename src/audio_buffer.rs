@@ -84,10 +84,17 @@ impl AudioBuffer {
     }
 
     /// Convert to InputFile for Telegram upload (consumes self, avoids cloning)
-    pub fn into_input_file(self) -> InputFile {
-        match self {
-            Self::Disk { path, .. } => InputFile::file(path),
-            Self::Memory { data, filename, .. } => InputFile::memory(data).file_name(filename),
+    pub fn into_input_file(mut self) -> InputFile {
+        match &mut self {
+            Self::Disk { path, .. } => {
+                let path = std::mem::take(path);
+                InputFile::file(path)
+            }
+            Self::Memory { data, filename, .. } => {
+                let data = std::mem::take(data);
+                let filename = std::mem::take(filename);
+                InputFile::memory(data).file_name(filename)
+            }
         }
     }
 
@@ -97,6 +104,28 @@ impl AudioBuffer {
         match self {
             Self::Memory { data, .. } => Some(Bytes::from(std::mem::take(data))),
             Self::Disk { .. } => None,
+        }
+    }
+}
+
+impl Drop for AudioBuffer {
+    fn drop(&mut self) {
+        if let Self::Disk { path, file, .. } = self {
+            file.take();
+            if path.as_os_str().is_empty() {
+                return;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to remove audio cache file on drop ({}): {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
         }
     }
 }

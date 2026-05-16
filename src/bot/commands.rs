@@ -29,7 +29,7 @@ pub(super) async fn handle_music_url(
         Err(e) => {
             tracing::warn!(
                 "Failed to resolve share link: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
             return Ok(());
@@ -87,7 +87,10 @@ pub(super) async fn handle_search_command(
                 .await?;
         }
         Err(e) => {
-            tracing::warn!("Search failed: {}", sanitize_sensitive_text(&e.to_string()));
+            tracing::warn!(
+                "Search failed: {}",
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+            );
             bot.edit_message_text(msg.chat.id, search_msg.id, "搜索失败，请稍后重试")
                 .await?;
         }

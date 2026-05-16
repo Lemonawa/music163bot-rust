@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::{Config, StorageMode};
 use crate::music_api::SongDetail;
+use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 
 use tracing_subscriber::fmt::MakeWriter;
@@ -92,9 +93,9 @@ fn memory_buffer(data: Vec<u8>, filename: &str) -> AudioBuffer {
     }
 }
 
-fn into_memory_data(buffer: AudioBuffer) -> Vec<u8> {
-    match buffer {
-        AudioBuffer::Memory { data, .. } => data,
+fn into_memory_data(mut buffer: AudioBuffer) -> Vec<u8> {
+    match &mut buffer {
+        AudioBuffer::Memory { data, .. } => std::mem::take(data),
         AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
     }
 }
@@ -458,8 +459,9 @@ fn flac_memory_rebuild_does_not_reallocate_with_artwork() {
         .add_flac_metadata(&detail, Some(&large_artwork))
         .expect("flac tagging with large artwork should succeed");
 
-    let result_data = match buffer {
-        AudioBuffer::Memory { data, .. } => data,
+    let mut buffer = buffer;
+    let result_data = match &mut buffer {
+        AudioBuffer::Memory { data, .. } => std::mem::take(data),
         AudioBuffer::Disk { .. } => panic!("expected memory buffer"),
     };
 
@@ -664,5 +666,97 @@ fn ensure_safe_cache_filename_rejects_empty_string() {
     assert!(
         result.is_err(),
         "empty filename should be rejected for cache safety"
+    );
+}
+
+#[tokio::test]
+async fn audio_disk_buffer_dropped_without_cleanup_removes_file() {
+    let temp_name = format!(
+        "music163bot_audio_drop_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let cache_dir = std::env::temp_dir();
+    let expected_path = cache_dir.join(&temp_name);
+
+    {
+        let mut buffer = AudioBuffer::new_disk(temp_name.clone(), cache_dir.to_str().unwrap())
+            .await
+            .expect("create disk buffer");
+        buffer
+            .write_chunk(b"abc")
+            .await
+            .expect("write chunk to disk buffer");
+        buffer.finish().await.expect("finish disk buffer");
+        drop(buffer);
+    }
+
+    let leaked = tokio::fs::try_exists(&expected_path).await.unwrap_or(false);
+    if leaked {
+        tokio::fs::remove_file(&expected_path).await.ok();
+    }
+    assert!(
+        !leaked,
+        "disk audio buffer file should be removed on drop, but remained at {}",
+        expected_path.display()
+    );
+}
+
+#[tokio::test]
+async fn thumbnail_disk_buffer_dropped_without_cleanup_removes_file() {
+    let temp_name = format!(
+        "music163bot_thumb_drop_{}.jpg",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let cache_dir = std::env::temp_dir();
+    let expected_path = cache_dir.join(&temp_name);
+
+    let config = Config {
+        storage_mode: StorageMode::Disk,
+        ..Config::default()
+    };
+
+    {
+        let buffer = ThumbnailBuffer::new(
+            &config,
+            Bytes::from_static(b"thumbnail-bytes"),
+            cache_dir.to_str().unwrap(),
+            &temp_name,
+        )
+        .await
+        .expect("create disk thumbnail buffer");
+        assert!(!buffer.is_memory());
+        drop(buffer);
+    }
+
+    let leaked = tokio::fs::try_exists(&expected_path).await.unwrap_or(false);
+    if leaked {
+        tokio::fs::remove_file(&expected_path).await.ok();
+    }
+    assert!(
+        !leaked,
+        "disk thumbnail buffer file should be removed on drop, but remained at {}",
+        expected_path.display()
+    );
+}
+
+#[test]
+fn boterror_other_string_includes_underlying_source_chain() {
+    use crate::error::BotError;
+
+    let underlying =
+        std::io::Error::new(std::io::ErrorKind::ConnectionReset, "stream reset by peer");
+    let wrapped: anyhow::Error =
+        anyhow::Error::from(underlying).context("Failed to stream download to disk");
+    let bot_err: BotError = wrapped.into();
+
+    let formatted = crate::utils::format_error_chain(&bot_err);
+
+    assert!(
+        formatted.contains("Failed to stream download to disk"),
+        "top-level context should be present: {formatted}"
+    );
+    assert!(
+        formatted.contains("stream reset by peer"),
+        "underlying io::Error should appear in the formatted chain: {formatted}"
     );
 }

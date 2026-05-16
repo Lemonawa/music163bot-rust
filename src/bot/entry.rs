@@ -207,7 +207,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
                         } else {
                             tracing::warn!(
                                 "Custom API connection failed: {}. Falling back to official API.",
-                                sanitize_sensitive_text(&e.to_string())
+                                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                             );
                         }
                         tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
@@ -226,7 +226,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
                 tracing::error!(
                     "Invalid custom API URL '{}': {}. Using official API.",
                     sanitize_sensitive_text(&config.bot_api),
-                    sanitize_sensitive_text(&e.to_string())
+                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                 );
                 tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
                 Bot::new(&config.bot_token)
@@ -327,14 +327,14 @@ async fn dispatch_update(bot: Bot, update: Update, state: Arc<BotState>) {
         if let Err(e) = handle_message(bot, msg, state).await {
             tracing::error!(
                 "Error handling message: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
         }
     } else if let Some(query) = update.callback_query {
         if let Err(e) = handle_callback(bot, query, state).await {
             tracing::error!(
                 "Error handling callback: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
         }
     } else if let Some(query) = update.inline_query
@@ -342,7 +342,7 @@ async fn dispatch_update(bot: Bot, update: Update, state: Arc<BotState>) {
     {
         tracing::error!(
             "Error handling inline query: {}",
-            sanitize_sensitive_text(&e.to_string())
+            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
         );
     }
 }
@@ -363,7 +363,7 @@ pub(super) async fn handle_message(
             Err(e) => {
                 tracing::error!(
                     "Message task semaphore closed: {}",
-                    sanitize_sensitive_text(&e.to_string())
+                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                 );
                 return Ok(());
             }
@@ -381,7 +381,7 @@ pub(super) async fn handle_message(
                     if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
                         tracing::error!(
                             "Error handling command: {}",
-                            sanitize_sensitive_text(&e.to_string())
+                            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                         );
                     }
                 }
@@ -389,7 +389,7 @@ pub(super) async fn handle_message(
                     if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
                         tracing::error!(
                             "Error handling music URL: {}",
-                            sanitize_sensitive_text(&e.to_string())
+                            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                         );
                     }
                 }

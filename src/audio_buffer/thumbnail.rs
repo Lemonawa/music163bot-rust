@@ -90,20 +90,54 @@ impl ThumbnailBuffer {
 
     /// Convert to InputFile for Telegram (consumes self, avoids cloning).
     #[must_use]
-    pub fn into_input_file(self) -> InputFile {
-        match self {
-            Self::Disk { path } => InputFile::file(path),
-            Self::Memory { data } => InputFile::memory(data).file_name("thumb.jpg"),
+    pub fn into_input_file(mut self) -> InputFile {
+        match &mut self {
+            Self::Disk { path } => {
+                let path = std::mem::take(path);
+                InputFile::file(path)
+            }
+            Self::Memory { data } => {
+                let data = std::mem::take(data);
+                InputFile::memory(data).file_name("thumb.jpg")
+            }
         }
     }
 
     /// Cleanup resources.
-    pub async fn cleanup(self) -> Result<()> {
-        match self {
-            Self::Disk { path } => remove_file_if_exists(&path).await?,
-            Self::Memory { .. } => {}
-        }
+    pub async fn cleanup(mut self) -> Result<()> {
+        self.cleanup_in_place().await
+    }
 
+    /// Cleanup without consuming. Leaves the buffer in a drained state so that
+    /// the `Drop` impl performs no further action.
+    pub async fn cleanup_in_place(&mut self) -> Result<()> {
+        if let Self::Disk { path } = self {
+            let path = std::mem::take(path);
+            if !path.as_os_str().is_empty() {
+                remove_file_if_exists(&path).await?;
+            }
+        }
         Ok(())
+    }
+}
+
+impl Drop for ThumbnailBuffer {
+    fn drop(&mut self) {
+        if let Self::Disk { path } = self {
+            if path.as_os_str().is_empty() {
+                return;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to remove thumbnail cache file on drop ({}): {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+        }
     }
 }

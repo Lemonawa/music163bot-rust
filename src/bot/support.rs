@@ -47,7 +47,7 @@ pub(super) async fn handle_lyric_command(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to fetch lyric song detail for {music_id}: {}",
-                        sanitize_sensitive_text(&e.to_string())
+                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                     );
                     bot.edit_message_text(
                         msg.chat.id,
@@ -74,7 +74,7 @@ pub(super) async fn handle_lyric_command(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to initialize lyric upload client: {}",
-                        sanitize_sensitive_text(&e.to_string())
+                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                     );
                     bot.edit_message_text(
                         msg.chat.id,
@@ -90,7 +90,7 @@ pub(super) async fn handle_lyric_command(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to acquire lyric upload permit: {}",
-                        sanitize_sensitive_text(&e.to_string())
+                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                     );
                     bot.edit_message_text(
                         msg.chat.id,
@@ -122,14 +122,14 @@ pub(super) async fn handle_lyric_command(
                     if let Err(e) = bot.delete_message(msg.chat.id, status_msg.id).await {
                         tracing::debug!(
                             "Failed to delete lyric status message: {}",
-                            sanitize_sensitive_text(&e.to_string())
+                            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                         );
                     }
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Failed to upload lyric file: {}",
-                        sanitize_sensitive_text(&e.to_string())
+                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                     );
                     bot.edit_message_text(msg.chat.id, status_msg.id, "发送歌词失败，请稍后重试")
                         .await?;
@@ -139,7 +139,7 @@ pub(super) async fn handle_lyric_command(
         (Err(e), _) => {
             tracing::warn!(
                 "Failed to fetch lyric: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             bot.edit_message_text(msg.chat.id, status_msg.id, "获取歌词失败，请稍后重试")
                 .await?;
@@ -228,7 +228,7 @@ pub(super) async fn handle_rmcache_command(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to delete cached song {music_id}: {}",
-                        sanitize_sensitive_text(&e.to_string())
+                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                     );
                     send_reply_text(bot, msg, "删除缓存失败，请稍后重试").await?;
                 }
@@ -311,7 +311,7 @@ pub(super) async fn handle_clearallcache_confirm_command(
 
             tracing::error!(
                 "Failed to clear all cache: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
         }
     }
@@ -372,7 +372,7 @@ pub(super) async fn handle_callback(
             Err(e) => {
                 tracing::error!(
                     "Error processing music from callback: {}",
-                    sanitize_sensitive_text(&e.to_string())
+                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                 );
                 bot.answer_callback_query(query.id)
                     .text("❌ 处理失败，请稍后重试")
@@ -454,7 +454,7 @@ pub(super) async fn handle_inline_query(
         Err(e) => {
             tracing::error!(
                 "Inline search error: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             let error_article = InlineQueryResultArticle::new(
                 "search_error",

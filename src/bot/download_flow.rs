@@ -451,7 +451,10 @@ pub(super) async fn download_and_send_music(
             in_flight_after,
             peak_in_flight
         );
-        tracing::warn!("Upload failed: {}", sanitize_sensitive_text(&e.to_string()));
+        tracing::warn!(
+            "Upload failed: {}",
+            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+        );
 
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;
@@ -502,7 +505,7 @@ pub(super) async fn download_and_send_music(
             tracing::warn!(
                 "Failed to send cover fallback notice for music_id {}: {}",
                 song_id,
-                sanitize_sensitive_text(&e.to_string())
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
         }
     }

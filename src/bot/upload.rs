@@ -313,7 +313,7 @@ pub(super) async fn edit_status_message_resilient(
         .edit_message_text(chat_id, message_id, text.clone())
         .await
     {
-        let sanitized = sanitize_sensitive_text(&e.to_string());
+        let sanitized = sanitize_sensitive_text(&crate::utils::format_error_chain(&e));
         if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
             let bot = bot.clone();
             tokio::spawn(async move {
@@ -338,7 +338,7 @@ pub(super) async fn delete_status_message_resilient(
     message_id: MessageId,
 ) {
     if let Err(e) = bot.delete_message(chat_id, message_id).await {
-        let sanitized = sanitize_sensitive_text(&e.to_string());
+        let sanitized = sanitize_sensitive_text(&crate::utils::format_error_chain(&e));
         if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
             let bot = bot.clone();
             tokio::spawn(async move {
