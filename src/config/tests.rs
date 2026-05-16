@@ -321,3 +321,27 @@ fn parse_admin_list_drops_zero_and_negative_ids() {
 fn parse_admin_list_returns_empty_when_only_invalid_entries() {
     assert!(super::parse_admin_list("0,-1,abc").is_empty());
 }
+
+#[test]
+fn legacy_db_warning_skipped_when_configured_path_exists() {
+    let warning = super::load::classify_legacy_database_state(true, true, false);
+    assert_eq!(warning, super::load::LegacyDbWarning::None);
+}
+
+#[test]
+fn legacy_db_warning_skipped_when_no_legacy_present() {
+    let warning = super::load::classify_legacy_database_state(false, false, false);
+    assert_eq!(warning, super::load::LegacyDbWarning::None);
+}
+
+#[test]
+fn legacy_db_warning_emitted_for_default_path_with_legacy() {
+    let warning = super::load::classify_legacy_database_state(false, true, false);
+    assert_eq!(warning, super::load::LegacyDbWarning::LegacyOnly);
+}
+
+#[test]
+fn legacy_db_warning_emitted_for_explicit_path_with_legacy() {
+    let warning = super::load::classify_legacy_database_state(false, true, true);
+    assert_eq!(warning, super::load::LegacyDbWarning::LegacyAndExplicit);
+}

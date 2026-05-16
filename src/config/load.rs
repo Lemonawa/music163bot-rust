@@ -84,6 +84,10 @@ impl Config {
             config.database.clone_from(db);
         }
 
+        let database_explicit =
+            config_map.contains_key("database.url") || config_map.contains_key("database");
+        warn_on_legacy_database_path(&config.database, database_explicit);
+
         if let Some(level) = config_map.get("loglevel") {
             config.log_level.clone_from(level);
         }
@@ -229,5 +233,56 @@ impl Config {
         }
 
         Ok(config)
+    }
+}
+
+const LEGACY_DATABASE_PATH: &str = "cache.db";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LegacyDbWarning {
+    None,
+    LegacyOnly,
+    LegacyAndExplicit,
+}
+
+pub(super) fn classify_legacy_database_state(
+    configured_path_exists: bool,
+    legacy_path_exists: bool,
+    configured_explicitly: bool,
+) -> LegacyDbWarning {
+    if configured_path_exists || !legacy_path_exists {
+        return LegacyDbWarning::None;
+    }
+    if configured_explicitly {
+        LegacyDbWarning::LegacyAndExplicit
+    } else {
+        LegacyDbWarning::LegacyOnly
+    }
+}
+
+fn warn_on_legacy_database_path(configured: &str, configured_explicitly: bool) {
+    let configured_path_exists = std::path::Path::new(configured).exists();
+    let legacy_path_exists = std::path::Path::new(LEGACY_DATABASE_PATH).exists();
+
+    match classify_legacy_database_state(
+        configured_path_exists,
+        legacy_path_exists,
+        configured_explicitly,
+    ) {
+        LegacyDbWarning::None => {}
+        LegacyDbWarning::LegacyAndExplicit => {
+            tracing::warn!(
+                "database.url '{configured}' does not exist yet, but a legacy \
+                 '{LEGACY_DATABASE_PATH}' was found in the working directory. Move it to \
+                 '{configured}' to keep your existing data."
+            );
+        }
+        LegacyDbWarning::LegacyOnly => {
+            tracing::warn!(
+                "database default changed to '{configured}'; a legacy '{LEGACY_DATABASE_PATH}' \
+                 was found in the working directory. Either move it to '{configured}' or set \
+                 'database.url = {LEGACY_DATABASE_PATH}' in config.ini to keep using it."
+            );
+        }
     }
 }
