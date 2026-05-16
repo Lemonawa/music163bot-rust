@@ -439,7 +439,7 @@ fn build_caption_handles_empty_strings() {
 
 use dashmap::DashMap;
 use std::sync::Arc;
-use teloxide::types::ChatId;
+use crate::telegram::ChatId;
 
 /// Mirrors the expiry check from support.rs using the shared constant.
 fn is_clearallcache_confirmation_valid(

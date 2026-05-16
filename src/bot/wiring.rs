@@ -1,4 +1,4 @@
-use super::*;
+use super::{Config, Database, Arc, MusicApi, Mutex, DashMap, ChatId, Bot, AtomicU32, AtomicU64, Ordering, Instant, VecDeque, LazyLock, System, sample_current_process_memory_mb, Notify, AtomicBool, throughput_mbps, percentile_95};
 
 pub(super) struct BotState {
     pub config: Config,
@@ -15,7 +15,7 @@ pub(super) struct BotState {
     pub upload_counters: UploadCounters,
     pub runtime_metrics: RuntimeMetrics,
     pub is_official_api: bool,
-    pub clearallcache_confirms: Arc<DashMap<(i64, teloxide::types::ChatId), std::time::Instant>>,
+    pub clearallcache_confirms: Arc<DashMap<(i64, ChatId), std::time::Instant>>,
 }
 
 #[derive(Debug)]

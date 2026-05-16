@@ -1,4 +1,4 @@
-use super::*;
+use super::{AudioBuffer, AudioFormat, Arc, Bytes, Result, BotError, MusicLinkTarget, InlineKeyboardMarkup, InlineKeyboardButton, Message, Config, Bot, ResponseResult, ReplyParameters, ParseMode, ChatId, MessageId, sanitize_sensitive_text, extract_retry_after_seconds, UploadClientState, MaintenanceCounters, MaintenanceSignal, CACHE_PRUNE_INTERVAL_REQUESTS, InflightDownloads, InflightLeaderGuard, InflightClaim, Database, MusicApi, MIN_DOWNLOAD_CHUNK_BYTES, ThumbnailBuffer};
 
 pub(super) async fn apply_tags_in_blocking(
     mut audio_buffer: AudioBuffer,
@@ -116,7 +116,7 @@ pub(super) fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, 
 }
 
 pub(super) fn is_admin(msg: &Message, config: &Config) -> bool {
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     config.bot_admin.contains(&user_id)
 }
 
@@ -297,8 +297,8 @@ pub(super) async fn send_reply_html(
 
 pub(super) async fn edit_status_message_resilient(
     bot: &Bot,
-    chat_id: teloxide::types::ChatId,
-    message_id: teloxide::types::MessageId,
+    chat_id: ChatId,
+    message_id: MessageId,
     text: impl Into<String>,
 ) {
     let text = text.into();
@@ -327,8 +327,8 @@ pub(super) async fn edit_status_message_resilient(
 
 pub(super) async fn delete_status_message_resilient(
     bot: &Bot,
-    chat_id: teloxide::types::ChatId,
-    message_id: teloxide::types::MessageId,
+    chat_id: ChatId,
+    message_id: MessageId,
 ) {
     if let Err(e) = bot.delete_message(chat_id, message_id).await {
         let sanitized = sanitize_sensitive_text(&e.to_string());

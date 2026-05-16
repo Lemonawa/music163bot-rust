@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::telegram::TelegramError;
+
 #[derive(Error, Debug)]
 pub enum BotError {
     #[error("Database error: {0}")]
@@ -12,7 +14,7 @@ pub enum BotError {
     HttpClientBuild(String),
 
     #[error("Telegram error: {0}")]
-    Telegram(#[from] teloxide::RequestError),
+    Telegram(#[from] TelegramError),
 
     #[error("Music API error: {0}")]
     MusicApi(String),

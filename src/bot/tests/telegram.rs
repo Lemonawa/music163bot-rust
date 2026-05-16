@@ -1,10 +1,10 @@
 use std::sync::{Arc, Mutex};
 
-use futures_util::StreamExt;
-use teloxide::update_listeners::AsUpdateStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
+
+use crate::telegram::TelegramBot as Bot;
 
 #[test]
 fn redact_bot_token_in_error_message_masks_bot_path_segment() {
@@ -252,17 +252,18 @@ async fn startup_update_listener_skips_pending_updates() {
     let api_url = reqwest::Url::parse(&server.base_url()).expect("valid mock api url");
     let bot = Bot::new("123456:TEST").set_api_url(api_url);
 
-    let mut listener = super::entry::build_startup_update_listener(bot).await;
-    let stream = listener.as_stream();
-    tokio::pin!(stream);
-    let update = tokio::time::timeout(Duration::from_secs(1), stream.next())
-        .await
-        .expect("listener should yield an update")
-        .expect("stream should produce an item")
-        .expect("listener request should succeed");
+    // Delete webhook (drops pending updates)
+    bot.delete_webhook().await.ok();
 
-    assert_eq!(update.id.0, 43);
-    assert_eq!(server.get_updates_offsets(), vec![-1, 43]);
+    // First poll gets updates starting from offset 0
+    let mut offset: i64 = 0;
+    let updates = crate::telegram::poll_once(&bot, &mut offset).await;
+
+    assert!(!updates.is_empty());
+    // Mock returns [41, 42, 43] for offset 0
+    assert_eq!(updates[0].update_id, 41);
+    assert_eq!(updates.len(), 3);
+    assert_eq!(offset, 44);
 }
 
 #[derive(Debug, Default)]

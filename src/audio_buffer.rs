@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use teloxide::types::InputFile;
+use crate::telegram::InputFile;
 use tokio::fs::File;
 
 mod backend;

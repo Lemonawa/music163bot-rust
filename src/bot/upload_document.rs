@@ -1,4 +1,4 @@
-use super::*;
+use super::{Bytes, RawDocumentParams, Result, send_raw_upload_form};
 
 /// Upload an in-memory document via raw reqwest multipart.
 pub(super) async fn raw_send_document_bytes(

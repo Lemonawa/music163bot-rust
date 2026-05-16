@@ -1,4 +1,5 @@
-use super::*;
+use futures_util::{StreamExt, TryStreamExt};
+use super::{Bot, Message, Arc, BotState, PerfTraceContext, MusicLinkTarget, Result, AudioFormat, clean_filename, resolve_cover_policy, should_download_cover, download_cover_assets, acquire_download_permit, AudioBuffer, download_chunk_bytes, StreamReader, Context, throughput_mbps, log_perf, PERF_STAGE_DOWNLOAD_AUDIO, cleanup_thumbnail_buffer, should_remove_song_cache_after_partial_failure, resource_availability_status, cleanup_audio_buffer, edit_status_message_resilient, apply_tags_in_blocking, PERF_STAGE_TAG_PROCESS, acquire_upload_client, PERF_STAGE_UPLOAD_CLIENT_ACQUIRE, SongInfo, build_caption, create_music_keyboard_for_target, PERF_STAGE_PRE_UPLOAD_PATH, acquire_upload_permit_owned, PERF_STAGE_UPLOAD_PERMIT_WAIT, Ordering, update_peak, RawUploadParams, raw_send_file, PERF_STAGE_UPLOAD_SEND, extract_file_id_from_response, sanitize_sensitive_text, collect_maintenance_signals, PERF_STAGE_DB_SAVE, cover_download_failure_notice, send_reply_text, delete_status_message_resilient};
 
 pub(super) async fn download_and_send_music(
     bot: &Bot,
@@ -281,14 +282,14 @@ pub(super) async fn download_and_send_music(
         duration: duration_sec,
         file_id: None,
         thumb_file_id: None,
-        from_user_id: msg.from.as_ref().map_or(0, |u| u.id.0 as i64),
+        from_user_id: msg.from.as_ref().map_or(0, |u| u.id),
         from_user_name: msg
             .from
             .as_ref()
             .and_then(|u| u.username.clone())
             .unwrap_or_default(),
         from_chat_id: msg.chat.id.0,
-        from_chat_name: msg.chat.username().unwrap_or("").to_string(),
+        from_chat_name: msg.chat.username.as_deref().unwrap_or("").to_string(),
         created_at: now,
         updated_at: now,
         ..Default::default()

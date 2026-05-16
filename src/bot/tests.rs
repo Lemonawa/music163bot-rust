@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 use crate::config::CoverMode;
-use teloxide::Bot;
+use crate::telegram::TelegramBot as Bot;
 use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
 

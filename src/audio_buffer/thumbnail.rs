@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use teloxide::types::InputFile;
 
 use super::{ThumbnailBuffer, remove_file_if_exists};
 use crate::config::{Config, StorageMode};
+use crate::telegram::InputFile;
 
 impl ThumbnailBuffer {
     /// Create a new thumbnail buffer.

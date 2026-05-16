@@ -7,16 +7,7 @@ use std::time::Instant;
 use anyhow::Context;
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures_util::{StreamExt, TryStreamExt};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
-use teloxide::prelude::*;
-use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::{
-    CallbackQuery, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery,
-    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMessageContent,
-    InputMessageContentText, MaybeInaccessibleMessage, Message, MessageKind, ParseMode,
-    ReplyParameters,
-};
 use tokio::sync::{Mutex, Notify};
 use tokio_util::io::{ReaderStream, StreamReader};
 
@@ -25,12 +16,21 @@ use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
 use crate::error::{BotError, Result};
 use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
+use crate::telegram::{
+    CallbackQuery, ChatId, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery,
+    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMessageContent,
+    InputMessageContentText, MaybeInaccessibleMessage, Message, MessageId, ParseMode,
+    ReplyParameters, ResponseResult, TelegramBot, Update,
+};
 use crate::utils::{
     MusicCollectionTarget, build_http_client, clean_filename, ensure_dir,
     extract_first_trusted_music_share_url, extract_retry_after_seconds,
     parse_music_collection_target, parse_music_id, parse_music_program_id, sanitize_sensitive_text,
     throughput_mbps, update_peak,
 };
+
+/// Type alias so submodules can keep using `Bot` without renaming everywhere.
+type Bot = TelegramBot;
 
 mod about;
 mod collection_flow;

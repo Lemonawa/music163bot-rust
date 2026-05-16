@@ -1,4 +1,4 @@
-use super::*;
+use super::{VecDeque, ResourceSnapshot, lock_unpoisoned, STATUS_RESOURCE_CACHE, STATUS_RESOURCE_REFRESH_INTERVAL, Instant, System, get_current_pid, ProcessesToUpdate, ProcessRefreshKind, CacheSnapshot, SpeedSnapshot, CoverMode, Config, Result, ensure_dir, Database, Arc, MusicApi, MAINTENANCE_QUEUE_CAPACITY, maintenance_worker, sanitize_sensitive_text, build_http_client, Bot, is_official_telegram_api, BotState, InflightDownloads, upload_task_limit, message_task_limit, Mutex, UploadClientState, MaintenanceCounters, UploadCounters, RuntimeMetrics, DashMap, run_upload_prewarm, acquire_upload_client, Update, handle_callback, handle_inline_query, Message, ResponseResult, should_spawn_message_task, classify_message_task, MessageTaskRoute, handle_music_url, should_log_command, handle_help_command, handle_music_command, handle_search_command, handle_about_command, handle_lyric_command, handle_status_command, handle_rmcache_command, is_clearallcache_confirm, handle_clearallcache_confirm_command, handle_clearallcache_command, process_music, ParseMode, ReplyParameters};
 
 pub(super) fn percentile_95(samples: &VecDeque<f64>) -> f64 {
     let mut values: Vec<f64> = samples.iter().copied().collect();
@@ -133,17 +133,6 @@ pub(super) fn should_download_cover(policy: CoverPolicy) -> bool {
     policy.embed_cover || policy.download_thumbnail
 }
 
-pub(super) async fn build_startup_update_listener(
-    bot: Bot,
-) -> teloxide::update_listeners::Polling<Bot> {
-    teloxide::update_listeners::Polling::builder(bot)
-        .timeout(std::time::Duration::from_secs(10))
-        .delete_webhook()
-        .await
-        .drop_pending_updates()
-        .build()
-}
-
 pub(super) async fn run(config: Config) -> Result<()> {
     tracing::info!("Starting Telegram bot...");
 
@@ -163,7 +152,6 @@ pub(super) async fn run(config: Config) -> Result<()> {
     });
 
     let bot = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org" {
-        // API URL must be base URL without "/bot" suffix - teloxide appends "bot<TOKEN>/" automatically
         let api_url_str = format!("{}/", config.bot_api.trim_end_matches("/bot"));
 
         match reqwest::Url::parse(&api_url_str) {
@@ -173,8 +161,6 @@ pub(super) async fn run(config: Config) -> Result<()> {
                     sanitize_sensitive_text(api_url.as_str())
                 );
 
-                // Create a custom HTTP client tuned for Cloudflare compatibility (mimic Go http client)
-                // pool_max_idle_per_host(2) keeps reasonable connection pool for API efficiency
                 let client_builder = reqwest::Client::builder()
                     .use_rustls_tls()
                     .user_agent("Go-http-client/2.0")
@@ -190,24 +176,23 @@ pub(super) async fn run(config: Config) -> Result<()> {
                 match tokio::time::timeout(std::time::Duration::from_secs(15), bot.get_me()).await {
                     Ok(Ok(_)) => {
                         tracing::info!(
-                            "✅ Custom API connection successful: {}",
+                            "Custom API connection successful: {}",
                             sanitize_sensitive_text(api_url.as_str())
                         );
                         bot
                     }
                     Ok(Err(e)) => {
                         let error_msg = format!("{e}");
-                        // Check if it's a CloudFlare challenge or other blocking issue
                         if error_msg.contains("Just a moment")
                             || error_msg.contains("cloudflare")
                             || error_msg.contains("challenge")
                         {
                             tracing::warn!(
-                                "❌ Custom API blocked by CloudFlare protection. Falling back to official API."
+                                "Custom API blocked by CloudFlare protection. Falling back to official API."
                             );
                         } else {
                             tracing::warn!(
-                                "❌ Custom API connection failed: {}. Falling back to official API.",
+                                "Custom API connection failed: {}. Falling back to official API.",
                                 sanitize_sensitive_text(&e.to_string())
                             );
                         }
@@ -216,7 +201,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
                     }
                     Err(_) => {
                         tracing::warn!(
-                            "❌ Custom API connection timeout (15s). Falling back to official API."
+                            "Custom API connection timeout (15s). Falling back to official API."
                         );
                         tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
                         Bot::new(&config.bot_token)
@@ -234,7 +219,6 @@ pub(super) async fn run(config: Config) -> Result<()> {
             }
         }
     } else {
-        // Default API URL with connection pool tuning
         tracing::info!("Using default Telegram API URL: https://api.telegram.org");
         let client_builder = reqwest::Client::builder()
             .use_rustls_tls()
@@ -295,24 +279,57 @@ pub(super) async fn run(config: Config) -> Result<()> {
         let _ = run_upload_prewarm(|| acquire_upload_client(&prewarm_state)).await;
     });
 
-    let handler = dptree::entry()
-        .branch(Update::filter_message().endpoint(handle_message))
-        .branch(Update::filter_callback_query().endpoint(handle_callback))
-        .branch(Update::filter_inline_query().endpoint(handle_inline_query));
+    // Delete webhook and drop pending updates before starting polling
+    bot.delete_webhook().await.ok();
 
-    let listener = build_startup_update_listener(bot.clone()).await;
-    let error_handler = LoggingErrorHandler::with_custom_text("An error from the update listener");
+    // Long polling loop with graceful shutdown via ctrl+c
+    let mut offset: i64 = 0;
+    let shutdown = tokio::signal::ctrl_c();
+    tokio::pin!(shutdown);
 
-    Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![bot_state])
-        .default_handler(|upd| async move {
-            tracing::debug!("Unhandled update: {:?}", upd);
-        })
-        .enable_ctrlc_handler()
-        .build()
-        .dispatch_with_listener(listener, error_handler)
-        .await;
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                tracing::info!("Received shutdown signal, stopping...");
+                break;
+            }
+            updates = crate::telegram::poll_once(&bot, &mut offset) => {
+                for update in updates {
+                    let bot = bot.clone();
+                    let state = Arc::clone(&bot_state);
+                    tokio::spawn(async move {
+                        dispatch_update(bot, update, state).await;
+                    });
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+async fn dispatch_update(bot: Bot, update: Update, state: Arc<BotState>) {
+    if let Some(msg) = update.message {
+        if let Err(e) = handle_message(bot, msg, state).await {
+            tracing::error!(
+                "Error handling message: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
+        }
+    } else if let Some(query) = update.callback_query {
+        if let Err(e) = handle_callback(bot, query, state).await {
+            tracing::error!(
+                "Error handling callback: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
+        }
+    } else if let Some(query) = update.inline_query
+        && let Err(e) = handle_inline_query(bot, query, state).await {
+            tracing::error!(
+                "Error handling inline query: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
+        }
 }
 
 pub(super) async fn handle_message(
@@ -320,13 +337,11 @@ pub(super) async fn handle_message(
     msg: Message,
     state: Arc<BotState>,
 ) -> ResponseResult<()> {
-    if let MessageKind::Common(common) = &msg.kind
-        && let teloxide::types::MediaKind::Text(text_content) = &common.media_kind
-    {
-        if !should_spawn_message_task(&text_content.text) {
+    if let Some(text) = &msg.text {
+        if !should_spawn_message_task(text) {
             return Ok(());
         }
-        let text = text_content.text.clone();
+        let text = text.clone();
 
         let permit = match state.message_task_semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,

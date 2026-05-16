@@ -1,4 +1,4 @@
-use super::*;
+use super::{Bot, Message, Arc, BotState, ResponseResult, require_command_args_or_reply, parse_song_id_or_search_first_result, send_reply_message, join_futures, sanitize_sensitive_text, format_artists, clean_filename, Bytes, acquire_upload_client, acquire_upload_permit, RawDocumentParams, raw_send_document_bytes, ensure_admin, sample_resource_snapshot, format_uptime, format_speed_line, build_status_text, ParseMode, ReplyParameters, send_reply_html, rmcache_usage_prompt, parse_music_id, send_reply_text, clearallcache_confirmation_prompt, Config, CallbackQuery, MaybeInaccessibleMessage, process_music, InlineQuery, parse_inline_query_keyword, InlineQueryResultArticle, InputMessageContent, InputMessageContentText, InlineQueryResult, ChatId};
 
 pub(super) async fn handle_lyric_command(
     bot: &Bot,
@@ -148,7 +148,7 @@ pub(super) async fn handle_status_command(
         return Ok(());
     }
 
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     let chat_id = msg.chat.id.0;
 
     let (total_count, user_count, chat_count) = state
@@ -244,7 +244,7 @@ pub(super) async fn handle_clearallcache_command(
     };
 
     send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     prune_expired_confirmations(&state.clearallcache_confirms);
     state
         .clearallcache_confirms
@@ -314,7 +314,7 @@ pub(super) async fn ensure_admin_user_id(
     msg: &Message,
     config: &Config,
 ) -> ResponseResult<Option<i64>> {
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
+    let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     if ensure_admin(bot, msg, config).await? {
         Ok(Some(user_id))
     } else {
@@ -467,7 +467,7 @@ pub(super) const CLEARALLCACHE_CONFIRM_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(30);
 
 pub(super) fn prune_expired_confirmations(
-    confirms: &dashmap::DashMap<(i64, teloxide::types::ChatId), std::time::Instant>,
+    confirms: &dashmap::DashMap<(i64, ChatId), std::time::Instant>,
 ) {
     confirms.retain(|_, at| at.elapsed() <= CLEARALLCACHE_CONFIRM_WINDOW);
 }

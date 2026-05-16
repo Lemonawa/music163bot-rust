@@ -29,6 +29,7 @@ pub mod database;
 pub mod error;
 pub mod memory;
 pub mod music_api;
+pub mod telegram;
 pub mod utils;
 
 use anyhow::Result;

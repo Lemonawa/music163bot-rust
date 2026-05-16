@@ -6,13 +6,10 @@ license = "WTFPL"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
-
-# Telegram bot framework
-teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "signal"] }
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "stream", "multipart", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "stream", "multipart", "rustls", "form"] }
 
 # URL parsing
 url = "2.4"

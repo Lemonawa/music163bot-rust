@@ -1,4 +1,4 @@
-use super::*;
+use super::{Result, BotError, sanitize_sensitive_text, Config, AudioBuffer, Bytes, RawUploadParams, select_local_upload_target, UploadFileTarget, ReaderStream, RAW_UPLOAD_CHUNK_SIZE, ThumbnailBuffer, extract_retry_after_seconds, UploadBotBundle, parse_api_url, should_set_upload_pool_idle_timeout, build_http_client, Bot, Arc, BotState, should_refresh_upload_client, UploadClientState, get_upload_bot};
 use std::fmt::Write as _;
 
 pub(super) async fn send_raw_upload_form(
@@ -25,7 +25,7 @@ pub(super) async fn send_raw_upload_form(
 }
 
 /// Upload a file via raw reqwest multipart with pre-computed Content-Length
-/// and 256 KiB streaming chunks — bypasses teloxide's 8 KiB FramedRead + chunked encoding.
+/// and 256 KiB streaming chunks.
 pub(super) async fn raw_send_file(
     client: &reqwest::Client,
     api_base_url: &str,
