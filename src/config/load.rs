@@ -80,10 +80,6 @@ impl Config {
             tracing::info!("Loaded bot admins (from bot.admin): {:?}", config.bot_admin);
         }
 
-        if let Some(v) = config_map.get("botdebug") {
-            apply_bool_field(v, &mut config.bot_debug, "botdebug");
-        }
-
         if let Some(db) = config_map.get("database") {
             config.database.clone_from(db);
         }
