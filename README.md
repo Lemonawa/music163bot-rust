@@ -49,7 +49,7 @@ Minimal config — just set `bot.token` and you're good:
 token = YOUR_BOT_TOKEN
 
 [database]
-url = cache.db
+url = ./data/music_bot.db
 ```
 
 ### Full config reference
@@ -73,13 +73,13 @@ url = cache.db
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `url` | `cache.db` | SQLite file path |
+| `url` | `./data/music_bot.db` | SQLite file path |
 
 **[download]**
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `dir` | `./cache` | Cache directory |
+| `dir` | `./downloads` | Cache directory |
 | `storage_mode` | `disk` | `disk`, `memory`, or `hybrid` |
 | `cover_mode` | `thumbnail` | `thumbnail`, `original`, or `both` |
 | `max_concurrent` | `4` | Parallel downloads |

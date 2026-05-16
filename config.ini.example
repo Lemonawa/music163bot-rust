@@ -30,11 +30,11 @@ music_u =
 
 [database]
 # Database file path
-url = cache.db
+url = ./data/music_bot.db
 
 [download]
 # Download cache directory
-dir = ./cache
+dir = ./downloads
 
 # Temporary file storage mode (v1.1.0+)
 # - disk: traditional disk files (recommended default; stable, low memory usage)
