@@ -250,7 +250,7 @@ async fn tagging_wrapper_adds_mp3_id3_header() {
 async fn startup_update_listener_skips_pending_updates() {
     let server = MockTelegramPollingServer::start().await;
     let api_url = reqwest::Url::parse(&server.base_url()).expect("valid mock api url");
-    let bot = Bot::new("123456:TEST").set_api_url(api_url);
+    let bot = Bot::new("123456:TEST").set_api_url(&api_url);
 
     // Delete webhook (drops pending updates)
     bot.delete_webhook().await.ok();

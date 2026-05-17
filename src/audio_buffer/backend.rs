@@ -7,6 +7,9 @@ use super::{AudioBuffer, remove_file_if_exists};
 
 impl AudioBuffer {
     /// Write a chunk of data to the buffer.
+    ///
+    /// # Errors
+    /// Returns an error if writing to the underlying disk file fails.
     pub async fn write_chunk(&mut self, chunk: &[u8]) -> Result<()> {
         match self {
             Self::Disk {
@@ -29,6 +32,9 @@ impl AudioBuffer {
     }
 
     /// Finish writing and flush any buffers.
+    ///
+    /// # Errors
+    /// Returns an error if flushing the disk file fails.
     pub async fn finish(&mut self) -> Result<()> {
         if let Self::Disk { file, .. } = self
             && let Some(file) = file
@@ -84,6 +90,9 @@ impl AudioBuffer {
     }
 
     /// Get raw data (for memory mode) or read from disk.
+    ///
+    /// # Errors
+    /// Returns an error if reading the file from disk fails.
     pub async fn get_data(&self) -> Result<Vec<u8>> {
         match self {
             Self::Disk { path, .. } => tokio::fs::read(path)
@@ -94,12 +103,18 @@ impl AudioBuffer {
     }
 
     /// Cleanup resources.
+    ///
+    /// # Errors
+    /// Returns an error if removing the disk file fails.
     pub async fn cleanup(mut self) -> Result<()> {
         self.cleanup_in_place().await
     }
 
     /// Cleanup without consuming. Leaves the buffer in a drained state so that
     /// the `Drop` impl performs no further action.
+    ///
+    /// # Errors
+    /// Returns an error if removing the disk file fails.
     pub async fn cleanup_in_place(&mut self) -> Result<()> {
         match self {
             Self::Disk { path, file, .. } => {

@@ -9,6 +9,8 @@ use crate::error::BotError;
 use crate::utils::{is_trusted_music_media_url, is_trusted_music_share_url};
 
 impl MusicApi {
+    /// # Errors
+    /// Returns an error if the API request fails or returns an error code.
     pub async fn get_song_lyric(&self, song_id: u64) -> Result<String> {
         if let Some(cached) = self.get_cached_song_lyric(song_id) {
             return Ok(cached);
@@ -40,6 +42,9 @@ impl MusicApi {
     }
 
     /// Search songs
+    ///
+    /// # Errors
+    /// Returns an error if the API request fails or returns an error code.
     pub async fn search_songs(&self, keyword: &str, limit: u32) -> Result<Vec<SearchSong>> {
         #[derive(Serialize)]
         struct SearchPayload<'a> {
@@ -91,6 +96,9 @@ impl MusicApi {
     }
 
     /// Download file with proper headers and cookies
+    ///
+    /// # Errors
+    /// Returns an error if the URL is untrusted or the download request fails.
     pub async fn download_file(&self, url: &str) -> Result<reqwest::Response> {
         // Apply host replacement similar to the original Go project.
         // VPS sampling shows the original m704/m804 hosts can return 403 while m701 succeeds.
@@ -107,6 +115,9 @@ impl MusicApi {
     }
 
     /// Resolve final URL for share links with minimal body transfer
+    ///
+    /// # Errors
+    /// Returns an error if the URL is untrusted or redirect resolution fails.
     pub async fn resolve_share_link(&self, url: &str) -> Result<reqwest::Url> {
         if !is_trusted_music_share_url(url) {
             return Err(BotError::MusicApi("Untrusted share-link host".to_string()));
@@ -175,7 +186,10 @@ impl MusicApi {
     }
 
     /// Download album art image into memory, optionally resizing to thumbnail
-    /// Uses spawn_blocking for CPU-intensive image processing to avoid blocking async runtime
+    /// Uses `spawn_blocking` for CPU-intensive image processing to avoid blocking async runtime
+    ///
+    /// # Errors
+    /// Returns an error if the URL is untrusted, the download fails, or image processing fails.
     pub async fn download_album_art_data(&self, pic_url: &str, resize: bool) -> Result<Vec<u8>> {
         if pic_url.is_empty() {
             return Err(BotError::MusicApi("Empty album art URL".to_string()));

@@ -127,6 +127,9 @@ impl MusicApi {
     }
 
     /// Get song details
+    ///
+    /// # Errors
+    /// Returns an error if the API request fails or returns an error code.
     pub async fn get_song_detail(&self, song_id: u64) -> Result<Arc<SongDetail>> {
         self.get_song_detail_shared(song_id).await
     }

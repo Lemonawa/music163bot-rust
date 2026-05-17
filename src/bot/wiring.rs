@@ -1,7 +1,7 @@
 use super::{
     Arc, AtomicBool, AtomicU32, AtomicU64, Bot, ChatId, Config, DashMap, Database, Instant,
     LazyLock, MusicApi, Mutex, Notify, Ordering, System, VecDeque, percentile_95,
-    sample_current_process_memory_mb, throughput_mbps,
+    sample_current_process_memory_mb, throughput_mbps, u64_to_f64,
 };
 
 pub(super) struct BotState {
@@ -159,7 +159,7 @@ pub(super) fn format_perf_stage_line(
 pub(super) fn upload_topology_label(config: &Config, is_official_api: bool) -> &'static str {
     if is_official_api {
         "official_api"
-    } else if config.upload_local_file_uri {
+    } else if config.flags.upload_local_file_uri() {
         "selfhost_api_uri_upload"
     } else {
         "selfhost_api_multipart_upload"
@@ -395,7 +395,7 @@ impl RuntimeMetrics {
         let hit_rate_percent = if total == 0 {
             0.0
         } else {
-            hits as f64 * 100.0 / total as f64
+            u64_to_f64(hits) * 100.0 / u64_to_f64(total)
         };
 
         CacheSnapshot {
@@ -464,8 +464,9 @@ impl DirectionSpeedMetrics {
         }
 
         let last_mbps = self.recent_mbps.back().copied()?;
-        let avg_mbps =
-            (self.total_bytes as f64 / (1024.0 * 1024.0)) / (self.total_nanos as f64 / 1e9);
+        let total_bytes_f64 = u64_to_f64(u64::try_from(self.total_bytes).unwrap_or(u64::MAX));
+        let total_nanos_f64 = u64_to_f64(u64::try_from(self.total_nanos).unwrap_or(u64::MAX));
+        let avg_mbps = (total_bytes_f64 / (1024.0 * 1024.0)) / (total_nanos_f64 / 1e9);
         let p95_mbps = percentile_95(&self.recent_mbps);
         Some(SpeedSnapshot {
             last_mbps,

@@ -32,6 +32,8 @@ pub(super) fn log_music_api_perf_impl(song_id: u64, stage: &str, duration: Durat
 }
 
 impl MusicApi {
+    /// # Errors
+    /// Returns an error if song detail or download URL cannot be obtained.
     pub async fn get_song_detail_and_best_url(
         &self,
         song_id: u64,
@@ -59,58 +61,22 @@ impl MusicApi {
         let mut primary_url = self.get_cached_song_url(song_id, primary_bitrate);
         let mut primary_attempted_unavailable = false;
 
-        // Fetch detail and primary URL in parallel when either is missing
         if cached_detail.is_none() || primary_url.is_none() {
-            let parallel_start = Instant::now();
-            let need_detail = cached_detail.is_none();
-            let need_url = primary_url.is_none();
-
-            let detail_fut = async {
-                if need_detail {
-                    Some(self.get_song_detail_shared(song_id).await)
-                } else {
-                    None
-                }
-            };
-            let url_fut = async {
-                if need_url {
-                    Some(self.get_song_url_shared(song_id, primary_bitrate).await)
-                } else {
-                    None
-                }
-            };
-
-            let (detail_result, url_result) = tokio::join!(detail_fut, url_fut);
-
-            if let Some(result) = detail_result {
-                cached_detail = Some(result?);
+            let (detail_out, url_out, unavailable) = self
+                .fetch_detail_and_primary_url(
+                    song_id,
+                    primary_bitrate,
+                    cached_detail.is_none(),
+                    primary_url.is_none(),
+                )
+                .await?;
+            if let Some(d) = detail_out {
+                cached_detail = Some(d);
             }
-            if let Some(result) = url_result {
-                match result {
-                    Ok(song_url) if request_song_url_has_download_url(&song_url) => {
-                        primary_url = Some(song_url);
-                    }
-                    Ok(_) => {
-                        primary_attempted_unavailable = true;
-                        tracing::debug!(
-                            "Primary bitrate {primary_bitrate} returned empty URL for music_id {song_id}"
-                        );
-                    }
-                    Err(e) => {
-                        primary_attempted_unavailable = true;
-                        tracing::warn!(
-                            "Primary bitrate {primary_bitrate} request failed for music_id {song_id}: {}",
-                            crate::utils::sanitize_sensitive_text(&e.to_string())
-                        );
-                    }
-                }
+            if let Some(u) = url_out {
+                primary_url = Some(u);
             }
-
-            tracing::debug!(
-                "[parallel_fetch] {}ms (detail={need_detail}, url={need_url})",
-                parallel_start.elapsed().as_millis()
-            );
-            request_log_music_api_perf(song_id, "parallel_fetch", parallel_start.elapsed());
+            primary_attempted_unavailable = unavailable;
         }
 
         let Some(detail) = cached_detail else {
@@ -124,6 +90,89 @@ impl MusicApi {
             )));
         };
 
+        self.try_fallback_bitrates(
+            song_id,
+            bitrate_candidates,
+            primary_attempted_unavailable,
+            primary_url,
+            &detail,
+            select_url_total_start,
+        )
+        .await
+    }
+
+    async fn fetch_detail_and_primary_url(
+        &self,
+        song_id: u64,
+        primary_bitrate: u64,
+        need_detail: bool,
+        need_url: bool,
+    ) -> Result<(Option<Arc<SongDetail>>, Option<Arc<SongUrl>>, bool)> {
+        let parallel_start = Instant::now();
+        let mut primary_attempted_unavailable = false;
+
+        let detail_fut = async {
+            if need_detail {
+                Some(self.get_song_detail_shared(song_id).await)
+            } else {
+                None
+            }
+        };
+        let url_fut = async {
+            if need_url {
+                Some(self.get_song_url_shared(song_id, primary_bitrate).await)
+            } else {
+                None
+            }
+        };
+
+        let (detail_result, url_result) = tokio::join!(detail_fut, url_fut);
+
+        let mut fetched_detail = None;
+        if let Some(result) = detail_result {
+            fetched_detail = Some(result?);
+        }
+
+        let mut fetched_url = None;
+        if let Some(result) = url_result {
+            match result {
+                Ok(song_url) if request_song_url_has_download_url(&song_url) => {
+                    fetched_url = Some(song_url);
+                }
+                Ok(_) => {
+                    primary_attempted_unavailable = true;
+                    tracing::debug!(
+                        "Primary bitrate {primary_bitrate} returned empty URL for music_id {song_id}"
+                    );
+                }
+                Err(e) => {
+                    primary_attempted_unavailable = true;
+                    tracing::warn!(
+                        "Primary bitrate {primary_bitrate} request failed for music_id {song_id}: {}",
+                        crate::utils::sanitize_sensitive_text(&e.to_string())
+                    );
+                }
+            }
+        }
+
+        tracing::debug!(
+            "[parallel_fetch] {}ms (detail={need_detail}, url={need_url})",
+            parallel_start.elapsed().as_millis()
+        );
+        request_log_music_api_perf(song_id, "parallel_fetch", parallel_start.elapsed());
+        Ok((fetched_detail, fetched_url, primary_attempted_unavailable))
+    }
+
+    async fn try_fallback_bitrates(
+        &self,
+        song_id: u64,
+        bitrate_candidates: &[u64],
+        primary_attempted_unavailable: bool,
+        mut primary_url: Option<Arc<SongUrl>>,
+        detail: &Arc<SongDetail>,
+        select_url_total_start: Instant,
+    ) -> Result<(Arc<SongDetail>, Arc<SongUrl>)> {
+        let primary_bitrate = bitrate_candidates.first().copied().unwrap_or(0);
         let mut last_error = None;
         let mut fallback_url_start = None;
         for &bitrate in
@@ -148,7 +197,7 @@ impl MusicApi {
                         fallback_url_start,
                         select_url_total_start,
                     );
-                    return Ok((Arc::clone(&detail), song_url));
+                    return Ok((Arc::clone(detail), song_url));
                 }
                 Ok(_) => {
                     tracing::debug!(

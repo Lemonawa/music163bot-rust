@@ -258,7 +258,7 @@ impl MusicApi {
         &self.eapi_cookie
     }
 
-    /// Conditionally add the pre-computed MUSIC_U cookie header to a request.
+    /// Conditionally add the pre-computed `MUSIC_U` cookie header to a request.
     pub(super) fn apply_music_u_cookie(
         &self,
         request: reqwest::RequestBuilder,

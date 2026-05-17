@@ -92,13 +92,11 @@ impl MockMusicApiServer {
         *state.calls_by_bitrate.get(&bitrate).unwrap_or(&0)
     }
 
-    #[allow(dead_code)]
     fn eapi_calls_for_bitrate(&self, bitrate: u64) -> usize {
         let state = self.state.lock().expect("lock mock server state");
         *state.eapi_calls_by_bitrate.get(&bitrate).unwrap_or(&0)
     }
 
-    #[allow(dead_code)]
     fn legacy_calls_for_bitrate(&self, bitrate: u64) -> usize {
         let state = self.state.lock().expect("lock mock server state");
         *state.legacy_calls_by_bitrate.get(&bitrate).unwrap_or(&0)

@@ -2,12 +2,13 @@ use super::{
     Arc, Bot, BotState, Bytes, CallbackQuery, ChatId, Config, InlineQuery, InlineQueryResult,
     InlineQueryResultArticle, InputMessageContent, InputMessageContentText,
     MaybeInaccessibleMessage, Message, ParseMode, RawDocumentParams, ReplyParameters,
-    ResponseResult, acquire_upload_client, acquire_upload_permit, build_status_text,
-    clean_filename, clearallcache_confirmation_prompt, ensure_admin, format_artists,
-    format_speed_line, format_uptime, join_futures, parse_inline_query_keyword, parse_music_id,
-    parse_song_id_or_search_first_result, process_music, raw_send_document_bytes,
+    ResponseResult, StatusTextParams, acquire_upload_client, acquire_upload_permit,
+    build_status_text, clean_filename, clearallcache_confirmation_prompt, ensure_admin,
+    format_artists, format_speed_line, format_uptime, join_futures, parse_inline_query_keyword,
+    parse_music_id, parse_song_id_or_search_first_result, process_music, raw_send_document_bytes,
     require_command_args_or_reply, rmcache_usage_prompt, sample_resource_snapshot,
     sanitize_sensitive_text, send_reply_html, send_reply_message, send_reply_text,
+    u64_to_i64_saturating,
 };
 
 pub(super) async fn handle_lyric_command(
@@ -36,105 +37,8 @@ pub(super) async fn handle_lyric_command(
     .await
     {
         (Ok(lyric), detail_result) => {
-            if lyric.trim().is_empty() || lyric == "No lyrics available" {
-                bot.edit_message_text(msg.chat.id, status_msg.id, "该歌曲暂无歌词")
-                    .await?;
-                return Ok(());
-            }
-
-            let song_detail = match detail_result {
-                Ok(detail) => detail,
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to fetch lyric song detail for {music_id}: {}",
-                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                    );
-                    bot.edit_message_text(
-                        msg.chat.id,
-                        status_msg.id,
-                        "获取歌曲信息失败，请稍后重试",
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            };
-
-            let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
-            let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
-            let lyric_bytes = Bytes::from(lyric.into_bytes());
-
-            let (client_result, permit_result) = join_futures(
-                acquire_upload_client(state),
-                acquire_upload_permit(&state.upload_semaphore),
-            )
-            .await;
-
-            let (_upload_bot, raw_client, api_base_url) = match client_result {
-                Ok(bundle) => bundle,
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to initialize lyric upload client: {}",
-                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                    );
-                    bot.edit_message_text(
-                        msg.chat.id,
-                        status_msg.id,
-                        "初始化上传客户端失败，请稍后重试",
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            };
-            let _upload_permit = match permit_result {
-                Ok(permit) => permit,
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to acquire lyric upload permit: {}",
-                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                    );
-                    bot.edit_message_text(
-                        msg.chat.id,
-                        status_msg.id,
-                        "等待上传通道失败，请稍后重试",
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            };
-            let params = RawDocumentParams {
-                chat_id: msg.chat.id.0,
-                caption: None,
-                reply_to_message_id: msg.id.0,
-                reply_markup_json: None,
-            };
-
-            let upload_result = raw_send_document_bytes(
-                &raw_client,
-                &api_base_url,
-                &lrc_filename,
-                lyric_bytes,
-                &params,
-            )
-            .await;
-
-            match upload_result {
-                Ok(_) => {
-                    if let Err(e) = bot.delete_message(msg.chat.id, status_msg.id).await {
-                        tracing::debug!(
-                            "Failed to delete lyric status message: {}",
-                            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to upload lyric file: {}",
-                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                    );
-                    bot.edit_message_text(msg.chat.id, status_msg.id, "发送歌词失败，请稍后重试")
-                        .await?;
-                }
-            }
+            handle_lyric_success(bot, msg, state, &status_msg, music_id, lyric, detail_result)
+                .await?;
         }
         (Err(e), _) => {
             tracing::warn!(
@@ -142,6 +46,110 @@ pub(super) async fn handle_lyric_command(
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
             bot.edit_message_text(msg.chat.id, status_msg.id, "获取歌词失败，请稍后重试")
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_lyric_success(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    status_msg: &Message,
+    music_id: u64,
+    lyric: String,
+    detail_result: Result<Arc<crate::music_api::SongDetail>, impl std::fmt::Display>,
+) -> ResponseResult<()> {
+    if lyric.trim().is_empty() || lyric == "No lyrics available" {
+        bot.edit_message_text(msg.chat.id, status_msg.id, "该歌曲暂无歌词")
+            .await?;
+        return Ok(());
+    }
+
+    let song_detail = match detail_result {
+        Ok(detail) => detail,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to fetch lyric song detail for {music_id}: {}",
+                sanitize_sensitive_text(&e.to_string())
+            );
+            bot.edit_message_text(msg.chat.id, status_msg.id, "获取歌曲信息失败，请稍后重试")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
+    let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
+    let lyric_bytes = Bytes::from(lyric.into_bytes());
+
+    let (client_result, permit_result) = join_futures(
+        acquire_upload_client(state),
+        acquire_upload_permit(&state.upload_semaphore),
+    )
+    .await;
+
+    let (_upload_bot, raw_client, api_base_url) = match client_result {
+        Ok(bundle) => bundle,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to initialize lyric upload client: {}",
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+            );
+            bot.edit_message_text(
+                msg.chat.id,
+                status_msg.id,
+                "初始化上传客户端失败，请稍后重试",
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let _upload_permit = match permit_result {
+        Ok(permit) => permit,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to acquire lyric upload permit: {}",
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+            );
+            bot.edit_message_text(msg.chat.id, status_msg.id, "等待上传通道失败，请稍后重试")
+                .await?;
+            return Ok(());
+        }
+    };
+    let params = RawDocumentParams {
+        chat_id: msg.chat.id.0,
+        caption: None,
+        reply_to_message_id: msg.id.0,
+        reply_markup_json: None,
+    };
+
+    let upload_result = raw_send_document_bytes(
+        &raw_client,
+        &api_base_url,
+        &lrc_filename,
+        lyric_bytes,
+        &params,
+    )
+    .await;
+
+    match upload_result {
+        Ok(_) => {
+            if let Err(e) = bot.delete_message(msg.chat.id, status_msg.id).await {
+                tracing::debug!(
+                    "Failed to delete lyric status message: {}",
+                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to upload lyric file: {}",
+                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+            );
+            bot.edit_message_text(msg.chat.id, status_msg.id, "发送歌词失败，请稍后重试")
                 .await?;
         }
     }
@@ -172,16 +180,16 @@ pub(super) async fn handle_status_command(
     let uptime = format_uptime(state.runtime_metrics.uptime());
     let download_line = format_speed_line("下载", download_speed);
     let upload_line = format_speed_line("上传", upload_speed);
-    let status_text = build_status_text(
+    let status_text = build_status_text(&StatusTextParams {
         total_count,
         user_count,
         chat_count,
         cache_snapshot,
         resource_snapshot,
-        &uptime,
-        &download_line,
-        &upload_line,
-    );
+        uptime: &uptime,
+        download_line: &download_line,
+        upload_line: &upload_line,
+    });
 
     bot.send_message(msg.chat.id, status_text)
         .parse_mode(ParseMode::Html)
@@ -209,7 +217,7 @@ pub(super) async fn handle_rmcache_command(
     }
 
     if let Some(music_id) = parse_music_id(&args) {
-        let music_id_i64 = music_id as i64;
+        let music_id_i64 = u64_to_i64_saturating(music_id);
 
         if let Ok(Some(song_info)) = state.database.get_song_by_music_id(music_id_i64).await {
             match state.database.delete_song_by_music_id(music_id_i64).await {
@@ -496,15 +504,24 @@ pub(super) fn build_caption(
     bitrate_bps: i64,
     bot_username: &str,
 ) -> String {
-    let size_mb = (size_bytes as f64) / 1024.0 / 1024.0;
+    let size_mb = format_size_mb(size_bytes);
     let kbps = format_bitrate_kbps(bitrate_bps);
     format!(
-        "「{title}」- {artists}\n专辑: {album}\n#网易云音乐 #{file_ext} {size_mb:.2}MB {kbps}kbps\nvia @{bot_username}",
+        "「{title}」- {artists}\n专辑: {album}\n#网易云音乐 #{file_ext} {size_mb}MB {kbps}kbps\nvia @{bot_username}",
     )
+}
+
+fn format_size_mb(bytes: i64) -> String {
+    let bytes = bytes.unsigned_abs();
+    let whole = bytes / (1024 * 1024);
+    let frac = (bytes % (1024 * 1024)) * 100 / (1024 * 1024);
+    format!("{whole}.{frac:02}")
 }
 
 #[must_use]
 pub(super) fn format_bitrate_kbps(bitrate_bps: i64) -> String {
-    let bitrate_bps = bitrate_bps.max(0) as f64;
-    format!("{:.2}", bitrate_bps / 1000.0)
+    let bps = bitrate_bps.unsigned_abs();
+    let whole = bps / 1000;
+    let frac = (bps % 1000) * 100 / 1000;
+    format!("{whole}.{frac:02}")
 }

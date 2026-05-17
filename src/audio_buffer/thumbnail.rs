@@ -9,6 +9,9 @@ use crate::telegram::InputFile;
 
 impl ThumbnailBuffer {
     /// Create a new thumbnail buffer.
+    ///
+    /// # Errors
+    /// Returns an error if writing the thumbnail to disk fails.
     pub async fn new(
         config: &Config,
         data: Bytes,
@@ -56,6 +59,9 @@ impl ThumbnailBuffer {
     }
 
     /// Get the thumbnail data.
+    ///
+    /// # Errors
+    /// Returns an error if reading the thumbnail from disk fails.
     pub async fn get_data(&self) -> Result<Vec<u8>> {
         match self {
             Self::Disk { path } => tokio::fs::read(path)
@@ -80,7 +86,10 @@ impl ThumbnailBuffer {
         matches!(self, Self::Memory { .. })
     }
 
-    /// Convert to InputFile for Telegram.
+    /// Convert to `InputFile` for Telegram.
+    ///
+    /// # Errors
+    /// Returns an error if the disk path cannot be resolved.
     pub fn to_input_file(&self) -> Result<InputFile> {
         match self {
             Self::Disk { path } => Ok(InputFile::file(path)),
@@ -88,7 +97,7 @@ impl ThumbnailBuffer {
         }
     }
 
-    /// Convert to InputFile for Telegram (consumes self, avoids cloning).
+    /// Convert to `InputFile` for Telegram (consumes self, avoids cloning).
     #[must_use]
     pub fn into_input_file(mut self) -> InputFile {
         match &mut self {
@@ -104,12 +113,18 @@ impl ThumbnailBuffer {
     }
 
     /// Cleanup resources.
+    ///
+    /// # Errors
+    /// Returns an error if removing the disk file fails.
     pub async fn cleanup(mut self) -> Result<()> {
         self.cleanup_in_place().await
     }
 
     /// Cleanup without consuming. Leaves the buffer in a drained state so that
     /// the `Drop` impl performs no further action.
+    ///
+    /// # Errors
+    /// Returns an error if removing the disk file fails.
     pub async fn cleanup_in_place(&mut self) -> Result<()> {
         if let Self::Disk { path } = self {
             let path = std::mem::take(path);

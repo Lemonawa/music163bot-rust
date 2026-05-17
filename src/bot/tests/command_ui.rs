@@ -127,16 +127,16 @@ fn status_text_uses_section_layout_and_split_memory_fields() {
         system_total_memory_mb: 1024,
         bot_memory_mb: Some(12),
     };
-    let text = super::build_status_text(
-        100,
-        20,
-        8,
+    let text = super::build_status_text(&super::StatusTextParams {
+        total_count: 100,
+        user_count: 20,
+        chat_count: 8,
         cache_snapshot,
         resource_snapshot,
-        "00:10:00",
-        "下载: 实时 <code>6.00</code> MB/s | 平均 <code>4.00</code> MB/s | P95 <code>5.00</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
-        "上传: 实时 <code>2.00</code> MB/s | 平均 <code>1.50</code> MB/s | P95 <code>1.80</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
-    );
+        uptime: "00:10:00",
+        download_line: "下载: 实时 <code>6.00</code> MB/s | 平均 <code>4.00</code> MB/s | P95 <code>5.00</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
+        upload_line: "上传: 实时 <code>2.00</code> MB/s | 平均 <code>1.50</code> MB/s | P95 <code>1.80</code> MB/s | 样本 <code>12</code> (窗口 <code>12</code>)",
+    });
     assert!(text.contains("<b>系统状态</b>"));
     assert!(text.contains("<b>实时运行指标</b>"));
     assert!(text.contains("<b>💾 缓存</b>"));
@@ -241,7 +241,6 @@ fn should_download_cover_true_when_embed_cover_set() {
     let policy = super::CoverPolicy {
         download_original: false,
         download_thumbnail: false,
-        embed_tags: true,
         embed_cover: true,
     };
     assert!(super::should_download_cover(policy));
@@ -252,7 +251,6 @@ fn should_download_cover_true_when_download_thumbnail_set() {
     let policy = super::CoverPolicy {
         download_original: false,
         download_thumbnail: true,
-        embed_tags: true,
         embed_cover: false,
     };
     assert!(super::should_download_cover(policy));
@@ -263,7 +261,6 @@ fn should_download_cover_false_when_nothing_set() {
     let policy = super::CoverPolicy {
         download_original: false,
         download_thumbnail: false,
-        embed_tags: true,
         embed_cover: false,
     };
     assert!(!super::should_download_cover(policy));
@@ -276,7 +273,6 @@ fn resolve_cover_policy_thumbnail_mode() {
     let policy = super::resolve_cover_policy(CoverMode::Thumbnail);
     assert!(!policy.download_original);
     assert!(policy.download_thumbnail);
-    assert!(policy.embed_tags);
     assert!(policy.embed_cover);
 }
 
@@ -285,7 +281,6 @@ fn resolve_cover_policy_original_mode() {
     let policy = super::resolve_cover_policy(CoverMode::Original);
     assert!(policy.download_original);
     assert!(!policy.download_thumbnail);
-    assert!(policy.embed_tags);
     assert!(policy.embed_cover);
 }
 
@@ -294,7 +289,6 @@ fn resolve_cover_policy_both_mode() {
     let policy = super::resolve_cover_policy(CoverMode::Both);
     assert!(policy.download_original);
     assert!(policy.download_thumbnail);
-    assert!(policy.embed_tags);
     assert!(policy.embed_cover);
 }
 
@@ -311,7 +305,6 @@ fn should_download_cover_returns_false_when_only_download_original_without_embed
     let policy = super::CoverPolicy {
         download_original: true,
         download_thumbnail: false,
-        embed_tags: true,
         embed_cover: false,
     };
     assert!(

@@ -30,18 +30,28 @@ pub(super) async fn send_raw_upload_form(
     parse_telegram_api_response(&body, status, method)
 }
 
+pub(super) struct RawSendFileArgs<'a> {
+    pub(super) client: &'a reqwest::Client,
+    pub(super) api_base_url: &'a str,
+    pub(super) config: &'a Config,
+    pub(super) is_official_api: bool,
+    pub(super) audio_buffer: &'a AudioBuffer,
+    pub(super) audio_bytes: Option<&'a Bytes>,
+    pub(super) file_size: u64,
+    pub(super) params: &'a RawUploadParams<'a>,
+}
+
 /// Upload a file via raw reqwest multipart with pre-computed Content-Length
 /// and 256 KiB streaming chunks.
-pub(super) async fn raw_send_file(
-    client: &reqwest::Client,
-    api_base_url: &str,
-    config: &Config,
-    is_official_api: bool,
-    audio_buffer: &AudioBuffer,
-    audio_bytes: Option<&Bytes>,
-    file_size: u64,
-    params: &RawUploadParams<'_>,
-) -> Result<serde_json::Value> {
+pub(super) async fn raw_send_file(args: &RawSendFileArgs<'_>) -> Result<serde_json::Value> {
+    let client = args.client;
+    let api_base_url = args.api_base_url;
+    let config = args.config;
+    let is_official_api = args.is_official_api;
+    let audio_buffer = args.audio_buffer;
+    let audio_bytes = args.audio_bytes;
+    let file_size = args.file_size;
+    let params = args.params;
     let filename = audio_buffer.filename().to_owned();
     let mime_type = mime_for_filename(&filename);
 
@@ -171,15 +181,15 @@ pub(super) fn parse_telegram_api_response(
             let _ = write!(sanitized_description, " (retry after {seconds})");
         }
         tracing::error!("Telegram API error ({status}): {sanitized_description} [method={method}]",);
-        return Err(BotError::Other(anyhow::anyhow!(
-            "Telegram API error: {sanitized_description} (HTTP {status})",
-        )));
+        return Err(BotError::Other(anyhow::anyhow!(format!(
+            "Telegram API error: {sanitized_description} (HTTP {status})"
+        ))));
     }
 
     Ok(json)
 }
 
-/// Extract file_id from a raw Telegram API sendAudio response.
+/// Extract `file_id` from a raw Telegram API `sendAudio` response.
 pub(super) fn extract_file_id_from_response(json: &serde_json::Value) -> Option<String> {
     let result = json.get("result")?;
     result
@@ -262,7 +272,7 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     );
 
     let client = build_http_client(client_builder)?;
-    let bot = Bot::with_client(&config.bot_token, client.clone()).set_api_url(api_url);
+    let bot = Bot::with_client(&config.bot_token, client.clone()).set_api_url(&api_url);
 
     let raw_api_base = format!("{}bot{}/", api_url_str, config.bot_token);
 

@@ -21,6 +21,9 @@ const MEMORY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_m
 
 impl AudioBuffer {
     /// Create a new audio buffer based on configuration and file characteristics.
+    ///
+    /// # Errors
+    /// Returns an error if creating the disk file fails.
     pub async fn new(
         config: &Config,
         content_length: u64,
@@ -29,7 +32,7 @@ impl AudioBuffer {
     ) -> Result<Self> {
         if Self::should_use_memory(config, content_length) {
             let capacity = if content_length > 0 {
-                content_length as usize
+                usize::try_from(content_length).unwrap_or(usize::MAX)
             } else {
                 10 * 1024 * 1024
             };
@@ -49,6 +52,9 @@ impl AudioBuffer {
     }
 
     /// Force creation of a disk-based buffer (for fallback scenarios).
+    ///
+    /// # Errors
+    /// Returns an error if creating the disk file fails.
     pub async fn new_disk(filename: String, cache_dir: &str) -> Result<Self> {
         Self::create_disk_buffer(filename, cache_dir, "forced disk mode").await
     }

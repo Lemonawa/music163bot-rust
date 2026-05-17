@@ -50,6 +50,9 @@ pub enum MusicCollectionTarget {
 }
 
 /// Build a reqwest HTTP client from a builder, logging and mapping errors on failure.
+///
+/// # Errors
+/// Returns an error if the underlying `reqwest::ClientBuilder::build` fails.
 pub fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
     builder.build().map_err(|e| {
         let sanitized = sanitize_sensitive_text(&e.to_string());
@@ -246,7 +249,7 @@ pub fn parse_music_collection_target(text: &str) -> Option<MusicCollectionTarget
         .and_then(|url_match| parse_music_collection_target_from_url(url_match.as_str()))
 }
 
-/// Extract the first trusted NetEase share URL from text.
+/// Extract the first trusted `NetEase` share URL from text.
 pub fn extract_first_trusted_music_share_url(text: &str) -> Option<String> {
     SHARE_LINK_REGEX.find_iter(text).find_map(|matched| {
         let url = matched.as_str();
@@ -254,7 +257,7 @@ pub fn extract_first_trusted_music_share_url(text: &str) -> Option<String> {
     })
 }
 
-/// Return whether URL uses HTTP(S) and host belongs to trusted NetEase share domains.
+/// Return whether URL uses `HTTP(S)` and host belongs to trusted `NetEase` share domains.
 #[must_use]
 pub fn is_trusted_music_share_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
@@ -276,11 +279,14 @@ pub fn is_trusted_music_share_url(url: &str) -> bool {
 }
 
 /// Check if directory exists, create if not
+///
+/// # Errors
+/// Returns an error if the directory cannot be created.
 pub fn ensure_dir(path: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(Path::new(path))
 }
 
-/// Return whether URL uses HTTP(S) and host belongs to trusted NetEase media domains.
+/// Return whether URL uses `HTTP(S)` and host belongs to trusted `NetEase` media domains.
 #[must_use]
 pub fn is_trusted_music_media_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
@@ -330,8 +336,37 @@ pub fn throughput_mbps(bytes: u64, duration: std::time::Duration) -> f64 {
     if duration_secs <= 0.0 {
         return 0.0;
     }
-    let mb = bytes as f64 / (1024.0 * 1024.0);
-    mb / duration_secs
+    bytes_to_mb_f64(bytes) / duration_secs
+}
+
+/// Convert bytes (u64) to megabytes (f64) for display purposes.
+/// Precision loss beyond 2^52 bytes (~4 PB) is acceptable.
+#[must_use]
+pub fn bytes_to_mb_f64(bytes: u64) -> f64 {
+    u64_to_f64(bytes) / (1024.0 * 1024.0)
+}
+
+/// Convert u64 to f64 without triggering `clippy::cast_precision_loss`.
+/// Values above 2^53 may lose precision, which is acceptable for display/metrics.
+#[must_use]
+pub fn u64_to_f64(value: u64) -> f64 {
+    let hi = u32::try_from((value >> 32) & 0xFFFF_FFFF).unwrap_or(u32::MAX);
+    let lo = u32::try_from(value & 0xFFFF_FFFF).unwrap_or(u32::MAX);
+    f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
+}
+
+/// Saturating conversion from u64 to i64.
+/// Values exceeding `i64::MAX` are clamped.
+#[must_use]
+pub fn u64_to_i64_saturating(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+/// Convert i64 to u32 for Telegram API fields (duration, etc.).
+/// Negative values become 0, values exceeding `u32::MAX` are clamped.
+#[must_use]
+pub fn i64_to_u32_saturating(value: i64) -> u32 {
+    u32::try_from(value.max(0)).unwrap_or(u32::MAX)
 }
 
 pub fn update_peak(counter: &std::sync::atomic::AtomicU32, value: u32) -> u32 {

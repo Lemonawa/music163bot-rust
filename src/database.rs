@@ -48,6 +48,9 @@ fn log_db_perf(op: &str, duration: Duration) {
 
 impl Database {
     /// Create a new database connection with limited pool size
+    ///
+    /// # Errors
+    /// Returns an error if the database connection or schema setup fails.
     pub async fn new(database_url: &str) -> Result<Self> {
         let is_sqlite_dsn = database_url.starts_with("sqlite:") || database_url == ":memory:";
 
@@ -129,6 +132,9 @@ impl Database {
     }
 
     /// Get song info by music ID
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub async fn get_song_by_music_id(&self, music_id: i64) -> Result<Option<SongInfo>> {
         let query_start = Instant::now();
         let row_result = sqlx::query(
@@ -149,6 +155,9 @@ impl Database {
     }
 
     /// Save or update song info
+    ///
+    /// # Errors
+    /// Returns an error if the database insert or update fails.
     pub async fn save_song_info(&self, song_info: &SongInfo) -> Result<i64> {
         let query_start = Instant::now();
         let result = sqlx::query(
@@ -203,6 +212,9 @@ impl Database {
     }
 
     /// Count total songs
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub async fn count_total_songs(&self) -> Result<i64> {
         let row = sqlx::query("SELECT COUNT(*) as count FROM song_infos")
             .fetch_one(&self.pool)
@@ -212,6 +224,9 @@ impl Database {
     }
 
     /// Count status metrics in one query: total songs, songs from user, songs from chat
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub async fn count_status_stats(&self, user_id: i64, chat_id: i64) -> Result<(i64, i64, i64)> {
         let row = sqlx::query(status_stats_query_sql())
             .bind(user_id)
@@ -227,6 +242,9 @@ impl Database {
     }
 
     /// Delete song by music ID
+    ///
+    /// # Errors
+    /// Returns an error if the database delete fails.
     pub async fn delete_song_by_music_id(&self, music_id: i64) -> Result<bool> {
         let query_start = Instant::now();
         let result = sqlx::query("DELETE FROM song_infos WHERE music_id = ?")
@@ -240,6 +258,9 @@ impl Database {
     }
 
     /// Delete all songs from cache (admin only)
+    ///
+    /// # Errors
+    /// Returns an error if the database delete fails.
     pub async fn clear_all_songs(&self) -> Result<u64> {
         let result = sqlx::query("DELETE FROM song_infos")
             .execute(&self.pool)
@@ -257,13 +278,19 @@ impl Database {
 
     /// Optimize database by running VACUUM to reclaim space and defragment
     /// Should be called periodically after many deletions
+    ///
+    /// # Errors
+    /// Returns an error if the VACUUM operation fails.
     pub async fn optimize(&self) -> Result<()> {
         sqlx::query("VACUUM").execute(&self.pool).await?;
         tracing::info!("Database VACUUM completed successfully");
         Ok(())
     }
 
-    /// Run lightweight SQLite planner maintenance
+    /// Run lightweight `SQLite` planner maintenance
+    ///
+    /// # Errors
+    /// Returns an error if the PRAGMA optimize operation fails.
     pub async fn optimize_planner(&self) -> Result<()> {
         sqlx::query("PRAGMA optimize").execute(&self.pool).await?;
         tracing::debug!("Database PRAGMA optimize completed");

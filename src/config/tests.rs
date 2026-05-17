@@ -162,14 +162,14 @@ upload.pool_max_idle_per_host=not-a-number\n";
 #[test]
 fn upload_local_file_uri_defaults_false() {
     let config = Config::default();
-    assert!(!config.upload_local_file_uri);
+    assert!(!config.flags.upload_local_file_uri());
 }
 
 #[test]
 fn upload_local_file_uri_parses_true() {
     let content = "bot.token=token\nupload.local_file_uri=true\n";
     let loaded = load_temp_config("local_uri", content);
-    assert!(loaded.upload_local_file_uri);
+    assert!(loaded.flags.upload_local_file_uri());
 }
 
 #[test]

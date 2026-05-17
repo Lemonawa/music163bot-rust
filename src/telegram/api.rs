@@ -34,7 +34,7 @@ impl TelegramBot {
     }
 
     #[must_use]
-    pub fn set_api_url(mut self, url: reqwest::Url) -> Self {
+    pub fn set_api_url(mut self, url: &reqwest::Url) -> Self {
         let mut s = url.to_string();
         // Remove trailing slash for consistent formatting
         if s.ends_with('/') {
@@ -589,6 +589,8 @@ impl<'a> IntoFuture for AnswerInlineQueryRequest<'a> {
 // --- DeleteWebhook (used during startup) ---
 
 impl TelegramBot {
+    /// # Errors
+    /// Returns an error if the API request fails.
     pub async fn delete_webhook(&self) -> ResponseResult<bool> {
         #[derive(serde::Serialize)]
         struct Params {

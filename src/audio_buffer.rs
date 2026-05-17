@@ -73,7 +73,7 @@ impl AudioBuffer {
         }
     }
 
-    /// Convert to InputFile for Telegram upload (borrows)
+    /// Convert to `InputFile` for Telegram upload (borrows)
     pub fn to_input_file(&self) -> InputFile {
         match self {
             Self::Disk { path, .. } => InputFile::file(path),
@@ -83,7 +83,7 @@ impl AudioBuffer {
         }
     }
 
-    /// Convert to InputFile for Telegram upload (consumes self, avoids cloning)
+    /// Convert to `InputFile` for Telegram upload (consumes self, avoids cloning)
     pub fn into_input_file(mut self) -> InputFile {
         match &mut self {
             Self::Disk { path, .. } => {

@@ -60,16 +60,18 @@ pub(super) fn format_bot_memory(bot_memory_mb: Option<u64>) -> String {
     bot_memory_mb.map_or_else(|| "n/a".to_string(), |mb| format!("{mb} MB"))
 }
 
-pub(super) fn build_status_text(
-    total_count: i64,
-    user_count: i64,
-    chat_count: i64,
-    cache_snapshot: CacheSnapshot,
-    resource_snapshot: ResourceSnapshot,
-    uptime: &str,
-    download_line: &str,
-    upload_line: &str,
-) -> String {
+pub(super) struct StatusTextParams<'a> {
+    pub(super) total_count: i64,
+    pub(super) user_count: i64,
+    pub(super) chat_count: i64,
+    pub(super) cache_snapshot: CacheSnapshot,
+    pub(super) resource_snapshot: ResourceSnapshot,
+    pub(super) uptime: &'a str,
+    pub(super) download_line: &'a str,
+    pub(super) upload_line: &'a str,
+}
+
+pub(super) fn build_status_text(params: &StatusTextParams<'_>) -> String {
     format!(
         "📊 <b>系统状态</b>\n\
 <b>实时运行指标</b>\n\n\
@@ -89,13 +91,19 @@ pub(super) fn build_status_text(
 <b>🚀 传输</b>\n\
 • {download_line}\n\
 • {upload_line}",
-        hits = cache_snapshot.hits,
-        misses = cache_snapshot.misses,
-        hit_rate = cache_snapshot.hit_rate_percent,
-        cpu = resource_snapshot.cpu_percent,
-        system_used = resource_snapshot.system_used_memory_mb,
-        system_total = resource_snapshot.system_total_memory_mb,
-        bot_memory = format_bot_memory(resource_snapshot.bot_memory_mb),
+        total_count = params.total_count,
+        user_count = params.user_count,
+        chat_count = params.chat_count,
+        hits = params.cache_snapshot.hits,
+        misses = params.cache_snapshot.misses,
+        hit_rate = params.cache_snapshot.hit_rate_percent,
+        cpu = params.resource_snapshot.cpu_percent,
+        system_used = params.resource_snapshot.system_used_memory_mb,
+        system_total = params.resource_snapshot.system_total_memory_mb,
+        bot_memory = format_bot_memory(params.resource_snapshot.bot_memory_mb),
+        uptime = params.uptime,
+        download_line = params.download_line,
+        upload_line = params.upload_line,
     )
 }
 
@@ -126,7 +134,6 @@ pub(super) fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) ->
 pub(super) struct CoverPolicy {
     pub(super) download_original: bool,
     pub(super) download_thumbnail: bool,
-    pub(super) embed_tags: bool,
     pub(super) embed_cover: bool,
 }
 
@@ -137,7 +144,6 @@ pub(super) fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
     CoverPolicy {
         download_original,
         download_thumbnail,
-        embed_tags: true,
         embed_cover: download_original || download_thumbnail,
     }
 }
@@ -165,83 +171,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         maintenance_worker(maintenance_rx, maintenance_database, maintenance_music_api).await;
     });
 
-    let bot = if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org" {
-        let api_url_str = format!("{}/", config.bot_api.trim_end_matches("/bot"));
-
-        match reqwest::Url::parse(&api_url_str) {
-            Ok(api_url) => {
-                tracing::info!(
-                    "Using custom Telegram API URL: {}",
-                    sanitize_sensitive_text(api_url.as_str())
-                );
-
-                let client_builder = reqwest::Client::builder()
-                    .use_rustls_tls()
-                    .user_agent("Go-http-client/2.0")
-                    .pool_max_idle_per_host(2)
-                    .pool_idle_timeout(std::time::Duration::from_mins(1))
-                    .timeout(std::time::Duration::from_secs(30))
-                    .no_gzip();
-                let client = build_http_client(client_builder)?;
-
-                let bot = Bot::with_client(&config.bot_token, client).set_api_url(api_url.clone());
-
-                tracing::info!("Testing custom API connection...");
-                match tokio::time::timeout(std::time::Duration::from_secs(15), bot.get_me()).await {
-                    Ok(Ok(_)) => {
-                        tracing::info!(
-                            "Custom API connection successful: {}",
-                            sanitize_sensitive_text(api_url.as_str())
-                        );
-                        bot
-                    }
-                    Ok(Err(e)) => {
-                        let error_msg = format!("{e}");
-                        if error_msg.contains("Just a moment")
-                            || error_msg.contains("cloudflare")
-                            || error_msg.contains("challenge")
-                        {
-                            tracing::warn!(
-                                "Custom API blocked by CloudFlare protection. Falling back to official API."
-                            );
-                        } else {
-                            tracing::warn!(
-                                "Custom API connection failed: {}. Falling back to official API.",
-                                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                            );
-                        }
-                        tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
-                        Bot::new(&config.bot_token)
-                    }
-                    Err(_) => {
-                        tracing::warn!(
-                            "Custom API connection timeout (15s). Falling back to official API."
-                        );
-                        tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
-                        Bot::new(&config.bot_token)
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Invalid custom API URL '{}': {}. Using official API.",
-                    sanitize_sensitive_text(&config.bot_api),
-                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                );
-                tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
-                Bot::new(&config.bot_token)
-            }
-        }
-    } else {
-        tracing::info!("Using default Telegram API URL: https://api.telegram.org");
-        let client_builder = reqwest::Client::builder()
-            .use_rustls_tls()
-            .pool_max_idle_per_host(2)
-            .pool_idle_timeout(std::time::Duration::from_mins(1))
-            .timeout(std::time::Duration::from_secs(30));
-        let client = build_http_client(client_builder)?;
-        Bot::with_client(&config.bot_token, client)
-    };
+    let bot = create_bot_client(&config).await?;
 
     tracing::info!(
         "Music API configured: {}",
@@ -320,6 +250,82 @@ pub(super) async fn run(config: Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn create_bot_client(config: &Config) -> Result<Bot> {
+    if !config.bot_api.is_empty() && config.bot_api != "https://api.telegram.org" {
+        let api_url_str = format!("{}/", config.bot_api.trim_end_matches("/bot"));
+
+        match reqwest::Url::parse(&api_url_str) {
+            Ok(api_url) => {
+                tracing::info!(
+                    "Using custom Telegram API URL: {}",
+                    sanitize_sensitive_text(api_url.as_str())
+                );
+
+                let client_builder = reqwest::Client::builder()
+                    .use_rustls_tls()
+                    .user_agent("Go-http-client/2.0")
+                    .pool_max_idle_per_host(2)
+                    .pool_idle_timeout(std::time::Duration::from_mins(1))
+                    .timeout(std::time::Duration::from_secs(30))
+                    .no_gzip();
+                let client = build_http_client(client_builder)?;
+
+                let bot = Bot::with_client(&config.bot_token, client).set_api_url(&api_url);
+
+                tracing::info!("Testing custom API connection...");
+                match tokio::time::timeout(std::time::Duration::from_secs(15), bot.get_me()).await {
+                    Ok(Ok(_)) => {
+                        tracing::info!(
+                            "Custom API connection successful: {}",
+                            sanitize_sensitive_text(api_url.as_str())
+                        );
+                        return Ok(bot);
+                    }
+                    Ok(Err(e)) => {
+                        let error_msg = format!("{e}");
+                        if error_msg.contains("Just a moment")
+                            || error_msg.contains("cloudflare")
+                            || error_msg.contains("challenge")
+                        {
+                            tracing::warn!(
+                                "Custom API blocked by CloudFlare protection. Falling back to official API."
+                            );
+                        } else {
+                            tracing::warn!(
+                                "Custom API connection failed: {}. Falling back to official API.",
+                                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "Custom API connection timeout (15s). Falling back to official API."
+                        );
+                    }
+                }
+                tracing::info!("Using fallback Telegram API URL: https://api.telegram.org");
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Invalid custom API URL '{}': {}. Using official API.",
+                    sanitize_sensitive_text(&config.bot_api),
+                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                );
+            }
+        }
+    } else {
+        tracing::info!("Using default Telegram API URL: https://api.telegram.org");
+    }
+
+    let client_builder = reqwest::Client::builder()
+        .use_rustls_tls()
+        .pool_max_idle_per_host(2)
+        .pool_idle_timeout(std::time::Duration::from_mins(1))
+        .timeout(std::time::Duration::from_secs(30));
+    let client = build_http_client(client_builder)?;
+    Ok(Bot::with_client(&config.bot_token, client))
 }
 
 async fn dispatch_update(bot: Bot, update: Update, state: Arc<BotState>) {

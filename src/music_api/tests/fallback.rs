@@ -129,7 +129,7 @@ async fn get_song_detail_and_best_url_accepts_fallback_without_retrying_primary_
     let config = Config {
         music_api: server.base_url(),
         music_u: Some("cookie".to_string()),
-        auto_retry: true,
+        flags: crate::config::ConfigFlags::default(),
         max_retry_times: 1,
         ..Config::default()
     };

@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::config::Config;
 use crate::config::CoverMode;
+use crate::config::{Config, ConfigFlags};
 use crate::telegram::TelegramBot as Bot;
 use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;

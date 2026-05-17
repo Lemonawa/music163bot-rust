@@ -16,6 +16,8 @@ pub(super) fn rewrite_media_url(url: &str) -> Cow<'_, str> {
     Cow::Borrowed(url)
 }
 
+/// # Errors
+/// Returns an error if the image cannot be decoded or re-encoded.
 pub fn resize_album_art_to_thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| BotError::MusicApi(format!("Failed to decode image: {e}")))?;
@@ -64,17 +66,21 @@ pub(super) fn resize_image_with_padding(
         return DynamicImage::ImageRgb8(RgbImage::new(target_width, target_height));
     }
 
-    let aspect_ratio = orig_width as f32 / orig_height as f32;
-    let target_aspect_ratio = target_width as f32 / target_height as f32;
+    // Integer-only aspect ratio scaling to avoid float casts
+    let ow = u64::from(orig_width);
+    let oh = u64::from(orig_height);
+    let tw = u64::from(target_width);
+    let th = u64::from(target_height);
 
-    let (new_width, new_height) = if aspect_ratio > target_aspect_ratio {
-        let new_width = target_width;
-        let new_height = (target_width as f32 / aspect_ratio) as u32;
-        (new_width, new_height)
+    // Compare aspect ratios via cross-multiplication: ow/oh > tw/th iff ow*th > tw*oh
+    let (new_width, new_height) = if ow * th > tw * oh {
+        // Width-limited: scale to fit target_width
+        let h = (tw * oh + ow / 2) / ow; // rounded division
+        (target_width, u32::try_from(h.max(1)).unwrap_or(u32::MAX))
     } else {
-        let new_height = target_height;
-        let new_width = (target_height as f32 * aspect_ratio) as u32;
-        (new_width, new_height)
+        // Height-limited: scale to fit target_height
+        let w = (th * ow + oh / 2) / oh; // rounded division
+        (u32::try_from(w.max(1)).unwrap_or(u32::MAX), target_height)
     };
 
     let resized = img.resize(new_width, new_height, image::imageops::FilterType::Lanczos3);

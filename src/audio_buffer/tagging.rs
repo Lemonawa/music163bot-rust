@@ -8,6 +8,9 @@ use crate::music_api::SongDetail;
 
 impl AudioBuffer {
     /// Add ID3 tags to MP3 file (supports both disk and memory modes)
+    ///
+    /// # Errors
+    /// Returns an error if writing ID3 tags to the buffer fails.
     pub fn add_id3_tags(
         &mut self,
         song_detail: &SongDetail,
@@ -71,7 +74,8 @@ impl AudioBuffer {
             .map_or("Unknown Album", |al| al.name.as_str());
         tag.set_album(album_name);
         tag.set_artist(format_artists(song_detail.ar.as_deref().unwrap_or(&[])));
-        tag.set_duration((song_detail.dt.unwrap_or(0) / 1000) as u32);
+        let duration_secs = song_detail.dt.unwrap_or(0) / 1000;
+        tag.set_duration(u32::try_from(duration_secs).unwrap_or(u32::MAX));
 
         if let Some(artwork) = artwork_data {
             let picture = frame::Picture {
@@ -86,7 +90,7 @@ impl AudioBuffer {
         tag
     }
 
-    /// Find the start of MP3 audio data (after ID3v2 tag)
+    /// Find the start of MP3 audio data (after `ID3v2` tag)
     pub(super) fn find_mp3_audio_start(data: &[u8]) -> usize {
         if data.len() < 10 || &data[0..3] != b"ID3" {
             return 0; // No ID3 tag
@@ -103,6 +107,9 @@ impl AudioBuffer {
     }
 
     /// Add FLAC metadata (picture block + vorbis comments) - supports both disk and memory modes
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing FLAC metadata fails.
     pub fn add_flac_metadata(
         &mut self,
         song_detail: &SongDetail,

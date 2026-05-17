@@ -33,18 +33,18 @@ fn structured_perf_line_contains_required_fields() {
 #[test]
 fn upload_topology_label_matches_mode() {
     let mut config = Config {
-        upload_local_file_uri: false,
+        flags: ConfigFlags::default(),
         ..Config::default()
     };
     assert_eq!(super::upload_topology_label(&config, true), "official_api");
 
-    config.upload_local_file_uri = true;
+    config.flags.upload.upload_local_file_uri = true;
     assert_eq!(
         super::upload_topology_label(&config, false),
         "selfhost_api_uri_upload"
     );
 
-    config.upload_local_file_uri = false;
+    config.flags.upload.upload_local_file_uri = false;
     assert_eq!(
         super::upload_topology_label(&config, false),
         "selfhost_api_multipart_upload"

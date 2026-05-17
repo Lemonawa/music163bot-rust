@@ -23,10 +23,10 @@ use crate::telegram::{
     ReplyParameters, ResponseResult, TelegramBot, Update,
 };
 use crate::utils::{
-    MusicCollectionTarget, build_http_client, clean_filename, ensure_dir,
+    MusicCollectionTarget, build_http_client, bytes_to_mb_f64, clean_filename, ensure_dir,
     extract_first_trusted_music_share_url, extract_retry_after_seconds, format_error_chain,
-    parse_music_collection_target, parse_music_id, parse_music_program_id, sanitize_sensitive_text,
-    throughput_mbps, update_peak,
+    i64_to_u32_saturating, parse_music_collection_target, parse_music_id, parse_music_program_id,
+    sanitize_sensitive_text, throughput_mbps, u64_to_f64, u64_to_i64_saturating, update_peak,
 };
 
 /// Type alias so submodules can keep using `Bot` without renaming everywhere.
@@ -52,11 +52,11 @@ use collection_flow::{
 };
 use commands::{handle_music_url, handle_search_command};
 use core_flow::{process_music, process_music_with_context, process_program};
-use download_flow::download_and_send_music;
+use download_flow::{DownloadAndSendParams, download_and_send_music};
 use entry::{
-    build_status_text, format_speed_line, format_uptime, parse_inline_query_keyword, percentile_95,
-    resolve_cover_policy, sample_current_process_memory_mb, sample_resource_snapshot,
-    should_download_cover,
+    StatusTextParams, build_status_text, format_speed_line, format_uptime,
+    parse_inline_query_keyword, percentile_95, resolve_cover_policy,
+    sample_current_process_memory_mb, sample_resource_snapshot, should_download_cover,
 };
 use help_entry::{handle_help_command, handle_music_command};
 use support::{
@@ -68,7 +68,7 @@ use target_resolution::{
     dispatch_parsed_music_target, parse_direct_music_target, parse_song_id_or_search_first_result,
 };
 use telegram_api::{
-    acquire_download_permit, acquire_upload_client, acquire_upload_permit,
+    RawSendFileArgs, acquire_download_permit, acquire_upload_client, acquire_upload_permit,
     acquire_upload_permit_owned, extract_file_id_from_response, raw_send_file, run_upload_prewarm,
     send_raw_upload_form,
 };
@@ -81,9 +81,9 @@ use upload::{
     create_music_keyboard_for_target, delete_status_message_resilient, download_chunk_bytes,
     edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit, get_upload_bot,
     is_clearallcache_confirm, is_official_telegram_api, join_futures, log_perf, maintenance_worker,
-    message_task_limit, parse_api_url, require_command_args_or_reply, resource_availability_status,
-    rmcache_usage_prompt, select_local_upload_target, send_reply_html, send_reply_message,
-    send_reply_text, should_log_command, should_refresh_upload_client,
+    message_task_limit, parse_api_url, require_command_args_or_reply, rmcache_usage_prompt,
+    select_local_upload_target, send_reply_html, send_reply_message, send_reply_text,
+    should_log_command, should_refresh_upload_client,
     should_remove_song_cache_after_partial_failure, should_set_upload_pool_idle_timeout,
     should_spawn_message_task, upload_task_limit, url_bitrate_candidates,
 };

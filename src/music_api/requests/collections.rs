@@ -5,6 +5,8 @@ use super::super::{
 use crate::error::BotError;
 
 impl MusicApi {
+    /// # Errors
+    /// Returns an error if the API request fails or returns an error code.
     pub async fn get_playlist_song_ids(&self, playlist_id: u64) -> Result<Vec<u64>> {
         let url = format!("{}/api/v6/playlist/detail", self.base_url);
         let playlist_id_str = playlist_id.to_string();
@@ -36,6 +38,9 @@ impl MusicApi {
     }
 
     /// Get all song IDs from an album.
+    ///
+    /// # Errors
+    /// Returns an error if the API request fails or returns an error code.
     pub async fn get_album_song_ids(&self, album_id: u64) -> Result<Vec<u64>> {
         let url = format!("{}/api/v1/album/{}", self.base_url, album_id);
         let mut request = self.client.get(url);
@@ -55,6 +60,9 @@ impl MusicApi {
     }
 
     /// Get main track metadata from a program.
+    ///
+    /// # Errors
+    /// Returns an error if the API request fails or returns an error code.
     pub async fn get_program_main_track(&self, program_id: u64) -> Result<ProgramMainTrack> {
         let url = format!("{}/api/dj/program/detail?id={}", self.base_url, program_id);
         let mut request = self.client.get(url);
@@ -77,6 +85,9 @@ impl MusicApi {
     }
 
     /// Get latest program main tracks from a djradio.
+    ///
+    /// # Errors
+    /// Returns an error if the API request fails or returns an error code.
     pub async fn get_djradio_program_main_tracks(
         &self,
         radio_id: u64,

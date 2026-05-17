@@ -173,7 +173,7 @@ pub(super) async fn maybe_local_file_uri(
     is_official_api: bool,
     path: &std::path::Path,
 ) -> Option<String> {
-    if !config.upload_local_file_uri {
+    if !config.flags.upload_local_file_uri() {
         return None;
     }
 
@@ -518,17 +518,6 @@ pub(super) fn append_search_result_line(
 
     if let Err(e) = writeln!(results, "{index}.「{song_name}」 - {artists}") {
         tracing::error!("Failed to format search result line: {}", e);
-    }
-}
-
-pub(super) fn resource_availability_status(
-    download_enabled: bool,
-    is_available: bool,
-) -> &'static str {
-    match (download_enabled, is_available) {
-        (false, _) => "Skipped",
-        (true, true) => "Available",
-        (true, false) => "None",
     }
 }
 

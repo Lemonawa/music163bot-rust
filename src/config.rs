@@ -113,6 +113,60 @@ fn parse_admin_list(admins: &str) -> Vec<i64> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigBehaviorFlags {
+    pub auto_update: bool,
+    pub auto_retry: bool,
+    pub check_md5: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigUploadFlags {
+    pub upload_local_file_uri: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigFlags {
+    #[serde(flatten)]
+    pub behavior: ConfigBehaviorFlags,
+    #[serde(flatten)]
+    pub upload: ConfigUploadFlags,
+}
+
+impl Default for ConfigFlags {
+    fn default() -> Self {
+        Self {
+            behavior: ConfigBehaviorFlags {
+                auto_update: true,
+                auto_retry: true,
+                check_md5: true,
+            },
+            upload: ConfigUploadFlags {
+                upload_local_file_uri: false,
+            },
+        }
+    }
+}
+
+impl ConfigFlags {
+    #[must_use]
+    pub fn auto_update(&self) -> bool {
+        self.behavior.auto_update
+    }
+    #[must_use]
+    pub fn auto_retry(&self) -> bool {
+        self.behavior.auto_retry
+    }
+    #[must_use]
+    pub fn check_md5(&self) -> bool {
+        self.behavior.check_md5
+    }
+    #[must_use]
+    pub fn upload_local_file_uri(&self) -> bool {
+        self.upload.upload_local_file_uri
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub bot_token: String,
     pub music_u: Option<String>,
@@ -123,11 +177,10 @@ pub struct Config {
     pub database: String,
     pub log_level: String,
     pub cache_dir: String,
-    pub auto_update: bool,
-    pub auto_retry: bool,
+    #[serde(flatten)]
+    pub flags: ConfigFlags,
     pub max_retry_times: u32,
     pub download_timeout: u64,
-    pub check_md5: bool,
 
     /// Storage mode for temporary files: disk, memory, or hybrid
     pub storage_mode: StorageMode,
@@ -161,8 +214,6 @@ pub struct Config {
     pub upload_pool_idle_timeout_secs: u64,
     /// Upload timeout (seconds)
     pub upload_timeout_secs: u64,
-    /// Use file:// URIs for local uploads (telegram-bot-api --local only)
-    pub upload_local_file_uri: bool,
     /// Memory release interval in handled requests
     pub memory_release_interval_requests: u32,
     /// Database analyze interval in handled requests
@@ -180,11 +231,9 @@ impl Default for Config {
             database: "./data/music_bot.db".to_string(),
             log_level: "info".to_string(),
             cache_dir: "./downloads".to_string(),
-            auto_update: true,
-            auto_retry: true,
+            flags: ConfigFlags::default(),
             max_retry_times: 3,
             download_timeout: 60,
-            check_md5: true,
             storage_mode: StorageMode::Disk,
             memory_threshold_mb: 100,
             memory_buffer_mb: 100,
@@ -201,7 +250,6 @@ impl Default for Config {
             upload_pool_max_idle_per_host: 1,
             upload_pool_idle_timeout_secs: 300,
             upload_timeout_secs: 300,
-            upload_local_file_uri: false,
             memory_release_interval_requests: 10,
             db_analyze_interval_requests: 20,
         }

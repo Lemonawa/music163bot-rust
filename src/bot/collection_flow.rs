@@ -87,8 +87,31 @@ pub(super) async fn process_music_collection(
     )
     .await?;
 
+    let failed_count =
+        download_songs_with_retry(bot, msg, state, &song_ids, collection_name, collection_id).await;
+
+    if failed_count > 0 {
+        send_reply_text(
+            bot,
+            msg,
+            format!("⚠️ {collection_name}下载完成，但有 {failed_count} 首歌曲处理失败"),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn download_songs_with_retry(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    song_ids: &[u64],
+    collection_name: &str,
+    collection_id: u64,
+) -> usize {
     let mut failed_count = 0usize;
-    for song_id in song_ids {
+    for &song_id in song_ids {
         let mut attempt = 0u32;
         loop {
             match process_music(bot, msg, state, song_id).await {
@@ -120,17 +143,7 @@ pub(super) async fn process_music_collection(
             }
         }
     }
-
-    if failed_count > 0 {
-        send_reply_text(
-            bot,
-            msg,
-            format!("⚠️ {collection_name}下载完成，但有 {failed_count} 首歌曲处理失败"),
-        )
-        .await?;
-    }
-
-    Ok(())
+    failed_count
 }
 
 pub(super) async fn process_djradio_collection(

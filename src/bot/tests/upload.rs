@@ -11,7 +11,6 @@ fn cover_policy_requires_download_when_embed_or_thumbnail() {
     let embed_only = super::CoverPolicy {
         download_original: false,
         download_thumbnail: false,
-        embed_tags: true,
         embed_cover: true,
     };
     assert!(should_download_cover(embed_only));
@@ -19,7 +18,6 @@ fn cover_policy_requires_download_when_embed_or_thumbnail() {
     let thumbnail_only = super::CoverPolicy {
         download_original: false,
         download_thumbnail: true,
-        embed_tags: true,
         embed_cover: false,
     };
     assert!(should_download_cover(thumbnail_only));
@@ -27,7 +25,6 @@ fn cover_policy_requires_download_when_embed_or_thumbnail() {
     let none = super::CoverPolicy {
         download_original: false,
         download_thumbnail: false,
-        embed_tags: true,
         embed_cover: false,
     };
     assert!(!should_download_cover(none));
@@ -105,7 +102,11 @@ async fn local_file_uri_disabled_by_default() {
 #[tokio::test]
 async fn local_file_uri_skips_official_api() {
     let config = crate::config::Config {
-        upload_local_file_uri: true,
+        flags: {
+            let mut f = crate::config::ConfigFlags::default();
+            f.upload.upload_local_file_uri = true;
+            f
+        },
         ..crate::config::Config::default()
     };
 
@@ -119,7 +120,11 @@ async fn local_file_uri_skips_official_api() {
 #[tokio::test]
 async fn local_file_uri_builds_from_existing_path() {
     let config = crate::config::Config {
-        upload_local_file_uri: true,
+        flags: {
+            let mut f = crate::config::ConfigFlags::default();
+            f.upload.upload_local_file_uri = true;
+            f
+        },
         ..crate::config::Config::default()
     };
 
@@ -136,7 +141,11 @@ async fn local_file_uri_builds_from_existing_path() {
 #[tokio::test]
 async fn local_file_uri_returns_none_for_missing_path() {
     let config = crate::config::Config {
-        upload_local_file_uri: true,
+        flags: {
+            let mut f = crate::config::ConfigFlags::default();
+            f.upload.upload_local_file_uri = true;
+            f
+        },
         ..crate::config::Config::default()
     };
 
@@ -162,7 +171,11 @@ async fn upload_target_defaults_to_multipart() {
 #[tokio::test]
 async fn upload_target_uses_local_uri_when_enabled() {
     let config = Config {
-        upload_local_file_uri: true,
+        flags: {
+            let mut f = crate::config::ConfigFlags::default();
+            f.upload.upload_local_file_uri = true;
+            f
+        },
         ..Config::default()
     };
 
