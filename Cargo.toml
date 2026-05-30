@@ -48,7 +48,7 @@ futures-util = "0.3"
 bytes = "1"
 
 # Audio metadata
-id3 = "1.0"
+id3 = "1.17"
 
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
