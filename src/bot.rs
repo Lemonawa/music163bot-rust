@@ -104,6 +104,8 @@ use about::{BUILD_GIT_COMMIT, build_about_text};
 #[cfg(test)]
 use collection_flow::collection_retry_delay_seconds;
 #[cfg(test)]
+use download_flow::{PostUploadDbAction, classify_post_upload_db_result, max_download_size_bytes};
+#[cfg(test)]
 use entry::{CoverPolicy, parse_command_and_args, parse_start_music_id};
 #[cfg(test)]
 use support::{CLEARALLCACHE_CONFIRM_WINDOW, format_bitrate_kbps, prune_expired_confirmations};

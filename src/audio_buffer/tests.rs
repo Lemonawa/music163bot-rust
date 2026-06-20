@@ -671,6 +671,45 @@ async fn disk_written_bytes_tracks_sequential_writes() {
 }
 
 #[tokio::test]
+async fn disk_buffers_with_same_display_name_get_unique_paths() {
+    let config = Config {
+        storage_mode: StorageMode::Disk,
+        ..Config::default()
+    };
+    let cache_dir = std::env::temp_dir();
+    let display = "Artist - Same Title.mp3".to_string();
+
+    let a = AudioBuffer::new(&config, 0, display.clone(), cache_dir.to_str().unwrap())
+        .await
+        .expect("create first disk buffer");
+    let b = AudioBuffer::new(&config, 0, display.clone(), cache_dir.to_str().unwrap())
+        .await
+        .expect("create second disk buffer");
+
+    // The Telegram display name stays clean and identical (must NOT carry a uuid/music_id).
+    assert_eq!(a.filename(), display);
+    assert_eq!(b.filename(), display);
+
+    // Two distinct tracks that sanitize to the same display name must not share an on-disk
+    // path, otherwise concurrent downloads would clobber each other's file.
+    let path_a = a
+        .path()
+        .expect("disk buffer A exposes a path")
+        .to_path_buf();
+    let path_b = b
+        .path()
+        .expect("disk buffer B exposes a path")
+        .to_path_buf();
+    assert_ne!(
+        path_a, path_b,
+        "same display name must map to distinct on-disk files"
+    );
+
+    a.cleanup().await.expect("cleanup disk buffer A");
+    b.cleanup().await.expect("cleanup disk buffer B");
+}
+
+#[tokio::test]
 async fn create_disk_buffer_rejects_dot_dot_traversal() {
     let temp_name = format!(
         "music163bot_traversal_{}",

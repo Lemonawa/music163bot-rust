@@ -289,4 +289,37 @@ fn is_official_telegram_api_rejects_local_or_custom_hosts() {
     ));
 }
 
+#[test]
+fn post_upload_db_failure_is_logged_not_surfaced() {
+    // The audio is already uploaded/delivered before the cache write, so a persistence
+    // failure must be downgraded to a log-and-continue (never a user-facing failure).
+    assert_eq!(
+        super::classify_post_upload_db_result(false),
+        super::PostUploadDbAction::LogAndContinue
+    );
+}
+
+#[test]
+fn post_upload_db_success_persists() {
+    assert_eq!(
+        super::classify_post_upload_db_result(true),
+        super::PostUploadDbAction::Persisted
+    );
+}
+
+#[test]
+fn max_download_size_bytes_converts_mb_to_bytes() {
+    assert_eq!(super::max_download_size_bytes(0), 0);
+    assert_eq!(super::max_download_size_bytes(1), 1024 * 1024);
+    assert_eq!(super::max_download_size_bytes(2000), 2000 * 1024 * 1024);
+}
+
+#[test]
+fn max_download_size_bytes_saturates_instead_of_overflowing() {
+    // An absurd configured MB value must clamp to u64::MAX rather than wrap to a small number
+    // (which would silently shrink the cap) or panic.
+    assert_eq!(super::max_download_size_bytes(u64::MAX), u64::MAX);
+    assert_eq!(super::max_download_size_bytes(u64::MAX / 1024), u64::MAX);
+}
+
 use super::*;

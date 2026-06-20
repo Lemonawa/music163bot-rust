@@ -433,8 +433,9 @@ async fn save_song_and_notify(
         }
         Ok(())
     } else {
-        match state.database.save_song_info(song_info).await {
-            Ok(_) => {
+        let save_result = state.database.save_song_info(song_info).await;
+        match classify_post_upload_db_result(save_result.is_ok()) {
+            PostUploadDbAction::Persisted => {
                 for signal in
                     collect_maintenance_signals(&state.maintenance_counters, &state.config)
                 {
@@ -448,13 +449,51 @@ async fn save_song_and_notify(
                         }
                     }
                 }
-                Ok(())
             }
-            Err(e) => Err(e),
+            PostUploadDbAction::LogAndContinue => {
+                if let Err(e) = save_result {
+                    // The audio was already uploaded and delivered to the user at this point, so a
+                    // cache-persistence failure must not surface as a user-facing "处理失败". Log it
+                    // and continue; the only consequence is that this track is re-fetched next time.
+                    tracing::warn!(
+                        "Failed to persist song cache for music_id {} after successful upload: {}",
+                        song_id,
+                        e
+                    );
+                }
+            }
         }
+        Ok(())
     };
     perf_ctx.log_stage(PERF_STAGE_DB_SAVE, db_save_start.elapsed());
     result
+}
+
+/// Outcome of the post-upload cache write, deciding how it affects the user-facing result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PostUploadDbAction {
+    /// Cache persisted successfully; safe to emit maintenance signals.
+    Persisted,
+    /// Persistence failed, but the audio was already delivered to the user, so the failure is
+    /// logged and the overall operation still reports success.
+    LogAndContinue,
+}
+
+/// Classify a post-upload cache-write result. A failure is never fatal because the upload
+/// already succeeded by the time this runs.
+pub(super) fn classify_post_upload_db_result(save_succeeded: bool) -> PostUploadDbAction {
+    if save_succeeded {
+        PostUploadDbAction::Persisted
+    } else {
+        PostUploadDbAction::LogAndContinue
+    }
+}
+
+/// Convert a megabyte cap into a byte cap. Uses saturating multiplication so an absurdly large
+/// configured value clamps to `u64::MAX` (effectively unlimited) instead of wrapping in release
+/// builds (which would silently shrink the cap) or panicking in debug builds.
+pub(super) fn max_download_size_bytes(mb: u64) -> u64 {
+    mb.saturating_mul(1024).saturating_mul(1024)
 }
 
 async fn download_audio(
@@ -486,16 +525,17 @@ async fn download_audio(
 
     let mut stream = response.bytes_stream();
     let max_download_size = if audio_buffer.is_memory() {
-        state.config.memory_max_file_mb * 1024 * 1024
+        max_download_size_bytes(state.config.memory_max_file_mb)
     } else {
-        state.config.max_disk_download_mb * 1024 * 1024
+        max_download_size_bytes(state.config.max_disk_download_mb)
     };
 
     let downloaded = if audio_buffer.is_disk() {
         let chunk_bytes = download_chunk_bytes(&state.config);
         let stream = stream.map_err(std::io::Error::other);
         let reader = tokio::io::BufReader::with_capacity(chunk_bytes, StreamReader::new(stream));
-        let mut limited_reader = tokio::io::AsyncReadExt::take(reader, max_download_size + 1);
+        let mut limited_reader =
+            tokio::io::AsyncReadExt::take(reader, max_download_size.saturating_add(1));
         let file = audio_buffer
             .disk_file_mut()
             .ok_or_else(|| anyhow::anyhow!("Disk buffer missing file handle"))?;

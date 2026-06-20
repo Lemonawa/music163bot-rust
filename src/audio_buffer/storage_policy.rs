@@ -5,6 +5,7 @@ use std::time::Instant as StdInstant;
 use anyhow::{Context, Result};
 use sysinfo::System;
 use tokio::fs::File;
+use uuid::Uuid;
 
 use super::AudioBuffer;
 use crate::config::{Config, StorageMode};
@@ -47,8 +48,18 @@ impl AudioBuffer {
                 filename,
             })
         } else {
-            Self::create_disk_buffer(filename, cache_dir, "using disk mode").await
+            // The display name (sent to Telegram) intentionally omits the music_id, so two
+            // distinct tracks that sanitize to the same "artist - title.ext" would otherwise
+            // race on the same on-disk path (singleflight only dedupes by music_id). Give the
+            // on-disk file a unique name while keeping the display filename clean.
+            let disk_filename = Self::unique_disk_filename(&filename);
+            Self::create_disk_buffer(filename, disk_filename, cache_dir, "using disk mode").await
         }
+    }
+
+    /// Build a collision-free on-disk filename from a display filename.
+    fn unique_disk_filename(display_filename: &str) -> String {
+        format!("{}_{display_filename}", Uuid::new_v4().simple())
     }
 
     /// Force creation of a disk-based buffer (for fallback scenarios).
@@ -56,16 +67,18 @@ impl AudioBuffer {
     /// # Errors
     /// Returns an error if creating the disk file fails.
     pub async fn new_disk(filename: String, cache_dir: &str) -> Result<Self> {
-        Self::create_disk_buffer(filename, cache_dir, "forced disk mode").await
+        let disk_filename = filename.clone();
+        Self::create_disk_buffer(filename, disk_filename, cache_dir, "forced disk mode").await
     }
 
     async fn create_disk_buffer(
-        filename: String,
+        display_filename: String,
+        disk_filename: String,
         cache_dir: &str,
         mode_label: &str,
     ) -> Result<Self> {
-        super::ensure_safe_cache_filename(&filename)?;
-        let file_path = PathBuf::from(cache_dir).join(&filename);
+        super::ensure_safe_cache_filename(&disk_filename)?;
+        let file_path = PathBuf::from(cache_dir).join(&disk_filename);
 
         tracing::debug!(
             "AudioBuffer: {} (path: {})",
@@ -80,7 +93,7 @@ impl AudioBuffer {
         Ok(Self::Disk {
             path: file_path,
             file: Some(file),
-            filename,
+            filename: display_filename,
             written_bytes: 0,
         })
     }
