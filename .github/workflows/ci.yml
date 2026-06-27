@@ -49,14 +49,13 @@ jobs:
           shared-key: rust-${{ runner.os }}-x86_64-unknown-linux-gnu
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Check Formatting
-        run: cargo fmt -- --check
-
-      - name: Clippy Lints
-        run: cargo clippy -- -D warnings
-
-      - name: Run Tests
-        run: cargo test
+      - parallel:
+          - name: Check Formatting
+            run: cargo fmt -- --check
+          - name: Clippy Lints
+            run: cargo clippy -- -D warnings
+          - name: Run Tests
+            run: cargo test
 
       - name: Build (max runtime performance)
         env:
