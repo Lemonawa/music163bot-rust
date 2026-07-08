@@ -48,17 +48,42 @@ fn parse_direct_music_target_returns_none_for_unmatched_text() {
 
 #[test]
 fn parse_command_and_args_handles_bot_mention_and_whitespace() {
-    let (cmd, args) = super::parse_command_and_args("/search@mybot    hello world");
+    let (cmd, args, mention) = super::parse_command_and_args("/search@mybot    hello world");
     assert_eq!(cmd, "search");
     assert_eq!(args.as_deref(), Some("hello world"));
+    assert_eq!(mention, Some("mybot"));
 
-    let (cmd, args) = super::parse_command_and_args("/status@mybot");
+    let (cmd, args, mention) = super::parse_command_and_args("/status@mybot");
     assert_eq!(cmd, "status");
     assert_eq!(args, None);
+    assert_eq!(mention, Some("mybot"));
 
-    let (cmd, args) = super::parse_command_and_args("/start   ");
+    let (cmd, args, mention) = super::parse_command_and_args("/start   ");
     assert_eq!(cmd, "start");
     assert_eq!(args, None);
+    assert_eq!(mention, None);
+}
+
+#[test]
+fn parse_command_and_args_no_mention_returns_none() {
+    let (cmd, args, mention) = super::parse_command_and_args("/help");
+    assert_eq!(cmd, "help");
+    assert_eq!(args, None);
+    assert_eq!(mention, None);
+
+    let (cmd, args, mention) = super::parse_command_and_args("/music hello world");
+    assert_eq!(cmd, "music");
+    assert_eq!(args.as_deref(), Some("hello world"));
+    assert_eq!(mention, None);
+}
+
+#[test]
+fn parse_command_and_args_captures_mention_username() {
+    let (cmd, args, mention) =
+        super::parse_command_and_args("/help@the_one_not_music_bot some args");
+    assert_eq!(cmd, "help");
+    assert_eq!(args.as_deref(), Some("some args"));
+    assert_eq!(mention, Some("the_one_not_music_bot"));
 }
 
 #[test]

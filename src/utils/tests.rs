@@ -35,6 +35,41 @@ fn parse_music_id_fast_path_handles_canonical_song_url() {
         ),
         Some(424_242)
     );
+    // Path-based share URL format: /song/{id}
+    assert_eq!(
+        super::extract_music_id_from_canonical_song_url("https://music.163.com/song/2043989409"),
+        Some(2_043_989_409)
+    );
+    assert_eq!(
+        super::extract_music_id_from_canonical_song_url(
+            "http://music.163.com/song/2043989409?userid=2110195209"
+        ),
+        Some(2_043_989_409)
+    );
+    // path-based format with hash route should still use query params
+    assert_eq!(
+        super::extract_music_id_from_canonical_song_url("https://music.163.com/#/song?id=424242"),
+        Some(424_242)
+    );
+}
+
+#[test]
+fn parse_music_id_handles_path_based_share_url() {
+    // Share URL with path-based song ID embedded in text
+    let text = "分享茉ひる/RINZO的单曲《ダブルベッド》http://music.163.com/song/2043989409?userid=2110195209 (@网易云音乐)";
+    assert_eq!(parse_music_id(text), Some(2_043_989_409));
+}
+
+#[test]
+fn parse_music_id_handles_plain_path_based_url() {
+    assert_eq!(
+        parse_music_id("http://music.163.com/song/2043989409?userid=2110195209"),
+        Some(2_043_989_409)
+    );
+    assert_eq!(
+        parse_music_id("https://music.163.com/song/2043989409"),
+        Some(2_043_989_409)
+    );
 }
 
 #[test]
@@ -85,6 +120,33 @@ fn parse_music_collection_target_rejects_song_link() {
 }
 
 #[test]
+fn parse_music_collection_target_detects_path_based_playlist() {
+    let url = "https://music.163.com/playlist/17607381913?userid=123";
+    assert_eq!(
+        parse_music_collection_target(url),
+        Some(MusicCollectionTarget::Playlist(17_607_381_913))
+    );
+}
+
+#[test]
+fn parse_music_collection_target_detects_path_based_album() {
+    let url = "https://music.163.com/album/121344602";
+    assert_eq!(
+        parse_music_collection_target(url),
+        Some(MusicCollectionTarget::Album(121_344_602))
+    );
+}
+
+#[test]
+fn parse_music_collection_target_detects_path_based_djradio() {
+    let url = "https://music.163.com/djradio/985936420?userid=456";
+    assert_eq!(
+        parse_music_collection_target(url),
+        Some(MusicCollectionTarget::DjRadio(985_936_420))
+    );
+}
+
+#[test]
 fn parse_music_collection_target_detects_djradio() {
     let url = "https://music.163.com/djradio?id=985936420";
     assert_eq!(
@@ -109,6 +171,18 @@ fn parse_music_program_id_detects_dj_link() {
 fn parse_music_program_id_rejects_song_link() {
     let url = "https://music.163.com/song?id=3714760479";
     assert_eq!(parse_music_program_id(url), None);
+}
+
+#[test]
+fn parse_music_program_id_detects_path_based_program_link() {
+    let url = "https://music.163.com/program/3714760479?userid=123";
+    assert_eq!(parse_music_program_id(url), Some(3_714_760_479));
+}
+
+#[test]
+fn parse_music_program_id_detects_path_based_dj_link() {
+    let url = "https://music.163.com/dj/3714760479";
+    assert_eq!(parse_music_program_id(url), Some(3_714_760_479));
 }
 
 #[test]

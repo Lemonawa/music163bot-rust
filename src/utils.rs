@@ -107,7 +107,8 @@ pub fn format_error_chain(err: &dyn std::error::Error) -> String {
 
 /// Global regex patterns for URL parsing
 static SONG_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r"music\.163\.com/.*?song.*?[?&]id=(\d+)").expect("song id regex should be valid")
+    Regex::new(r"music\.163\.com/(?:.*?song.*?[?&]id=|song/)(\d+)")
+        .expect("song id regex should be valid")
 });
 
 static SHARE_LINK_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
@@ -147,14 +148,27 @@ fn extract_music_entity_id_from_canonical_url(text: &str, entity: &str) -> Optio
     let trimmed = text.trim();
     let is_music_domain = trimmed.starts_with("https://music.163.com/")
         || trimmed.starts_with("http://music.163.com/");
-    let direct_marker = format!("/{entity}?");
-    let hash_marker = format!("/#/{entity}?");
-    let is_target_url = trimmed.contains(&direct_marker) || trimmed.contains(&hash_marker);
-    if !is_music_domain || !is_target_url {
+    if !is_music_domain {
         return None;
     }
 
-    extract_music_id_query_value(trimmed)
+    let direct_marker = format!("/{entity}?");
+    let hash_marker = format!("/#/{entity}?");
+    if trimmed.contains(&direct_marker) || trimmed.contains(&hash_marker) {
+        return extract_music_id_query_value(trimmed);
+    }
+
+    // Path-based format: /song/2043989409, /playlist/123, etc.
+    let path_marker = format!("/{entity}/");
+    if let Some(pos) = trimmed.find(&path_marker) {
+        let after = &trimmed[pos + path_marker.len()..];
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() {
+            return digits.parse().ok();
+        }
+    }
+
+    None
 }
 
 fn extract_music_id_from_canonical_song_url(text: &str) -> Option<u64> {
@@ -166,25 +180,12 @@ fn extract_music_program_id_from_canonical_url(text: &str) -> Option<u64> {
         .or_else(|| extract_music_entity_id_from_canonical_url(text, "dj"))
 }
 
-fn extract_first_number(text: &str) -> Option<u64> {
-    let bytes = text.as_bytes();
-    let start = bytes.iter().position(u8::is_ascii_digit)?;
-    let len = bytes[start..]
-        .iter()
-        .take_while(|b| b.is_ascii_digit())
-        .count();
-    if len == 0 {
-        return None;
-    }
-    text[start..start + len].parse::<u64>().ok()
-}
-
 fn parse_music_id_from_share_url(url: &str) -> Option<u64> {
     if !url.contains("song") {
         return None;
     }
 
-    extract_music_id_from_canonical_song_url(url).or_else(|| extract_first_number(url))
+    extract_music_id_from_canonical_song_url(url)
 }
 
 fn parse_music_program_id_from_share_url(url: &str) -> Option<u64> {

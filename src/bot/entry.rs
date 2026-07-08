@@ -412,7 +412,14 @@ pub(super) async fn handle_command(
     state: &Arc<BotState>,
     text: &str,
 ) -> ResponseResult<()> {
-    let (command, args) = parse_command_and_args(text);
+    let (command, args, mention) = parse_command_and_args(text);
+
+    // If the command mentions another bot (e.g. /help@other_bot), ignore it.
+    if let Some(username) = mention
+        && username != state.bot_username
+    {
+        return Ok(());
+    }
 
     if should_log_command(command) {
         tracing::info!("Command: /{} from chat {}", command, msg.chat.id);
@@ -438,7 +445,7 @@ pub(super) async fn handle_command(
     }
 }
 
-pub(super) fn parse_command_and_args(text: &str) -> (&str, Option<String>) {
+pub(super) fn parse_command_and_args(text: &str) -> (&str, Option<String>, Option<&str>) {
     let (command_part, args) = if let Some((cmd, rest)) = text.split_once(char::is_whitespace) {
         (cmd, Some(rest.trim_start().to_string()))
     } else {
@@ -446,10 +453,11 @@ pub(super) fn parse_command_and_args(text: &str) -> (&str, Option<String>) {
     };
     let args = args.filter(|arg| !arg.is_empty());
     let command = command_part.trim_start_matches('/');
-    let command = command
-        .split_once('@')
-        .map_or(command, |(without_username, _)| without_username);
-    (command, args)
+    let (command, mention) = match command.split_once('@') {
+        Some((without_username, username)) => (without_username, Some(username)),
+        None => (command, None),
+    };
+    (command, args, mention)
 }
 
 pub(super) fn parse_start_music_id(args: Option<&str>) -> Option<u64> {
