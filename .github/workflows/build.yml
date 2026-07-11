@@ -113,18 +113,28 @@ jobs:
           SRC="target/${{ matrix.platform.target }}/release/${BINARY_NAME}${{ matrix.platform.suffix }}"
           DEST="dist/${BINARY_NAME}${{ matrix.platform.suffix }}"
           cp "$SRC" "$DEST"
-          
+
           # Copy auxiliary files
           [ -f config.ini.example ] && cp config.ini.example dist/
           [ -f LICENSE ] && cp LICENSE dist/
           [ -f README.md ] && cp README.md dist/
-          
+
           # Create tar.gz archive
           cd dist
           ARCHIVE_NAME="${BINARY_NAME}-${{ matrix.platform.os_name }}"
           tar czf "../${ARCHIVE_NAME}.tar.gz" .
           echo "archive=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
           cd ..
+
+          # refresh_hires maintenance tool — packaged separately (binary only)
+          # so operators can refresh capped-quality caches on the host that owns
+          # the bot's database, without pulling the full bot bundle.
+          TOOL_SRC="target/${{ matrix.platform.target }}/release/refresh_hires${{ matrix.platform.suffix }}"
+          if [ -f "$TOOL_SRC" ]; then
+            TOOL_ARCHIVE="refresh_hires-${{ matrix.platform.os_name }}"
+            tar czf "../${TOOL_ARCHIVE}.tar.gz" -C target/${{ matrix.platform.target }}/release "refresh_hires${{ matrix.platform.suffix }}"
+            echo "tool_archive=${TOOL_ARCHIVE}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
         id: package-unix
 
       - name: Package (Windows)
@@ -136,16 +146,24 @@ jobs:
           $SRC = "target/${{ matrix.platform.target }}/release/${BINARY_NAME}.exe"
           $DEST = "dist/${BINARY_NAME}.exe"
           Copy-Item $SRC $DEST
-          
+
           # Copy auxiliary files
           if (Test-Path "config.ini.example") { Copy-Item "config.ini.example" "dist/" }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" "dist/" }
           if (Test-Path "README.md") { Copy-Item "README.md" "dist/" }
-          
+
           # Create zip archive using PowerShell
           $ARCHIVE_NAME = "${BINARY_NAME}-${{ matrix.platform.os_name }}"
           Compress-Archive -Path "dist/*" -DestinationPath "${ARCHIVE_NAME}.zip" -Force
           "archive=${ARCHIVE_NAME}.zip" >> $env:GITHUB_OUTPUT
+
+          # refresh_hires maintenance tool — packaged separately (binary only).
+          $TOOL_SRC = "target/${{ matrix.platform.target }}/release/refresh_hires.exe"
+          if (Test-Path $TOOL_SRC) {
+            $TOOL_ARCHIVE = "refresh_hires-${{ matrix.platform.os_name }}"
+            Compress-Archive -Path $TOOL_SRC -DestinationPath "${TOOL_ARCHIVE}.zip" -Force
+            "tool_archive=${TOOL_ARCHIVE}.zip" >> $env:GITHUB_OUTPUT
+          }
         id: package-windows
 
       - name: Upload artifacts (Unix)
@@ -162,6 +180,22 @@ jobs:
         with:
           name: ${{ matrix.platform.os_name }}
           path: ${{ steps.package-windows.outputs.archive }}
+          archive: false
+
+      - name: Upload refresh_hires tool (Unix)
+        if: runner.os != 'Windows' && steps.package-unix.outputs.tool_archive != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: refresh_hires-${{ matrix.platform.os_name }}
+          path: ${{ steps.package-unix.outputs.tool_archive }}
+          archive: false
+
+      - name: Upload refresh_hires tool (Windows)
+        if: runner.os == 'Windows' && steps.package-windows.outputs.tool_archive != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: refresh_hires-${{ matrix.platform.os_name }}
+          path: ${{ steps.package-windows.outputs.tool_archive }}
           archive: false
 
   release:

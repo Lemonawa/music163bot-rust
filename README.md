@@ -139,6 +139,30 @@ If cover download fails after 5 retries, the track is still uploaded without art
 ./target/release/music163bot-rust --config /path/to/config.ini
 ```
 
+## Refreshing capped-quality caches (`refresh_hires`)
+
+Every cached track is stored as a Telegram `file_id`; the bot re-forwards that copy on repeat requests instead of re-downloading. If a track was first fetched while the bot was capped at a lower quality tier (e.g. 16-bit `lossless` FLAC before the hires fix), the bot keeps sending that lower-quality copy forever. `refresh_hires` finds those rows so the bot re-fetches them at the current (hires-capable) candidate order the next time they are requested.
+
+It probes the NetEase catalog (batch `/api/v3/song/detail`) for each cached song below a bitrate ceiling, and flags a row for refresh **only** when the catalog's best tier beats the cached bitrate by more than a margin. A blanket "delete everything below X" would waste a re-download on songs whose best available source is already what you have; this probes and deletes only the rows that genuinely have something better.
+
+**Grab the binary** from the [CI artifacts](https://github.com/Lemonawa/music163bot-rust/actions/workflows/ci.yml) (`refresh_hires-ci-linux-x86_64-*`) or a [Release](https://github.com/Lemonawa/music163bot-rust/releases) (`refresh_hires-*`). No Rust toolchain needed.
+
+```bash
+# Dry run — prints the refresh candidates, deletes nothing.
+./refresh_hires --db ./data/music_bot.db
+
+# Apply — backs up the database to music_bot.db.bak, then deletes candidate
+# rows in a single transaction. The bot re-downloads them on next request.
+./refresh_hires --db ./data/music_bot.db --apply
+
+# Optional: reclaim SQLite space after deletion.
+sqlite3 ./data/music_bot.db "VACUUM;"
+```
+
+Tunable flags: `--concurrency` (batch requests, default 4), `--max-cached-bitrate` (probe ceiling, default 1_300_000), `--margin` (required upgrade fraction, default 0.15). Run `./refresh_hires --help` for the full list.
+
+**Caveat — this is a *catalog* check, not a *download* guarantee.** A flagged row means NetEase's catalog lists a higher tier than what you cached. Whether your `music_u` cookie can actually *download* that tier depends on your VIP level; NetEase silently downgrades when it cannot serve it, so a refresh may re-cache at a lower tier than the catalog promised. This is harmless (the copy is never worse than before), but some flagged rows may not actually improve after a refresh.
+
 ## Bot commands
 
 Set via `/setcommands` in @BotFather:

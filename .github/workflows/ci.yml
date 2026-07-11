@@ -68,7 +68,7 @@ jobs:
           RUSTFLAGS: "-C target-cpu=x86-64-v3 -C link-arg=-Wl,-O3"
         run: cargo build --release --target x86_64-unknown-linux-gnu
 
-      - name: Package artifact (Linux-x86_64)
+      - name: Package artifacts (Linux-x86_64)
         id: package
         shell: bash
         run: |
@@ -86,9 +86,27 @@ jobs:
           tar czf "${ARCHIVE_NAME}.tar.gz" -C dist .
           echo "archive=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
 
+          # refresh_hires maintenance tool — standalone archive (binary only),
+          # so operators without a Rust toolchain can refresh capped-quality
+          # caches on the host where the bot's database lives.
+          TOOL_SRC="target/x86_64-unknown-linux-gnu/release/refresh_hires"
+          if [ -f "$TOOL_SRC" ]; then
+            TOOL_ARCHIVE="refresh_hires-ci-linux-x86_64-${GITHUB_SHA::7}"
+            tar czf "${TOOL_ARCHIVE}.tar.gz" -C target/x86_64-unknown-linux-gnu/release refresh_hires
+            echo "tool_archive=${TOOL_ARCHIVE}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload artifact (Linux-x86_64)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-linux-x86_64
           path: ${{ steps.package.outputs.archive }}
+          archive: false
+
+      - name: Upload refresh_hires tool (Linux-x86_64)
+        if: ${{ steps.package.outputs.tool_archive != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: refresh_hires-ci-linux-x86_64
+          path: ${{ steps.package.outputs.tool_archive }}
           archive: false
