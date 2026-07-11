@@ -142,28 +142,28 @@ fn build_eapi_cookie(music_u: &str) -> String {
 // Config reading
 // ---------------------------------------------------------------------------
 
-/// Read `music_u` from the bot's config.ini `[music]` section.
-/// Returns `None` if the file doesn't exist or the key is absent/empty.
-fn read_music_u_from_config(config_path: &str) -> Option<String> {
-    let content = std::fs::read_to_string(config_path).ok()?;
-    let mut in_music = false;
+/// Parse the bot's config.ini into a flat `section.key → value` map.
+/// Returns an empty map if the file doesn't exist.
+fn parse_ini(config_path: &str) -> HashMap<String, String> {
+    let content = match std::fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(_) => return HashMap::new(),
+    };
+    let mut map = HashMap::new();
+    let mut section = String::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed == "[music]" {
-            in_music = true;
-        } else if trimmed.starts_with('[') {
-            in_music = false;
-        } else if in_music {
-            let (key, value) = trimmed.split_once('=')?;
-            if key.trim() == "music_u" {
-                let v = value.trim();
-                if !v.is_empty() {
-                    return Some(v.to_string());
-                }
-            }
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        if let Some(body) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = body.trim().to_string();
+        } else if let Some((key, value)) = trimmed.split_once('=') {
+            let entry = format!("{}.{}", section, key.trim());
+            map.insert(entry, value.trim().to_string());
         }
     }
-    None
+    map
 }
 
 // ---------------------------------------------------------------------------
@@ -221,11 +221,12 @@ struct EapiResponse {
                   Dry run by default — no rows are deleted without --apply."
 )]
 struct Args {
-    /// Path (or `sqlite:` DSN) to the bot's database — same as `[database] url`.
-    #[arg(long, default_value = "./data/music_bot.db")]
-    db: String,
+    /// Path (or `sqlite:` DSN) to the bot's database — overrides `[database] url` from config.
+    #[arg(long)]
+    db: Option<String>,
 
-    /// Path to the bot's config.ini. Used to read `[music] music_u` if present.
+    /// Path to the bot's config.ini. Used to read `[music] music_u` and
+    /// `[database] url` if the respective CLI flags are absent.
     #[arg(long, default_value = "config.ini")]
     config: String,
 
@@ -276,13 +277,22 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    let ini = parse_ini(&args.config);
+
+    // Resolve db: CLI → config `database.url` → default
+    let db = args
+        .db
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| ini.get("database.url").cloned())
+        .unwrap_or_else(|| "./data/music_bot.db".to_string());
 
     // Resolve music_u: CLI → env → config.ini
     let music_u = args
         .music_u
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("MUSIC_U").ok().filter(|s| !s.is_empty()))
-        .or_else(|| read_music_u_from_config(&args.config).filter(|s| !s.is_empty()))
+        .or_else(|| ini.get("music.music_u").cloned().filter(|s| !s.is_empty()))
         .context(
             "music_u cookie is required — supply it with --music-u, MUSIC_U env var, \
              or add `music_u = <cookie>` to the [music] section of config.ini.\n\
@@ -295,7 +305,7 @@ async fn main() -> Result<()> {
     let client = build_http_client()?;
     let limiter = Arc::new(Semaphore::new(args.concurrency.max(1)));
 
-    let pool = open_pool(&args.db).await?;
+    let pool = open_pool(&db).await?;
     let songs = load_candidates(&pool, args.max_cached_bitrate).await?;
     let skipped = count_skipped(&pool, args.max_cached_bitrate).await?;
 
@@ -363,8 +373,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    backup_database(&args.db).await?;
-    let deleted = delete_candidates(&args.db, &upgrades).await?;
+    backup_database(&db).await?;
+    let deleted = delete_candidates(&db, &upgrades).await?;
     eprintln!(
         "\nDeleted {deleted} candidate rows. The bot re-downloads these at the \
          hires-capable candidate order next time they are requested."
