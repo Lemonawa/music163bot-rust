@@ -1,28 +1,47 @@
-//! Maintenance tool: refresh cached songs whose Telegram `file_id` was uploaded
-//! at a lower quality than the NetEase catalog's best available tier.
+//! Maintenance tool: refresh cached songs whose Telegram `file_id` holds a
+//! lower-quality copy than the bot can actually download right now.
 //!
 //! ## Why
 //! Each row in `song_infos` stores a Telegram `file_id` so repeated requests just
 //! re-forward the already-uploaded audio. If that audio was fetched at a capped
-//! tier (e.g. 16-bit `lossless` FLAC when the catalog offers 24-bit `hires`,
-//! or MP3 when the catalog offers FLAC), the bot keeps re-sending the
+//! tier (e.g. 16-bit `lossless` FLAC when the account can serve 24-bit `hires`,
+//! or MP3 when the account can serve FLAC), the bot keeps re-sending the
 //! low-quality copy forever. This tool finds those rows so the bot re-downloads
 //! them at the current (hires-capable) candidate order.
 //!
-//! ## How it decides
-//! For each cached song below `--max-cached-bitrate`, it probes the catalog via
-//! the batch endpoint `POST /api/v3/song/detail` (body `c=[{"id":..},..]`, up to
-//! 50 ids per request), then scans *every* object-valued field with a numeric
-//! `br` (the v3 schema names tiers `l/m/h/sq/hr/jm/...`; scanning by shape rather
-//! than name auto-discovers hires and master tiers without name churn) and takes
-//! the maximum. If that max exceeds the cached `bit_rate` by more than `--margin`,
-//! the row is a refresh candidate.
+//! ## How it decides (ground truth — not catalog metadata)
+//! For each cached song below `--max-cached-bitrate`, the tool asks the SAME
+//! endpoint the bot uses at request time: `/eapi/song/enhance/player/url/v1`
+//! with `level=hires` (the bot's top candidate, authenticated with the bot's
+//! `MUSIC_U` cookie). It batches plain-number ids per request. The response
+//! carries the `size` (bytes) of the best file the account can serve. The tool
+//! compares that served `size` against the cached `music_size`:
+//!   - served ≈ cached  → same file → leave it
+//!   - served > cached × `--min-ratio` → a genuinely larger file exists and
+//!     is downloadable → flag for refresh
+//!
+//! This is foolproof: it predicts exactly what the bot will re-download, because
+//! it uses the identical endpoint. Catalog tier labels (`sq/hr/...`) are NOT
+//! consulted — earlier versions that trusted them produced false positives
+//! (e.g. the catalog advertises `sq` at 1411000 bps = the CD-rate nominal
+//! rate, but the actual served file is the same compressed FLAC the bot already
+//! has).
+//!
+//! ## MUSIC_U
+//! A valid `music_u` cookie is REQUIRED. Supply it via:
+//!   - `--music-u` flag
+//!   - `MUSIC_U` environment variable
+//!   - `--config <path>` (reads the bot's config.ini `[music]` section)
+//!
+//! Without the cookie the endpoint only serves standard/exhigh and no hires
+//! upgrade is ever visible, making the tool useless.
 //!
 //! ## Safety
 //! Dry run by default (prints candidates, deletes nothing). `--apply` backs the
 //! database up to `<db>.bak` first, then deletes candidate rows in one
 //! transaction.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,39 +50,190 @@ use clap::Parser;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 
-/// Chunk size for `/api/v3/song/detail` requests. The endpoint accepts more, but
-/// 50 keeps response bodies small and matches NetEase's own client behavior.
-const BATCH_SIZE: usize = 50;
+// ---------------------------------------------------------------------------
+// eapi crypto — mirrors the bot's `cache_and_crypto.rs` implementation.
+// The bin is a separate compilation unit so it must carry its own copy.
+// ---------------------------------------------------------------------------
 
-/// A cached row — only the columns needed to decide + report + delete.
+/// NetEase eapi AES-ECB key (same as `e82ckenh8dichen8` in the main crate).
+const EAPI_KEY: &[u8; 16] = b"e82ckenh8dichen8";
+
+/// The `User-Agent` header the bot sends for eapi requests.
+const EAPI_USER_AGENT: &str = "NeteaseMusic/9.3.40.1753206443(164);Dalvik/2.1.0 (Linux; U; Android 9; MIX 2 MIUI/V12.0.1.0.PDECNXM)";
+
+/// Minimum served/cached size ratio to consider a row genuinely upgradeable.
+/// 1.15 means the served file must be at least 15% larger (well above re-encode
+/// noise).  Genuine resolution jumps (16-bit → 24-bit) are typically 1.5×–3.5×.
+const MIN_UPGRADE_RATIO: f64 = 1.15;
+
+// ---------------------------------------------------------------------------
+// eapi crypto helpers
+// ---------------------------------------------------------------------------
+
+fn eapi_splice(path: &str, json: &str) -> String {
+    let text = format!("nobody{path}use{json}md5forencrypt");
+    let digest = md5::compute(text.as_bytes());
+    format!("{path}-36cd479b6b5-{json}-36cd479b6b5-{digest:x}")
+}
+
+fn eapi_encrypt(data: &str) -> Result<String> {
+    use aes::Aes128;
+    use cipher::{BlockModeEncrypt, KeyInit, block_padding::Pkcs7};
+    use ecb::Encryptor;
+
+    let data_len = data.len();
+    let block_size = 16_usize;
+    let padded_len = ((data_len + block_size) / block_size) * block_size;
+    let mut buf = vec![0u8; padded_len];
+    buf[..data_len].copy_from_slice(data.as_bytes());
+
+    let encrypted = Encryptor::<Aes128>::new_from_slice(EAPI_KEY)
+        .map_err(|_| anyhow::anyhow!("invalid eapi key length"))?
+        .encrypt_padded::<Pkcs7>(&mut buf, data_len)
+        .map_err(|_| anyhow::anyhow!("failed to encrypt eapi payload"))?;
+
+    Ok(hex::encode_upper(encrypted))
+}
+
+fn eapi_decrypt(hex_data: &str) -> Result<String> {
+    use aes::Aes128;
+    use cipher::{BlockModeDecrypt, KeyInit, block_padding::Pkcs7};
+    use ecb::Decryptor;
+
+    let mut bytes = hex::decode(hex_data).context("invalid hex in eapi response")?;
+    let decrypted = Decryptor::<Aes128>::new_from_slice(EAPI_KEY)
+        .map_err(|_| anyhow::anyhow!("invalid eapi key length"))?
+        .decrypt_padded::<Pkcs7>(&mut bytes)
+        .context("failed to decrypt eapi response")?;
+
+    String::from_utf8(decrypted.to_vec()).context("non-utf8 decrypted eapi response")
+}
+
+fn eapi_params(path: &str, json: &str) -> Result<String> {
+    Ok(format!(
+        "params={}",
+        eapi_encrypt(&eapi_splice(path, json))?
+    ))
+}
+
+/// Build the `Cookie` header the bot sends for eapi requests.
+/// Mirrors `generate_eapi_cookie` in `cache_and_crypto.rs`.
+fn build_eapi_cookie(music_u: &str) -> String {
+    let device_id = uuid::Uuid::new_v4().simple().to_string();
+    let appver = "9.3.40";
+    let buildver = std::time::UNIX_EPOCH
+        .elapsed()
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string());
+    let buildver = &buildver[..buildver.len().min(10)];
+    format!(
+        "deviceId={device_id}; appver={appver}; buildver={buildver}; \
+         resolution=1920x1080; os=Android; MUSIC_U={music_u}"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Config reading
+// ---------------------------------------------------------------------------
+
+/// Read `music_u` from the bot's config.ini `[music]` section.
+/// Returns `None` if the file doesn't exist or the key is absent/empty.
+fn read_music_u_from_config(config_path: &str) -> Option<String> {
+    let content = std::fs::read_to_string(config_path).ok()?;
+    let mut in_music = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[music]" {
+            in_music = true;
+        } else if trimmed.starts_with('[') {
+            in_music = false;
+        } else if in_music {
+            let (key, value) = trimmed.split_once('=')?;
+            if key.trim() == "music_u" {
+                let v = value.trim();
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Structs
+// ---------------------------------------------------------------------------
+
 #[derive(Clone)]
 struct CachedSong {
     music_id: i64,
     name: String,
     file_ext: String,
     cached_bitrate: i64,
+    cached_size: i64,
+}
+
+#[derive(Clone)]
+struct ServedSize {
+    br: i64,
+    size: i64,
+    format: String,
+}
+
+#[derive(Clone)]
+struct Upgrade {
+    song: CachedSong,
+    served: ServedSize,
+    ratio: f64,
+}
+
+#[derive(Deserialize)]
+struct EapiSongUrl {
+    id: i64,
+    #[serde(default)]
+    br: i64,
+    #[serde(default)]
+    size: i64,
+    #[serde(rename = "type", default)]
+    file_type: String,
+}
+
+#[derive(Deserialize)]
+struct EapiResponse {
+    code: i32,
+    #[serde(default)]
+    data: Vec<EapiSongUrl>,
 }
 
 #[derive(Parser)]
 #[command(
-    about = "Find cached songs downloadable at higher quality and refresh them",
-    long_about = "Probes NetEase catalog (batch /api/v3/song/detail) for each cached \
-                  song below a bitrate ceiling and compares the best tier to the cached \
-                  copy. Prints refresh candidates (dry run by default)."
+    about = "Find cached songs that can be refreshed at higher quality",
+    long_about = "Probes the real eapi song-url endpoint (the same one the bot uses) \
+                  at level=hires for each cached song below the bitrate ceiling, \
+                  compares the SERVED FILE SIZE (bytes) against the cached file size, \
+                  and flags rows where the served file is genuinely larger. \
+                  Dry run by default — no rows are deleted without --apply."
 )]
 struct Args {
-    /// Path (or `sqlite:` DSN) to the bot's database — same value as config `[database] url`.
+    /// Path (or `sqlite:` DSN) to the bot's database — same as `[database] url`.
     #[arg(long, default_value = "./data/music_bot.db")]
     db: String,
 
-    /// NetEase API base URL.
+    /// Path to the bot's config.ini. Used to read `[music] music_u` if present.
+    #[arg(long, default_value = "config.ini")]
+    config: String,
+
+    /// NetEase MUSIC_U cookie (overrides the value in config.ini or MUSIC_U env).
+    #[arg(long, value_name = "COOKIE")]
+    music_u: Option<String>,
+
+    /// NetEase API base URL. Defaults to the official endpoint.
     #[arg(long, default_value = "https://music.163.com")]
     api: String,
 
@@ -71,33 +241,31 @@ struct Args {
     #[arg(long)]
     apply: bool,
 
-    /// Concurrent batch requests. Each batch covers `BATCH_SIZE` songs, so even
-    /// concurrency 3 walks ~1400 songs in well under a minute. Keep modest to
-    /// avoid tripping NetEase's burst limiter.
-    #[arg(long, default_value_t = 4)]
+    /// Concurrent batch requests. Keep modest to avoid tripping NetEase's burst
+    /// limiter. Each batch covers --batch-size songs.
+    #[arg(long, default_value_t = 3)]
     concurrency: usize,
 
-    /// Only probe cached songs whose `bit_rate` is below this (bps). Songs at or
-    /// above are assumed already near-optimal and skipped to save requests.
-    /// 1_300_000 = just above the lossless tier.
-    #[arg(long, default_value_t = 1_300_000)]
+    /// How many song ids to pack into a single eapi request. 20 works well.
+    #[arg(long, default_value_t = 20)]
+    batch_size: usize,
+
+    /// Only probe cached songs whose bit_rate is below this (bps). Songs at or
+    /// above are assumed already near-optimal. 1_500_000 covers all lossless-tier
+    /// FLAC (16-bit/44.1kHz nominal = 1411kbps; 16-bit/48kHz nominal = 1536kbps).
+    #[arg(long, default_value_t = 1_500_000)]
     max_cached_bitrate: i64,
 
-    /// Require the catalog's best bitrate to exceed the cached bitrate by this
-    /// fraction before flagging (0.15 = 15%). Absorbs rounding/encoding noise so
-    /// a same-tier re-fetch is not treated as an upgrade.
-    #[arg(long, default_value_t = 0.15)]
-    margin: f64,
+    /// Minimum ratio of served_size / cached_size to treat as a real upgrade.
+    /// 1.15 means the served file must be ≥15% larger. Genuine resolution jumps
+    /// (16-bit → 24-bit) are typically 1.5×–3.5×.
+    #[arg(long, default_value_t = MIN_UPGRADE_RATIO)]
+    min_ratio: f64,
 }
 
-#[derive(Deserialize)]
-struct DetailResponse {
-    code: i32,
-    songs: Vec<Value>,
-}
-
-/// Best catalog tier found for one song: `(bitrate_bps, tier_key)`.
-type CatalogBest = Option<(i64, String)>;
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -108,6 +276,22 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+
+    // Resolve music_u: CLI → env → config.ini
+    let music_u = args
+        .music_u
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("MUSIC_U").ok().filter(|s| !s.is_empty()))
+        .or_else(|| read_music_u_from_config(&args.config).filter(|s| !s.is_empty()))
+        .context(
+            "music_u cookie is required — supply it with --music-u, MUSIC_U env var, \
+             or add `music_u = <cookie>` to the [music] section of config.ini.\n\
+             Without the cookie the eapi endpoint only serves standard/exhigh and \
+             the tool cannot discover hires upgrades.",
+        )?;
+
+    let cookie = build_eapi_cookie(&music_u);
+
     let client = build_http_client()?;
     let limiter = Arc::new(Semaphore::new(args.concurrency.max(1)));
 
@@ -115,64 +299,72 @@ async fn main() -> Result<()> {
     let songs = load_candidates(&pool, args.max_cached_bitrate).await?;
     let skipped = count_skipped(&pool, args.max_cached_bitrate).await?;
 
-    let batch_count = songs.len().div_ceil(BATCH_SIZE);
+    let batch_count = songs.len().div_ceil(args.batch_size);
     eprintln!(
-        "{} cached songs below {} bps → {} batch request(s) of up to {} ({} already at/above — skipped).",
+        "{} cached songs below {} bps → {} batch request(s) of up to {} \
+         ({} already at/above — skipped).",
         songs.len(),
         args.max_cached_bitrate,
         batch_count,
-        BATCH_SIZE,
+        args.batch_size,
         skipped
     );
 
-    // Probe every batch concurrently under a semaphore; each resolves its whole
-    // chunk before yielding a map of id → best tier.
+    // Probe every batch concurrently under a semaphore; each resolves its chunk
+    // to a map of id → served size.
     let mut futures = FuturesUnordered::new();
-    for chunk in songs.chunks(BATCH_SIZE) {
+    for chunk in songs.chunks(args.batch_size) {
+        let ids: Vec<i64> = chunk.iter().map(|s| s.music_id).collect();
         futures.push(probe_batch(
             client.clone(),
             &args.api,
-            chunk.to_vec(),
+            ids,
+            cookie.clone(),
             limiter.clone(),
         ));
     }
 
-    // Build id → best catalog tier from all successful batches.
-    let mut best_by_id: std::collections::HashMap<i64, (i64, String)> =
-        std::collections::HashMap::new();
+    let mut served_by_id: HashMap<i64, ServedSize> = HashMap::new();
     let mut done = 0usize;
     let mut errors = 0usize;
     while let Some(outcome) = futures.next().await {
         done += 1;
         match outcome {
-            Ok(map) => best_by_id.extend(map),
+            Ok(map) => served_by_id.extend(map),
             Err(_) => errors += 1,
         }
-        eprintln!(
-            "  batch {done}/{} done (resolved {} ids, {errors} batch errors)",
-            batch_count,
-            best_by_id.len()
-        );
+        if done.is_multiple_of(5) || done == batch_count {
+            eprintln!(
+                "  batch {done}/{} done (resolved {} ids, {errors} batch errors)",
+                batch_count,
+                served_by_id.len(),
+            );
+        }
     }
 
-    // Classify each candidate against its catalog best.
-    let refresh = classify(&songs, &best_by_id, args.margin);
-    print_report(&refresh, &songs, best_by_id.len(), errors);
+    let upgrades = classify_by_size(&songs, &served_by_id, args.min_ratio);
+    print_report(
+        &upgrades,
+        &songs,
+        served_by_id.len(),
+        errors,
+        args.min_ratio,
+    );
 
     if !args.apply {
         eprintln!(
             "\nDry run — no rows deleted. Re-run with --apply to delete the {} candidates.",
-            refresh.len()
+            upgrades.len()
         );
         return Ok(());
     }
-    if refresh.is_empty() {
+    if upgrades.is_empty() {
         eprintln!("\nNothing to delete.");
         return Ok(());
     }
 
     backup_database(&args.db).await?;
-    let deleted = delete_candidates(&args.db, &refresh).await?;
+    let deleted = delete_candidates(&args.db, &upgrades).await?;
     eprintln!(
         "\nDeleted {deleted} candidate rows. The bot re-downloads these at the \
          hires-capable candidate order next time they are requested."
@@ -181,17 +373,19 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Build a polite HTTP client with sensible timeouts for the detail probe.
+// ---------------------------------------------------------------------------
+// HTTP / DB helpers
+// ---------------------------------------------------------------------------
+
 fn build_http_client() -> Result<Client> {
     Ok(Client::builder()
         .tcp_nodelay(true)
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(25))
         .user_agent("Mozilla/5.0")
         .build()?)
 }
 
-/// Open the SQLite pool read-only, accepting a bare file path or a `sqlite:` DSN.
 async fn open_pool(db: &str) -> Result<SqlitePool> {
     let mut options = if db.starts_with("sqlite:") {
         SqliteConnectOptions::new().filename(db.trim_start_matches("sqlite:"))
@@ -210,11 +404,10 @@ async fn open_pool(db: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-/// Load cached songs whose bitrate falls under the probe ceiling.
 async fn load_candidates(pool: &SqlitePool, max_bitrate: i64) -> Result<Vec<CachedSong>> {
     let rows = sqlx::query(
-        "SELECT music_id, song_name, file_ext, bit_rate \
-         FROM song_infos WHERE bit_rate < ? ORDER BY music_id",
+        "SELECT music_id, song_name, file_ext, bit_rate, music_size \
+         FROM song_infos WHERE bit_rate < ? AND music_size > 0 ORDER BY music_id",
     )
     .bind(max_bitrate)
     .fetch_all(pool)
@@ -226,12 +419,12 @@ async fn load_candidates(pool: &SqlitePool, max_bitrate: i64) -> Result<Vec<Cach
             name: r.get::<String, _>("song_name"),
             file_ext: r.get::<String, _>("file_ext"),
             cached_bitrate: r.get::<i64, _>("bit_rate"),
+            cached_size: r.get::<i64, _>("music_size"),
         })
         .collect();
     Ok(songs)
 }
 
-/// Count rows at/above the ceiling, for the summary line.
 async fn count_skipped(pool: &SqlitePool, max_bitrate: i64) -> Result<usize> {
     let row = sqlx::query("SELECT COUNT(*) AS n FROM song_infos WHERE bit_rate >= ?")
         .bind(max_bitrate)
@@ -240,23 +433,42 @@ async fn count_skipped(pool: &SqlitePool, max_bitrate: i64) -> Result<usize> {
     Ok(row.get::<i64, _>("n") as usize)
 }
 
-/// Probe one batch of up to `BATCH_SIZE` songs. Returns a map of
-/// `music_id → (best_bitrate, tier_key)`. Retries transient failures with
-/// backoff; an unrecoverable batch surfaces as `Err` (those ids go unclassified,
-/// i.e. left untouched — never wrongly deleted).
+// ---------------------------------------------------------------------------
+// Probe (eapi song-url, ground truth)
+// ---------------------------------------------------------------------------
+
+/// Probe one batch of ids via the real eapi song-url endpoint.
+/// Returns a map of `music_id → ServedSize` (the file the bot would actually
+/// download at level=hires). Retries transient failures with backoff; an
+/// unrecoverable batch surfaces as `Err` (those ids go unclassified, i.e. left
+/// untouched — never wrongly deleted).
 async fn probe_batch(
     client: Client,
     api: &str,
-    chunk: Vec<CachedSong>,
+    ids: Vec<i64>,
+    cookie: String,
     limiter: Arc<Semaphore>,
-) -> Result<std::collections::HashMap<i64, (i64, String)>> {
+) -> Result<HashMap<i64, ServedSize>> {
     let _permit = limiter.acquire_owned().await?;
-    let ids: Vec<i64> = chunk.iter().map(|s| s.music_id).collect();
-    let c_value: String = ids
-        .iter()
-        .map(|id| format!("{{\"id\":{id}}}"))
-        .collect::<Vec<_>>()
-        .join(",");
+
+    let path = "/api/song/enhance/player/url/v1";
+    let ids_str = format!(
+        "[{}]",
+        ids.iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let payload = serde_json::json!({
+        "ids": ids_str,
+        "level": "hires",
+        "encodeType": "mp3",
+        "header": "{}",
+    });
+    let payload_str = serde_json::to_string(&payload)?;
+    let body = eapi_params(path, &payload_str)?;
+
+    let url = format!("{api}/eapi/song/enhance/player/url/v1");
 
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..4u8 {
@@ -265,14 +477,14 @@ async fn probe_batch(
             sleep(Duration::from_millis(900u64 << attempt)).await;
         }
         let send_result = client
-            .post(format!("{api}/api/v3/song/detail"))
-            // `.body()` does not set Content-Type (unlike curl's `-d`); NetEase
-            // needs `application/x-www-form-urlencoded` to parse the `c=[...]`
-            // payload, else it returns a song-less body.
+            .post(&url)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(format!("c=[{c_value}]"))
+            .header("User-Agent", EAPI_USER_AGENT)
+            .header("Cookie", &cookie)
+            .body(body.clone())
             .send()
             .await;
+
         let resp = match send_result {
             Ok(r) => r,
             Err(e) => {
@@ -286,81 +498,102 @@ async fn probe_batch(
             continue; // 429/5xx → transient, retry
         }
         let resp = resp.error_for_status()?;
-        match resp.json::<DetailResponse>().await {
-            Ok(parsed) => {
-                if parsed.code != 200 {
-                    last_err = Some(anyhow::anyhow!("api code {}", parsed.code));
-                    continue;
-                }
-                return Ok(index_by_id(&parsed));
-            }
-            Err(e) => {
-                last_err = Some(e.into());
-                continue; // truncated body / parse error → retry
-            }
+        let raw_bytes = resp.bytes().await?;
+        // Trim leading ASCII whitespace (the bot does this too).
+        let start = raw_bytes
+            .iter()
+            .position(|&b| !b.is_ascii_whitespace())
+            .unwrap_or(0);
+        let trimmed = &raw_bytes[start..];
+
+        let parsed: EapiResponse = if trimmed.first() == Some(&b'{') {
+            // Plaintext JSON response.
+            serde_json::from_slice(trimmed).map_err(|e| anyhow::anyhow!("parse eapi json: {e}"))?
+        } else {
+            // Encrypted (hex) response — decrypt first.
+            let hex_str = std::str::from_utf8(trimmed)
+                .context("non-utf8 eapi response")?
+                .trim();
+            let decrypted = eapi_decrypt(hex_str)?;
+            serde_json::from_str(&decrypted)
+                .map_err(|e| anyhow::anyhow!("parse decrypted eapi: {e}"))?
+        };
+
+        if parsed.code != 200 {
+            last_err = Some(anyhow::anyhow!("eapi code {}", parsed.code));
+            continue; // auth or transient server issue
         }
+
+        let map: HashMap<i64, ServedSize> = parsed
+            .data
+            .into_iter()
+            .filter(|d| d.size > 0)
+            .map(|d| {
+                (
+                    d.id,
+                    ServedSize {
+                        br: d.br,
+                        size: d.size,
+                        format: d.file_type,
+                    },
+                )
+            })
+            .collect();
+
+        return Ok(map);
     }
     let err = last_err.unwrap_or_else(|| anyhow::anyhow!("probe_batch exhausted retries"));
     tracing::warn!("probe_batch failed for {} ids: {err:#}", ids.len());
     Err(err)
 }
 
-/// Map every returned song object to `id → (best_bitrate, tier_key)` by scanning
-/// all object-valued fields with a numeric `br`. The v3 schema names tiers
-/// `l/m/h/sq/hr/jm/...`; matching by shape (has `br`) auto-discovers new tiers.
-fn index_by_id(parsed: &DetailResponse) -> std::collections::HashMap<i64, (i64, String)> {
-    let mut map = std::collections::HashMap::with_capacity(parsed.songs.len());
-    for song in &parsed.songs {
-        let Some(id) = song.get("id").and_then(Value::as_i64) else {
-            continue;
-        };
-        if let Some(best) = best_tier(song) {
-            map.insert(id, best);
-        }
-    }
-    map
-}
+// ---------------------------------------------------------------------------
+// Classification (size-based, ground truth)
+// ---------------------------------------------------------------------------
 
-/// Return the `(bitrate, tier_key)` of the highest-bitrate tier object on `song`.
-fn best_tier(song: &Value) -> CatalogBest {
-    let obj = song.as_object()?;
-    let mut best: Option<(i64, String)> = None;
-    for (key, value) in obj {
-        let Some(m) = value.as_object() else {
-            continue;
-        };
-        let br = m.get("br").and_then(Value::as_i64).unwrap_or(0);
-        if br <= 0 {
-            continue;
-        }
-        if best.as_ref().is_some_and(|(b, _)| br <= *b) {
-            continue;
-        }
-        best = Some((br, key.clone()));
-    }
-    best
-}
-
-/// Classify candidates: a song is refresh-worthy when the catalog's best tier
-/// exceeds its cached bitrate by more than `margin`.
-fn classify(
+/// Classify candidates: a row is upgradeable when the served file size is
+/// materially larger than the cached file size.  This is ground truth: if the
+/// server hands back a bigger file, it's genuinely higher-resolution audio.
+/// If the sizes are the same (± re-encode noise), the cached copy is already
+/// the best the account can serve.
+fn classify_by_size(
     songs: &[CachedSong],
-    best_by_id: &std::collections::HashMap<i64, (i64, String)>,
-    margin: f64,
-) -> Vec<(CachedSong, i64, String)> {
-    let mut refresh = Vec::new();
+    served: &HashMap<i64, ServedSize>,
+    min_ratio: f64,
+) -> Vec<Upgrade> {
+    let mut upgrades = Vec::new();
     for song in songs {
-        let Some((best_br, tier)) = best_by_id.get(&song.music_id) else {
+        let Some(s) = served.get(&song.music_id) else {
             continue; // unresolved (batch error or song gone) → leave untouched
         };
-        let threshold = (song.cached_bitrate as f64 * (1.0 + margin)) as i64;
-        if *best_br > threshold {
-            refresh.push((song.clone(), *best_br, tier.clone()));
+        if song.cached_size <= 0 {
+            continue;
+        }
+        let ratio = s.size as f64 / song.cached_size as f64;
+        if ratio > min_ratio {
+            upgrades.push(Upgrade {
+                song: song.clone(),
+                served: ServedSize {
+                    br: s.br,
+                    size: s.size,
+                    format: s.format.clone(),
+                },
+                ratio,
+            });
         }
     }
-    refresh.sort_by_key(|b| std::cmp::Reverse(b.1));
-    refresh
+    // Sort by absolute byte gain descending (biggest wins first).
+    upgrades.sort_by(|a, b| {
+        let gain_a = a.served.size - a.song.cached_size;
+        let gain_b = b.served.size - b.song.cached_size;
+        gain_b.cmp(&gain_a)
+    });
+    upgrades
 }
+
+// ---------------------------------------------------------------------------
+// Safety
+// ---------------------------------------------------------------------------
 
 /// Copy `<db>` to `<db>.bak` before any deletion (bare-path form only).
 async fn backup_database(db: &str) -> Result<()> {
@@ -377,7 +610,7 @@ async fn backup_database(db: &str) -> Result<()> {
 }
 
 /// Delete candidate rows in one transaction. Opens a fresh read-write pool.
-async fn delete_candidates(db: &str, candidates: &[(CachedSong, i64, String)]) -> Result<u64> {
+async fn delete_candidates(db: &str, upgrades: &[Upgrade]) -> Result<u64> {
     let mut opts = if db.starts_with("sqlite:") {
         SqliteConnectOptions::new().filename(db.trim_start_matches("sqlite:"))
     } else {
@@ -392,9 +625,9 @@ async fn delete_candidates(db: &str, candidates: &[(CachedSong, i64, String)]) -
         .await?;
     let mut tx = pool.begin().await?;
     let mut total = 0u64;
-    for (song, _, _) in candidates {
+    for u in upgrades {
         let res = sqlx::query("DELETE FROM song_infos WHERE music_id = ?")
-            .bind(song.music_id)
+            .bind(u.song.music_id)
             .execute(&mut *tx)
             .await?;
         total += res.rows_affected();
@@ -403,41 +636,71 @@ async fn delete_candidates(db: &str, candidates: &[(CachedSong, i64, String)]) -
     Ok(total)
 }
 
+// ---------------------------------------------------------------------------
+// Report
+// ---------------------------------------------------------------------------
+
 fn print_report(
-    refresh: &[(CachedSong, i64, String)],
+    upgrades: &[Upgrade],
     probed: &[CachedSong],
     resolved: usize,
     errors: usize,
+    min_ratio: f64,
 ) {
-    eprintln!("\n================ REFRESH CANDIDATES ================");
+    eprintln!("\n================ REFRESH CANDIDATES (ground truth) ================");
     eprintln!(
-        "probed {} ids | {} resolved | {} upgradeable | {} batch errors",
+        "probed {} ids | {} resolved | {} upgradeable (served file >{:.0}% larger) | {} batch errors",
         probed.len(),
         resolved,
-        refresh.len(),
-        errors
+        upgrades.len(),
+        (min_ratio - 1.0) * 100.0,
+        errors,
     );
-    if refresh.is_empty() {
-        eprintln!("Nothing to upgrade. Every probed song is already at its catalog best.");
+    if upgrades.is_empty() {
+        eprintln!("Nothing to upgrade. Every probed song is already at its best available tier.");
         return;
     }
     eprintln!(
-        "{:>12}  {:<5}  {:>9}  {:>9}  {:<5}  name",
-        "music_id", "cache", "cached_br", "best_br", "tier"
+        "{:>12}  {:<5}  {:>9}  {:>10}  {:>9}  {:>10}  {:>6}  {:>10}  name",
+        "music_id", "ext", "cached_br", "cached_sz", "served_br", "served_sz", "ratio", "gain",
     );
-    for (song, best_br, tier) in refresh.iter().take(60) {
+    for u in upgrades.iter().take(60) {
+        let gain = u.served.size - u.song.cached_size;
         eprintln!(
-            "{:>12}  {:<5}  {:>9}  {:>9}  {:<5}  {}",
-            song.music_id,
-            song.file_ext,
-            song.cached_bitrate,
-            best_br,
-            tier,
-            truncate(&song.name, 28),
+            "{:>12}  {:<5}  {:>9}  {:>10}  {:>9}  {:>10}  {:>5.2}x  {:>+10}  {}",
+            u.song.music_id,
+            u.song.file_ext,
+            format_bps(u.song.cached_bitrate),
+            format_bytes(u.song.cached_size),
+            format_bps(u.served.br),
+            format_bytes(u.served.size),
+            u.ratio,
+            format_bytes(gain),
+            truncate(&u.song.name, 32),
         );
     }
-    if refresh.len() > 60 {
-        eprintln!("  ... and {} more (not listed).", refresh.len() - 60);
+    if upgrades.len() > 60 {
+        eprintln!("  ... and {} more (not listed).", upgrades.len() - 60);
+    }
+}
+
+fn format_bps(bps: i64) -> String {
+    if bps >= 1_000_000 {
+        format!("{:.1}M", bps as f64 / 1_000_000.0)
+    } else {
+        format!("{}k", bps / 1000)
+    }
+}
+
+fn format_bytes(bytes: i64) -> String {
+    let abs = bytes.unsigned_abs();
+    let sign = if bytes < 0 { "-" } else { "" };
+    if abs >= 1_048_576 {
+        format!("{sign}{:.1}MB", abs as f64 / 1_048_576.0)
+    } else if abs >= 1024 {
+        format!("{sign}{}KB", abs / 1024)
+    } else {
+        format!("{sign}{abs}B")
     }
 }
 

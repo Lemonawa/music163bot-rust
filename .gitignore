@@ -21,3 +21,4 @@ docs/superpowers/
 
 # local diagnostic scripts (not shipped)
 /scripts/
+dist/

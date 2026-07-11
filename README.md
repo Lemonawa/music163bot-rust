@@ -143,25 +143,31 @@ If cover download fails after 5 retries, the track is still uploaded without art
 
 Every cached track is stored as a Telegram `file_id`; the bot re-forwards that copy on repeat requests instead of re-downloading. If a track was first fetched while the bot was capped at a lower quality tier (e.g. 16-bit `lossless` FLAC before the hires fix), the bot keeps sending that lower-quality copy forever. `refresh_hires` finds those rows so the bot re-fetches them at the current (hires-capable) candidate order the next time they are requested.
 
-It probes the NetEase catalog (batch `/api/v3/song/detail`) for each cached song below a bitrate ceiling, and flags a row for refresh **only** when the catalog's best tier beats the cached bitrate by more than a margin. A blanket "delete everything below X" would waste a re-download on songs whose best available source is already what you have; this probes and deletes only the rows that genuinely have something better.
+It probes the **same endpoint the bot uses** — `/eapi/song/enhance/player/url/v1` with `level=hires` (authenticated with your `MUSIC_U` cookie) — and compares the **served file size** (bytes) against the cached file size. A row is flagged for refresh **only** when the server returns a materially larger file (≥15% by default), meaning a genuinely higher-resolution download exists. This is ground truth, not catalog metadata — earlier versions that trusted the catalog's `sq`/`hr` bitrate fields produced false positives because those fields are nominal labels (e.g. `1411000` = CD PCM rate) that don't match the actual downloadable file.
+
+**A valid `music_u` cookie is REQUIRED.** Supply it via `--music-u`, the `MUSIC_U` environment variable, or `--config <bot config.ini>` (reads `[music] music_u`).
 
 **Grab the binary** from the [CI artifacts](https://github.com/Lemonawa/music163bot-rust/actions/workflows/ci.yml) (`refresh_hires-ci-linux-x86_64-*`) or a [Release](https://github.com/Lemonawa/music163bot-rust/releases) (`refresh_hires-*`). No Rust toolchain needed.
 
 ```bash
 # Dry run — prints the refresh candidates, deletes nothing.
-./refresh_hires --db ./data/music_bot.db
+# Pass your music_u cookie (required for the tool to probe hires tier).
+./refresh_hires --db ./data/music_bot.db --music-u "00B0..."
+
+# Or read the cookie from the bot's config.ini (the [music] section).
+./refresh_hires --db ./data/music_bot.db --config config.ini
 
 # Apply — backs up the database to music_bot.db.bak, then deletes candidate
 # rows in a single transaction. The bot re-downloads them on next request.
-./refresh_hires --db ./data/music_bot.db --apply
+./refresh_hires --db ./data/music_bot.db --music-u "..." --apply
 
 # Optional: reclaim SQLite space after deletion.
 sqlite3 ./data/music_bot.db "VACUUM;"
 ```
 
-Tunable flags: `--concurrency` (batch requests, default 4), `--max-cached-bitrate` (probe ceiling, default 1_300_000), `--margin` (required upgrade fraction, default 0.15). Run `./refresh_hires --help` for the full list.
+Tunable flags: `--concurrency` (batch requests, default 3), `--batch-size` (ids per request, default 20), `--max-cached-bitrate` (probe ceiling, default 1_500_000 — covers all lossless-tier FLAC), `--min-ratio` (served/cached size ratio for upgrade, default 1.15 = 15% larger). Run `./refresh_hires --help` for the full list.
 
-**Caveat — this is a *catalog* check, not a *download* guarantee.** A flagged row means NetEase's catalog lists a higher tier than what you cached. Whether your `music_u` cookie can actually *download* that tier depends on your VIP level; NetEase silently downgrades when it cannot serve it, so a refresh may re-cache at a lower tier than the catalog promised. This is harmless (the copy is never worse than before), but some flagged rows may not actually improve after a refresh.
+**Caveat — this probes the *download endpoint*, not the catalog.** A flagged row means the server would serve a genuinely larger file at `level=hires` than what you have cached. Whether your `music_u` cookie can actually *download* that tier depends on your VIP level; NetEase silently downgrades when it cannot serve it. The tool accounts for this by comparing served file sizes (not catalog bitrates), so a downgrade that yields the same-sized file is correctly NOT flagged. However, a refresh may still re-cache at a lower tier than the served size promised if the download itself is downgraded. This is harmless (the copy is never worse than before), but some flagged rows may not actually improve after a refresh.
 
 ## Bot commands
 
