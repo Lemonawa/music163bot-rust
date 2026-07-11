@@ -202,7 +202,14 @@ pub(super) async fn select_local_upload_target(
 
 pub(super) fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
     if has_music_u {
-        &[999_000, 320_000, 128_000]
+        // Ordered high→low. Each value maps to an eapi `level` via
+        // `bitrate_to_eapi_level`: 1_999_000 → "hires" (24-bit FLAC, the tier a
+        // logged-in user with a VIP cookie can pull), 999_000 → "lossless"
+        // (16-bit FLAC), then MP3 fallbacks. NetEase silently downgrades a tier
+        // the account/song cannot serve, so requesting hires first and relying on
+        // the fallback chain yields the best available quality without extra hops
+        // when hires is honored, and degrades cleanly when it is not.
+        &[1_999_000, 999_000, 320_000, 128_000]
     } else {
         &[320_000, 128_000]
     }

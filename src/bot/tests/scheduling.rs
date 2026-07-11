@@ -63,7 +63,7 @@ fn critical_path_stage_labels_are_stable() {
 fn url_bitrate_candidates_prefers_flac_with_music_u() {
     assert_eq!(
         super::url_bitrate_candidates(true),
-        &[999_000, 320_000, 128_000]
+        &[1_999_000, 999_000, 320_000, 128_000]
     );
 }
 
