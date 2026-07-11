@@ -471,6 +471,8 @@ async fn probe_batch(
     let url = format!("{api}/eapi/song/enhance/player/url/v1");
 
     let mut last_err: Option<anyhow::Error> = None;
+    let first_id = ids.first().copied().unwrap_or(0);
+    let last_id = ids.last().copied().unwrap_or(0);
     for attempt in 0..4u8 {
         if attempt > 0 {
             // Backoff: ~1s, 2s, 4s before retries 1–3.
@@ -489,15 +491,35 @@ async fn probe_batch(
             Ok(r) => r,
             Err(e) => {
                 last_err = Some(e.into());
+                eprintln!(
+                    "  [net-err batch {first_id}..{last_id} attempt {}/4] {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
                 continue; // network/connect/timeout → retry
             }
         };
         let status = resp.status();
         if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             last_err = Some(anyhow::anyhow!("HTTP {status}"));
+            eprintln!(
+                "  [http-err batch {first_id}..{last_id} attempt {}/4] HTTP {status}",
+                attempt + 1,
+            );
             continue; // 429/5xx → transient, retry
         }
-        let resp = resp.error_for_status()?;
+        let resp = match resp.error_for_status() {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = Some(e.into());
+                eprintln!(
+                    "  [http-status batch {first_id}..{last_id} attempt {}/4] {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
+                continue; // 4xx → retry
+            }
+        };
         let raw_bytes = resp.bytes().await?;
         // Trim leading ASCII whitespace (the bot does this too).
         let start = raw_bytes
@@ -508,19 +530,65 @@ async fn probe_batch(
 
         let parsed: EapiResponse = if trimmed.first() == Some(&b'{') {
             // Plaintext JSON response.
-            serde_json::from_slice(trimmed).map_err(|e| anyhow::anyhow!("parse eapi json: {e}"))?
+            match serde_json::from_slice(trimmed) {
+                Ok(p) => p,
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("parse eapi json: {e}"));
+                    eprintln!(
+                        "  [parse-json batch {first_id}..{last_id} attempt {}/4] {}",
+                        attempt + 1,
+                        last_err.as_ref().unwrap()
+                    );
+                    continue;
+                }
+            }
         } else {
             // Encrypted (hex) response — decrypt first.
-            let hex_str = std::str::from_utf8(trimmed)
-                .context("non-utf8 eapi response")?
-                .trim();
-            let decrypted = eapi_decrypt(hex_str)?;
-            serde_json::from_str(&decrypted)
-                .map_err(|e| anyhow::anyhow!("parse decrypted eapi: {e}"))?
+            let hex_str = match std::str::from_utf8(trimmed) {
+                Ok(s) => s.trim(),
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("non-utf8 eapi response: {e}"));
+                    eprintln!(
+                        "  [parse-utf8 batch {first_id}..{last_id} attempt {}/4] {}",
+                        attempt + 1,
+                        last_err.as_ref().unwrap()
+                    );
+                    continue;
+                }
+            };
+            let decrypted = match eapi_decrypt(hex_str) {
+                Ok(d) => d,
+                Err(e) => {
+                    last_err = Some(e);
+                    eprintln!(
+                        "  [decrypt batch {first_id}..{last_id} attempt {}/4] {}",
+                        attempt + 1,
+                        last_err.as_ref().unwrap()
+                    );
+                    continue;
+                }
+            };
+            match serde_json::from_str(&decrypted) {
+                Ok(p) => p,
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("parse decrypted eapi: {e}"));
+                    eprintln!(
+                        "  [parse-decrypted batch {first_id}..{last_id} attempt {}/4] {}",
+                        attempt + 1,
+                        last_err.as_ref().unwrap()
+                    );
+                    continue;
+                }
+            }
         };
 
         if parsed.code != 200 {
             last_err = Some(anyhow::anyhow!("eapi code {}", parsed.code));
+            eprintln!(
+                "  [eapi-code batch {first_id}..{last_id} attempt {}/4] code={}",
+                attempt + 1,
+                parsed.code,
+            );
             continue; // auth or transient server issue
         }
 
@@ -543,7 +611,7 @@ async fn probe_batch(
         return Ok(map);
     }
     let err = last_err.unwrap_or_else(|| anyhow::anyhow!("probe_batch exhausted retries"));
-    tracing::warn!("probe_batch failed for {} ids: {err:#}", ids.len());
+    eprintln!("  [FAIL batch {first_id}..{last_id}] after 4 attempts: {err:#}",);
     Err(err)
 }
 
