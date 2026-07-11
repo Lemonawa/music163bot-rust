@@ -193,14 +193,22 @@ struct Upgrade {
     ratio: f64,
 }
 
+fn null_to_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
+fn null_to_zero_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    Ok(Option::<i64>::deserialize(d)?.unwrap_or(0))
+}
+
 #[derive(Deserialize)]
 struct EapiSongUrl {
     id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_zero_i64")]
     br: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_zero_i64")]
     size: i64,
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type", default, deserialize_with = "null_to_empty")]
     file_type: String,
 }
 
