@@ -1,9 +1,10 @@
 use super::{
-    Arc, Bot, BotState, InlineKeyboardButton, InlineKeyboardMarkup, MUSIC_ID_EXTRACT_FAILED_TEXT,
-    Message, ResponseResult, append_search_result_line, dispatch_parsed_music_target,
-    extract_first_trusted_music_share_url, format_artists, parse_direct_music_target,
-    sanitize_sensitive_text, send_reply_message, send_reply_text,
+    Arc, Bot, BotState, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseResult,
+    append_search_result_line, dispatch_parsed_music_target, extract_first_trusted_music_share_url,
+    format_artists, parse_direct_music_target, sanitize_sensitive_text, send_reply_message,
+    send_reply_text,
 };
+use crate::i18n::{self, ChatLanguage};
 
 pub(super) async fn handle_music_url(
     bot: &Bot,
@@ -11,12 +12,13 @@ pub(super) async fn handle_music_url(
     state: &Arc<BotState>,
     text: &str,
 ) -> ResponseResult<()> {
+    let lang = chat_lang(state, msg).await;
     if let Some(target) = parse_direct_music_target(text) {
         return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
 
     let Some(url) = extract_first_trusted_music_share_url(text) else {
-        send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
+        send_reply_text(bot, msg, i18n::tr(&lang, "music_id_extract_failed")).await?;
         return Ok(());
     };
 
@@ -31,7 +33,7 @@ pub(super) async fn handle_music_url(
                 "Failed to resolve share link: {}",
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
+            send_reply_text(bot, msg, i18n::tr(&lang, "music_id_extract_failed")).await?;
             return Ok(());
         }
     };
@@ -39,9 +41,19 @@ pub(super) async fn handle_music_url(
     if let Some(target) = parse_direct_music_target(&final_url) {
         dispatch_parsed_music_target(bot, msg, state, target).await
     } else {
-        send_reply_text(bot, msg, MUSIC_ID_EXTRACT_FAILED_TEXT).await?;
+        send_reply_text(bot, msg, i18n::tr(&lang, "music_id_extract_failed")).await?;
         Ok(())
     }
+}
+
+pub(super) async fn chat_lang(state: &Arc<BotState>, msg: &Message) -> ChatLanguage {
+    i18n::chat_language_for_message(
+        &state.database,
+        &state.chat_languages,
+        msg,
+        &state.config.default_language,
+    )
+    .await
 }
 
 pub(super) async fn handle_search_command(
@@ -50,21 +62,26 @@ pub(super) async fn handle_search_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
+    let lang = chat_lang(state, msg).await;
     let keyword = match args {
         Some(kw) if !kw.is_empty() => kw,
         _ => {
-            send_reply_text(bot, msg, "请输入搜索关键词").await?;
+            send_reply_text(bot, msg, i18n::tr(&lang, "search_need_keyword")).await?;
             return Ok(());
         }
     };
 
-    let search_msg = send_reply_message(bot, msg, "🔍 搜索中...").await?;
+    let search_msg = send_reply_message(bot, msg, i18n::tr(&lang, "search_searching")).await?;
 
     match state.music_api.search_songs(&keyword, 10).await {
         Ok(songs) => {
             if songs.is_empty() {
-                bot.edit_message_text(msg.chat.id, search_msg.id, "未找到相关歌曲")
-                    .await?;
+                bot.edit_message_text(
+                    msg.chat.id,
+                    search_msg.id,
+                    i18n::tr(&lang, "search_no_results"),
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -91,7 +108,7 @@ pub(super) async fn handle_search_command(
                 "Search failed: {}",
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            bot.edit_message_text(msg.chat.id, search_msg.id, "搜索失败，请稍后重试")
+            bot.edit_message_text(msg.chat.id, search_msg.id, i18n::tr(&lang, "search_failed"))
                 .await?;
         }
     }

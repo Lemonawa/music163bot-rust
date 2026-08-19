@@ -8,6 +8,7 @@ use super::{
     format_artists, format_error_chain, log_perf, sanitize_sensitive_text, send_reply_text,
     u64_to_i64_saturating, url_bitrate_candidates,
 };
+use crate::i18n;
 
 pub(super) async fn try_send_cached_song(
     bot: &Bot,
@@ -58,7 +59,9 @@ pub(super) async fn try_send_cached_song(
         8 * cached_song.music_size / duration_sec
     };
 
+    let lang = crate::bot::chat_lang(state, msg).await;
     let caption = build_caption(
+        &lang,
         &cached_song.song_name,
         &cached_song.song_artists,
         &cached_song.song_album,
@@ -72,6 +75,7 @@ pub(super) async fn try_send_cached_song(
     let link_target =
         cached_music_link_target(preferred_program_id.or(cached_song.program_id), music_id);
     let keyboard = create_music_keyboard_for_target(
+        &lang,
         link_target,
         music_id,
         &cached_song.song_name,
@@ -122,7 +126,8 @@ pub(super) async fn process_program(
                 "Failed to fetch program detail for {program_id}: {}",
                 sanitize_sensitive_text(&format_error_chain(&e))
             );
-            send_reply_text(bot, msg, "❌ 获取声音详情失败，请稍后重试").await?;
+            let lang = crate::bot::chat_lang(state, msg).await;
+            send_reply_text(bot, msg, i18n::tr(&lang, "voice_detail_failed")).await?;
             return Ok(());
         }
     };
@@ -195,7 +200,11 @@ pub(super) fn apply_program_metadata(
     });
 
     if detail.name.trim().is_empty() {
-        detail.name = format!("声音 {}", program.program_id);
+        detail.name = format!(
+            "{} {}",
+            i18n::tr(&i18n::default_lang_zh(), "label_program"),
+            program.program_id
+        );
     }
 
     Arc::new(detail)
@@ -210,6 +219,7 @@ pub(super) async fn process_music(
     process_music_with_context(bot, msg, state, music_id, None).await
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) async fn process_music_with_context(
     bot: &Bot,
     msg: &Message,
@@ -220,15 +230,16 @@ pub(super) async fn process_music_with_context(
     let e2e_start = std::time::Instant::now();
     let mut perf_ctx = build_perf_trace_context(state, music_id, "initial");
     let preferred_program_id = program_context.as_ref().map(|program| program.program_id);
+    let lang = crate::bot::chat_lang(state, msg).await;
     let media_label = if program_context.is_some() {
-        "声音"
+        i18n::tr(&lang, "label_program")
     } else {
-        "歌曲"
+        i18n::tr(&lang, "label_song")
     };
     let loading_text = if program_context.is_some() {
-        "🔄 正在获取声音信息..."
+        i18n::tr(&lang, "loading_program")
     } else {
-        "🔄 正在获取歌曲信息..."
+        i18n::tr(&lang, "loading_song")
     };
 
     let cache_lookup_start = std::time::Instant::now();
@@ -284,7 +295,7 @@ pub(super) async fn process_music_with_context(
             bot,
             msg.chat.id,
             status_msg.id,
-            "❌ 无法获取下载链接，可能需要VIP权限",
+            i18n::tr(&lang, "download_url_failed"),
         )
         .await;
         perf_ctx.log_stage(PERF_STAGE_E2E_TOTAL, e2e_start.elapsed());
@@ -292,7 +303,14 @@ pub(super) async fn process_music_with_context(
     }
 
     let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
-    let initial_status_text = format!("📥 正在下载: {} - {}", song_detail.name, artists);
+    let initial_status_text = i18n::tr_many_strings(
+        &lang,
+        "downloading",
+        &[
+            ("name", song_detail.name.clone()),
+            ("artists", artists.clone()),
+        ],
+    );
     let mut pending_initial_edit = {
         let bot_clone = bot.clone();
         let chat_id = msg.chat.id;
@@ -334,8 +352,8 @@ async fn fetch_detail_and_status(
     msg: &Message,
     state: &Arc<BotState>,
     music_id: u64,
-    loading_text: &str,
-    media_label: &str,
+    loading_text: String,
+    media_label: String,
 ) -> std::result::Result<
     (
         Message,
@@ -347,7 +365,7 @@ async fn fetch_detail_and_status(
     let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
 
     let status_fut = bot
-        .send_message(msg.chat.id, loading_text)
+        .send_message(msg.chat.id, loading_text.clone())
         .reply_parameters(ReplyParameters::new(msg.id))
         .send();
     let fetch_fut = state
@@ -367,7 +385,7 @@ async fn fetch_detail_and_status(
                     retry_delay_secs
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
-                bot.send_message(msg.chat.id, loading_text)
+                bot.send_message(msg.chat.id, loading_text.clone())
                     .reply_parameters(ReplyParameters::new(msg.id))
                     .send()
                     .await
@@ -385,13 +403,11 @@ async fn fetch_detail_and_status(
                 "Failed to fetch {media_label} detail/url for {music_id}: {}",
                 sanitize_sensitive_text(&format_error_chain(&e))
             );
-            edit_status_message_resilient(
-                bot,
-                msg.chat.id,
-                status_msg.id,
-                format!("❌ 获取{media_label}信息或下载链接失败，请稍后重试"),
-            )
-            .await;
+            let failure_text = {
+                let lang = crate::bot::chat_lang(state, msg).await;
+                i18n::tr_with(&lang, "fetch_media_failed", "label", &media_label)
+            };
+            edit_status_message_resilient(bot, msg.chat.id, status_msg.id, failure_text).await;
             Err(FetchOutcome::UserFacingError)
         }
     }
@@ -509,20 +525,23 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
                         ctx.music_id,
                         retry_delay_secs
                     );
-                    edit_status_message_resilient(
-                        ctx.bot,
-                        ctx.msg.chat.id,
-                        ctx.status_msg.id,
-                        format!("⚠️ Telegram 限流，等待 {retry_delay_secs} 秒后重试"),
-                    )
+                    edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
+                        let lang = crate::bot::chat_lang(ctx.state, ctx.msg).await;
+                        i18n::tr_with(&lang, "rate_limited", "secs", &retry_delay_secs)
+                    })
                     .await;
                     tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
-                    edit_status_message_resilient(
-                        ctx.bot,
-                        ctx.msg.chat.id,
-                        ctx.status_msg.id,
-                        format!("📥 正在下载: {} - {}", ctx.song_detail.name, ctx.artists),
-                    )
+                    edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
+                        let lang = crate::bot::chat_lang(ctx.state, ctx.msg).await;
+                        i18n::tr_many_strings(
+                            &lang,
+                            "downloading",
+                            &[
+                                ("name", ctx.song_detail.name.clone()),
+                                ("artists", (*ctx.artists).to_string()),
+                            ],
+                        )
+                    })
                     .await;
                     continue;
                 }
@@ -532,12 +551,10 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
                     delete_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id)
                         .await;
                 } else {
-                    edit_status_message_resilient(
-                        ctx.bot,
-                        ctx.msg.chat.id,
-                        ctx.status_msg.id,
-                        "❌ 处理失败，请稍后重试",
-                    )
+                    edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
+                        let lang = crate::bot::chat_lang(ctx.state, ctx.msg).await;
+                        i18n::tr(&lang, "error_generic")
+                    })
                     .await;
                 }
                 break;

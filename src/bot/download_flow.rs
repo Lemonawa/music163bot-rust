@@ -148,6 +148,7 @@ struct TagAndUploadParams<'a> {
     cover_retry_exhausted: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
     let (mut audio_buffer, raw_client, api_base_url) =
         process_tags_and_acquire_client(TagAndAcquireParams {
@@ -182,17 +183,22 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
         msg: p.msg,
     });
 
-    let caption = build_caption(
-        &song_info.song_name,
-        &song_info.song_artists,
-        &song_info.song_album,
-        &song_info.file_ext,
-        song_info.music_size,
-        song_info.bit_rate,
-        &p.state.bot_username,
-    );
+    let lang = crate::bot::chat_lang(p.state, p.msg).await;
+    let caption = {
+        build_caption(
+            &lang,
+            &song_info.song_name,
+            &song_info.song_artists,
+            &song_info.song_album,
+            &song_info.file_ext,
+            song_info.music_size,
+            song_info.bit_rate,
+            &p.state.bot_username,
+        )
+    };
 
     let reply_markup_json = serde_json::to_string(&create_music_keyboard_for_target(
+        &lang,
         p.link_target,
         p.song_id,
         &song_info.song_name,
@@ -242,7 +248,10 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
     .await?;
 
     if p.cover_retry_exhausted {
-        let notice = cover_download_failure_notice();
+        let notice = {
+            let lang = crate::bot::chat_lang(p.state, p.msg).await;
+            cover_download_failure_notice(&lang)
+        };
         if let Err(e) = send_reply_text(p.bot, p.msg, notice).await {
             tracing::warn!(
                 "Failed to send cover fallback notice for music_id {}: {}",
@@ -283,11 +292,17 @@ async fn acquire_permit_and_upload(mut p: UploadFlowParams<'_>) -> Result<Option
 }
 
 fn validate_downloaded_audio(downloaded: u64) -> Option<String> {
+    let lang = crate::i18n::ChatLanguage::new("zh");
     if downloaded == 0 {
-        return Some("下载失败: 文件为空".to_string());
+        return Some(crate::i18n::tr(&lang, "download_empty"));
     }
     if downloaded < 1024 {
-        return Some(format!("下载失败: 文件太小({downloaded} bytes)"));
+        return Some(crate::i18n::tr_with(
+            &lang,
+            "download_too_small",
+            "bytes",
+            &downloaded,
+        ));
     }
     None
 }

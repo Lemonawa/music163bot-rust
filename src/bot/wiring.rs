@@ -20,6 +20,9 @@ pub(super) struct BotState {
     pub runtime_metrics: RuntimeMetrics,
     pub is_official_api: bool,
     pub clearallcache_confirms: Arc<DashMap<(i64, ChatId), std::time::Instant>>,
+    /// Per-chat language override cache (`chat_id` -> locale), backed by
+    /// the `chat_settings` table. See ADR-0001.
+    pub chat_languages: Arc<DashMap<i64, String>>,
 }
 
 #[derive(Debug)]

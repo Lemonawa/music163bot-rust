@@ -1,8 +1,9 @@
 use super::{
-    Arc, Bot, BotState, Message, MusicCollectionTarget, ResponseResult,
+    Arc, Bot, BotState, Message, MusicCollectionTarget, ResponseResult, chat_lang,
     parse_music_collection_target, parse_music_id, parse_music_program_id, process_music,
     process_music_collection, process_program, sanitize_sensitive_text, send_reply_text,
 };
+use crate::i18n;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ParsedMusicTarget {
@@ -45,12 +46,13 @@ pub(super) async fn search_first_song_id_or_reply(
     keyword: &str,
     log_context: &str,
 ) -> ResponseResult<Option<u64>> {
+    let lang = chat_lang(state, msg).await;
     match state.music_api.search_songs(keyword, 1).await {
         Ok(songs) => {
             if let Some(song) = songs.first() {
                 Ok(Some(song.id))
             } else {
-                send_reply_text(bot, msg, "未找到相关歌曲").await?;
+                send_reply_text(bot, msg, i18n::tr(&lang, "search_no_results")).await?;
                 Ok(None)
             }
         }
@@ -60,7 +62,7 @@ pub(super) async fn search_first_song_id_or_reply(
                 log_context,
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            send_reply_text(bot, msg, "搜索失败，请稍后重试").await?;
+            send_reply_text(bot, msg, i18n::tr(&lang, "search_failed")).await?;
             Ok(None)
         }
     }

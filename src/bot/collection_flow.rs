@@ -1,9 +1,10 @@
 use super::{
     Arc, Bot, BotState, Bytes, CoverMode, Message, MusicCollectionTarget,
-    PERF_STAGE_COVER_DOWNLOAD, PerfTraceContext, ResponseResult, ThumbnailBuffer,
+    PERF_STAGE_COVER_DOWNLOAD, PerfTraceContext, ResponseResult, ThumbnailBuffer, chat_lang,
     exceeds_batch_download_limit, extract_retry_after_seconds, process_music,
     process_music_with_context, sanitize_sensitive_text, send_reply_text,
 };
+use crate::i18n;
 
 pub(super) fn collection_retry_delay_seconds(
     error: &impl std::fmt::Display,
@@ -26,14 +27,16 @@ pub(super) async fn process_music_collection(
         return process_djradio_collection(bot, msg, state, radio_id).await;
     }
 
+    let lang = chat_lang(state, msg).await;
+
     let (collection_name, collection_id, song_ids_result) = match target {
         MusicCollectionTarget::Playlist(playlist_id) => (
-            "歌单",
+            i18n::tr(&lang, "coll_playlist"),
             playlist_id,
             state.music_api.get_playlist_song_ids(playlist_id).await,
         ),
         MusicCollectionTarget::Album(album_id) => (
-            "专辑",
+            i18n::tr(&lang, "coll_album"),
             album_id,
             state.music_api.get_album_song_ids(album_id).await,
         ),
@@ -50,7 +53,7 @@ pub(super) async fn process_music_collection(
             send_reply_text(
                 bot,
                 msg,
-                format!("❌ 获取{collection_name}歌曲列表失败，请稍后重试"),
+                i18n::tr_with(&lang, "coll_fetch_failed", "coll", &collection_name),
             )
             .await?;
             return Ok(());
@@ -58,43 +61,67 @@ pub(super) async fn process_music_collection(
     };
 
     if song_ids.is_empty() {
-        send_reply_text(bot, msg, format!("❌ 该{collection_name}中没有可下载歌曲")).await?;
+        send_reply_text(
+            bot,
+            msg,
+            i18n::tr_with(&lang, "coll_no_songs", "coll", &collection_name),
+        )
+        .await?;
         return Ok(());
     }
 
     let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
     if exceeds_batch_download_limit(song_ids.len(), state.config.max_batch_download_tracks) {
+        let track_count = song_ids.len();
         send_reply_text(
             bot,
             msg,
-            format!(
-                "❌ 该{collection_name}包含 {} 首歌曲，超过单次下载上限 {} 首，已拒绝全部下载",
-                song_ids.len(),
-                max_tracks
+            i18n::tr_many_strings(
+                &lang,
+                "coll_too_many",
+                &[
+                    ("coll", collection_name.clone()),
+                    ("count", track_count.to_string()),
+                    ("max", max_tracks.to_string()),
+                ],
             ),
         )
         .await?;
         return Ok(());
     }
 
+    let track_count = song_ids.len();
     send_reply_text(
         bot,
         msg,
-        format!(
-            "📚 检测到{collection_name}（ID: {collection_id}），共 {} 首，开始下载",
-            song_ids.len()
+        i18n::tr_many_strings(
+            &lang,
+            "coll_detected",
+            &[
+                ("coll", collection_name.clone()),
+                ("id", collection_id.to_string()),
+                ("count", track_count.to_string()),
+            ],
         ),
     )
     .await?;
 
     let failed_count =
-        download_songs_with_retry(bot, msg, state, &song_ids, collection_name, collection_id).await;
+        download_songs_with_retry(bot, msg, state, &song_ids, &collection_name, collection_id)
+            .await;
 
     if failed_count > 0 {
         send_reply_text(
             bot,
             msg,
-            format!("⚠️ {collection_name}下载完成，但有 {failed_count} 首歌曲处理失败"),
+            i18n::tr_many_strings(
+                &lang,
+                "coll_partial_failure",
+                &[
+                    ("coll", collection_name.clone()),
+                    ("count", failed_count.to_string()),
+                ],
+            ),
         )
         .await?;
     }
@@ -146,12 +173,14 @@ async fn download_songs_with_retry(
     failed_count
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) async fn process_djradio_collection(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
     radio_id: u64,
 ) -> ResponseResult<()> {
+    let lang = chat_lang(state, msg).await;
     let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
     let fetch_limit = max_tracks.saturating_add(1);
     let (total_programs, program_tracks) = match state
@@ -165,13 +194,13 @@ pub(super) async fn process_djradio_collection(
                 "Failed to fetch djradio program list for {radio_id}: {}",
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            send_reply_text(bot, msg, "❌ 获取播客声音列表失败，请稍后重试").await?;
+            send_reply_text(bot, msg, i18n::tr(&lang, "dj_fetch_failed")).await?;
             return Ok(());
         }
     };
 
     if total_programs == 0 || program_tracks.is_empty() {
-        send_reply_text(bot, msg, "❌ 该播客中没有可下载声音").await?;
+        send_reply_text(bot, msg, i18n::tr(&lang, "dj_no_programs")).await?;
         return Ok(());
     }
 
@@ -179,8 +208,13 @@ pub(super) async fn process_djradio_collection(
         send_reply_text(
             bot,
             msg,
-            format!(
-                "❌ 该播客包含 {total_programs} 条声音，超过单次下载上限 {max_tracks} 条，已拒绝全部下载",
+            i18n::tr_many_strings(
+                &lang,
+                "dj_too_many",
+                &[
+                    ("count", total_programs.to_string()),
+                    ("max", max_tracks.to_string()),
+                ],
             ),
         )
         .await?;
@@ -196,16 +230,21 @@ pub(super) async fn process_djradio_collection(
     }
 
     if unique_tracks.is_empty() {
-        send_reply_text(bot, msg, "❌ 该播客中没有可下载声音").await?;
+        send_reply_text(bot, msg, i18n::tr(&lang, "dj_no_programs")).await?;
         return Ok(());
     }
 
+    let unique_count = unique_tracks.len();
     send_reply_text(
         bot,
         msg,
-        format!(
-            "📻 检测到播客（ID: {radio_id}），共 {} 条声音，开始下载",
-            unique_tracks.len()
+        i18n::tr_many_strings(
+            &lang,
+            "dj_detected",
+            &[
+                ("id", radio_id.to_string()),
+                ("count", unique_count.to_string()),
+            ],
         ),
     )
     .await?;
@@ -250,7 +289,7 @@ pub(super) async fn process_djradio_collection(
         send_reply_text(
             bot,
             msg,
-            format!("⚠️ 播客下载完成，但有 {failed_count} 条声音处理失败"),
+            i18n::tr_with(&lang, "dj_partial_failure", "count", &failed_count),
         )
         .await?;
     }
@@ -365,9 +404,11 @@ pub(super) async fn download_cover_assets(
     result
 }
 
-pub(super) fn cover_download_failure_notice() -> String {
-    format!(
-        "⚠️ 封面下载连续失败 {} 次，已发送无封面版本",
-        crate::music_api::ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS
+pub(super) fn cover_download_failure_notice(lang: &crate::i18n::ChatLanguage) -> String {
+    i18n::tr_with(
+        lang,
+        "cover_failure_notice",
+        "attempts",
+        &crate::music_api::ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS,
     )
 }

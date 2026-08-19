@@ -258,6 +258,8 @@ pub struct User {
     pub first_name: String,
     #[serde(default)]
     pub username: Option<String>,
+    #[serde(default)]
+    pub language_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -282,6 +284,22 @@ pub struct InlineQuery {
     pub id: String,
     pub from: User,
     pub query: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatMember {
+    pub status: String,
+    #[serde(default)]
+    pub user: Option<User>,
+}
+
+impl ChatMember {
+    /// Whether this member can change group-level settings (administrator
+    /// or creator). Used to gate `/lang` in group chats.
+    #[must_use]
+    pub fn is_privileged(&self) -> bool {
+        self.status == "administrator" || self.status == "creator"
+    }
 }
 
 // --- Telegram API response wrapper ---

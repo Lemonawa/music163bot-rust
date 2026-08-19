@@ -445,6 +445,55 @@ async fn migrate_add_program_id_column_to_existing_db() {
 }
 
 #[tokio::test]
+async fn chat_language_roundtrip_set_get_clear() {
+    let (db, temp_path) = create_temp_db("music163bot_lang").await;
+
+    assert!(
+        db.get_chat_language(555_001).await.unwrap().is_none(),
+        "unset chat should have no language override"
+    );
+
+    db.set_chat_language(555_001, "en").await.unwrap();
+    assert_eq!(
+        db.get_chat_language(555_001).await.unwrap().as_deref(),
+        Some("en")
+    );
+
+    // Upsert replaces the previous value.
+    db.set_chat_language(555_001, "zh").await.unwrap();
+    assert_eq!(
+        db.get_chat_language(555_001).await.unwrap().as_deref(),
+        Some("zh")
+    );
+
+    db.clear_chat_language(555_001).await.unwrap();
+    assert!(db.get_chat_language(555_001).await.unwrap().is_none());
+
+    // Clearing an absent row is a no-op, not an error.
+    db.clear_chat_language(555_001).await.unwrap();
+
+    drop(db);
+    cleanup_db_files(&temp_path);
+}
+
+#[tokio::test]
+async fn chat_settings_table_created_on_init() {
+    let (db, temp_path) = create_temp_db("music163bot_lang_schema").await;
+
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='chat_settings'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .expect("query schema");
+    let n: i64 = row.get("n");
+    assert_eq!(n, 1, "chat_settings table should exist after init");
+
+    drop(db);
+    cleanup_db_files(&temp_path);
+}
+
+#[tokio::test]
 async fn decode_sqlite_datetime_warns_on_unparseable_format() {
     let (db, temp_path) = create_temp_db("music163bot_ts_warn").await;
 

@@ -7,12 +7,13 @@ use super::{
     UploadCounters, VecDeque, acquire_upload_client, build_http_client, classify_message_task,
     ensure_dir, get_current_pid, handle_about_command, handle_callback,
     handle_clearallcache_command, handle_clearallcache_confirm_command, handle_help_command,
-    handle_inline_query, handle_lyric_command, handle_music_command, handle_music_url,
-    handle_rmcache_command, handle_search_command, handle_status_command, is_clearallcache_confirm,
-    is_official_telegram_api, lock_unpoisoned, maintenance_worker, message_task_limit,
-    process_music, run_upload_prewarm, sanitize_sensitive_text, should_log_command,
-    should_spawn_message_task, upload_task_limit,
+    handle_inline_query, handle_lang_command, handle_lyric_command, handle_music_command,
+    handle_music_url, handle_rmcache_command, handle_search_command, handle_status_command,
+    is_clearallcache_confirm, is_official_telegram_api, lock_unpoisoned, maintenance_worker,
+    message_task_limit, process_music, run_upload_prewarm, sanitize_sensitive_text,
+    should_log_command, should_spawn_message_task, upload_task_limit,
 };
+use crate::i18n;
 
 pub(super) fn percentile_95(samples: &VecDeque<f64>) -> f64 {
     let mut values: Vec<f64> = samples.iter().copied().collect();
@@ -61,6 +62,7 @@ pub(super) fn format_bot_memory(bot_memory_mb: Option<u64>) -> String {
 }
 
 pub(super) struct StatusTextParams<'a> {
+    pub(super) lang: &'a crate::i18n::ChatLanguage,
     pub(super) total_count: i64,
     pub(super) user_count: i64,
     pub(super) chat_count: i64,
@@ -72,38 +74,46 @@ pub(super) struct StatusTextParams<'a> {
 }
 
 pub(super) fn build_status_text(params: &StatusTextParams<'_>) -> String {
-    format!(
-        "📊 <b>系统状态</b>\n\
-<b>实时运行指标</b>\n\n\
-<b>💾 缓存</b>\n\
-• 总缓存: <code>{total_count}</code>\n\
-• 用户缓存: <code>{user_count}</code>\n\
-• 群组缓存: <code>{chat_count}</code>\n\n\
-<b>⚡ 运行缓存</b>\n\
-• 命中: <code>{hits}</code>\n\
-• 未命中: <code>{misses}</code>\n\
-• 命中率: <code>{hit_rate:.2}%</code>\n\n\
-<b>🖥️ 资源</b>\n\
-• CPU: <code>{cpu:.1}%</code>\n\
-• 系统内存: <code>{system_used}/{system_total} MB</code>\n\
-• Bot 内存: <code>{bot_memory}</code>\n\
-• 运行时长: <code>{uptime}</code>\n\n\
-<b>🚀 传输</b>\n\
-• {download_line}\n\
-• {upload_line}",
-        total_count = params.total_count,
-        user_count = params.user_count,
-        chat_count = params.chat_count,
-        hits = params.cache_snapshot.hits,
-        misses = params.cache_snapshot.misses,
-        hit_rate = params.cache_snapshot.hit_rate_percent,
-        cpu = params.resource_snapshot.cpu_percent,
-        system_used = params.resource_snapshot.system_used_memory_mb,
-        system_total = params.resource_snapshot.system_total_memory_mb,
-        bot_memory = format_bot_memory(params.resource_snapshot.bot_memory_mb),
-        uptime = params.uptime,
-        download_line = params.download_line,
-        upload_line = params.upload_line,
+    let lang = params.lang;
+    i18n::tr_many(
+        lang,
+        "status_body",
+        &[
+            ("title", &i18n::tr(lang, "status_title")),
+            ("subtitle", &i18n::tr(lang, "status_subtitle")),
+            ("cache_title", &i18n::tr(lang, "status_cache_title")),
+            ("total_count", &params.total_count),
+            ("user_count", &params.user_count),
+            ("chat_count", &params.chat_count),
+            ("runtime_title", &i18n::tr(lang, "status_runtime_title")),
+            ("hits", &params.cache_snapshot.hits),
+            ("misses", &params.cache_snapshot.misses),
+            (
+                "hit_rate",
+                &format!("{:.2}", params.cache_snapshot.hit_rate_percent),
+            ),
+            ("resource_title", &i18n::tr(lang, "status_resource_title")),
+            (
+                "cpu",
+                &format!("{:.1}", params.resource_snapshot.cpu_percent),
+            ),
+            (
+                "system_used",
+                &params.resource_snapshot.system_used_memory_mb,
+            ),
+            (
+                "system_total",
+                &params.resource_snapshot.system_total_memory_mb,
+            ),
+            (
+                "bot_memory",
+                &format_bot_memory(params.resource_snapshot.bot_memory_mb),
+            ),
+            ("uptime", &params.uptime),
+            ("transfer_title", &i18n::tr(lang, "status_transfer_title")),
+            ("download_line", &params.download_line),
+            ("upload_line", &params.upload_line),
+        ],
     )
 }
 
@@ -115,18 +125,26 @@ pub(super) fn format_uptime(duration: std::time::Duration) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
-pub(super) fn format_speed_line(label: &str, snapshot: Option<SpeedSnapshot>) -> String {
+pub(super) fn format_speed_line(
+    lang: &crate::i18n::ChatLanguage,
+    label: &str,
+    snapshot: Option<SpeedSnapshot>,
+) -> String {
     if let Some(snapshot) = snapshot {
-        format!(
-            "{label}: 实时 <code>{last:.2}</code> MB/s | 平均 <code>{avg:.2}</code> MB/s | P95 <code>{p95:.2}</code> MB/s | 样本 <code>{total}</code> (窗口 <code>{window}</code>)",
-            last = snapshot.last_mbps,
-            avg = snapshot.avg_mbps,
-            p95 = snapshot.p95_mbps,
-            total = snapshot.samples,
-            window = snapshot.recent_samples
+        i18n::tr_many(
+            lang,
+            "status_speed_line",
+            &[
+                ("label", &label),
+                ("last", &format!("{:.2}", snapshot.last_mbps)),
+                ("avg", &format!("{:.2}", snapshot.avg_mbps)),
+                ("p95", &format!("{:.2}", snapshot.p95_mbps)),
+                ("samples", &snapshot.samples),
+                ("window", &snapshot.recent_samples),
+            ],
         )
     } else {
-        format!("{label}: 暂无非缓存测速样本")
+        i18n::tr_with(lang, "status_speed_no_samples", "label", &label)
     }
 }
 
@@ -216,6 +234,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         runtime_metrics: RuntimeMetrics::new(),
         is_official_api,
         clearallcache_confirms: Arc::new(DashMap::new()),
+        chat_languages: Arc::new(DashMap::new()),
     });
 
     let prewarm_state = Arc::clone(&bot_state);
@@ -432,6 +451,7 @@ pub(super) async fn handle_command(
         "search" => handle_search_command(bot, msg, state, args).await,
         "about" => handle_about_command(bot, msg, state).await,
         "lyric" => handle_lyric_command(bot, msg, state, args).await,
+        "lang" => handle_lang_command(bot, msg, state, args).await,
         "status" => handle_status_command(bot, msg, state).await,
         "rmcache" => handle_rmcache_command(bot, msg, state, args).await,
         "clearallcache" => {
@@ -491,17 +511,8 @@ pub(super) async fn handle_start_command(
         return process_music(bot, msg, state, music_id).await;
     }
 
-    let welcome_text = format!(
-        "👋 欢迎使用网易云音乐机器人 <b>@{}</b>\n\n\
-        我可以帮你解析网易云音乐链接、搜索音乐、获取歌词。\n\n\
-        <b>主要功能：</b>\n\
-        • 直接发送网易云音乐链接进行解析\n\
-        • 使用 <code>/search &lt;关键词&gt;</code> 搜索音乐\n\
-        • 在任何聊天中使用 <code>@{} &lt;关键词&gt;</code> 进行 Inline 搜索\n\
-        • 使用 <code>/lyric &lt;关键词或ID&gt;</code> 获取歌词\n\n\
-        <b>开源地址：</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">Lemonawa/music163bot-rust</a>",
-        state.bot_username, state.bot_username
-    );
+    let lang = super::commands::chat_lang(state, msg).await;
+    let welcome_text = i18n::tr_with(&lang, "start_welcome", "bot_username", &state.bot_username);
 
     bot.send_message(msg.chat.id, welcome_text)
         .parse_mode(ParseMode::Html)

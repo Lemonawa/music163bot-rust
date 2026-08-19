@@ -39,6 +39,7 @@ mod core_flow;
 mod download_flow;
 mod entry;
 mod help_entry;
+mod lang_command;
 mod support;
 mod target_resolution;
 mod telegram_api;
@@ -50,7 +51,7 @@ use about::handle_about_command;
 use collection_flow::{
     cover_download_failure_notice, download_cover_assets, process_music_collection,
 };
-use commands::{handle_music_url, handle_search_command};
+use commands::{chat_lang, handle_music_url, handle_search_command};
 use core_flow::{process_music, process_music_with_context, process_program};
 use download_flow::{DownloadAndSendParams, download_and_send_music};
 use entry::{
@@ -59,6 +60,10 @@ use entry::{
     sample_current_process_memory_mb, sample_resource_snapshot, should_download_cover,
 };
 use help_entry::{handle_help_command, handle_music_command};
+use lang_command::{handle_lang_callback, handle_lang_command};
+
+#[cfg(test)]
+use lang_command::build_lang_keyboard;
 use support::{
     build_caption, handle_callback, handle_clearallcache_command,
     handle_clearallcache_confirm_command, handle_inline_query, handle_lyric_command,
@@ -73,11 +78,11 @@ use telegram_api::{
     send_raw_upload_form,
 };
 use upload::{
-    MUSIC_ID_EXTRACT_FAILED_TEXT, MessageTaskRoute, PERF_STAGE_PRE_UPLOAD_PATH,
-    PERF_STAGE_SELECT_URL, RAW_UPLOAD_CHUNK_SIZE, RawDocumentParams, RawUploadParams,
-    UploadBotBundle, UploadFileTarget, acquire_download_leader, append_search_result_line,
-    apply_tags_in_blocking, cached_music_link_target, classify_message_task, cleanup_audio_buffer,
-    cleanup_thumbnail_buffer, clearallcache_confirmation_prompt, collect_maintenance_signals,
+    MessageTaskRoute, PERF_STAGE_PRE_UPLOAD_PATH, PERF_STAGE_SELECT_URL, RAW_UPLOAD_CHUNK_SIZE,
+    RawDocumentParams, RawUploadParams, UploadBotBundle, UploadFileTarget, acquire_download_leader,
+    append_search_result_line, apply_tags_in_blocking, cached_music_link_target,
+    classify_message_task, cleanup_audio_buffer, cleanup_thumbnail_buffer,
+    clearallcache_confirmation_prompt, collect_maintenance_signals,
     create_music_keyboard_for_target, delete_status_message_resilient, download_chunk_bytes,
     edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit, get_upload_bot,
     is_clearallcache_confirm, is_official_telegram_api, join_futures, log_perf, maintenance_worker,

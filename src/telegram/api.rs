@@ -5,8 +5,8 @@ use serde::Deserialize;
 
 use super::error::{ResponseResult, TelegramError};
 use super::types::{
-    ChatId, InlineKeyboardMarkup, InlineQueryResult, InputFile, Message, MessageId, ParseMode,
-    ReplyParameters, Update, User,
+    ChatId, ChatMember, InlineKeyboardMarkup, InlineQueryResult, InputFile, Message, MessageId,
+    ParseMode, ReplyParameters, Update, User,
 };
 
 #[derive(Debug, Clone)]
@@ -185,6 +185,54 @@ impl TelegramBot {
             cache_time: None,
             is_personal: None,
         }
+    }
+
+    #[must_use]
+    pub fn get_chat_member(
+        &self,
+        chat_id: impl Into<ChatId>,
+        user_id: i64,
+    ) -> GetChatMemberRequest<'_> {
+        GetChatMemberRequest {
+            bot: self,
+            chat_id: chat_id.into(),
+            user_id,
+        }
+    }
+}
+
+// --- GetChatMember ---
+
+pub struct GetChatMemberRequest<'a> {
+    bot: &'a TelegramBot,
+    chat_id: ChatId,
+    user_id: i64,
+}
+
+impl GetChatMemberRequest<'_> {
+    pub async fn send(self) -> ResponseResult<ChatMember> {
+        #[derive(serde::Serialize)]
+        struct Params {
+            chat_id: i64,
+            user_id: i64,
+        }
+        self.bot
+            .call_api(
+                "getChatMember",
+                &Params {
+                    chat_id: self.chat_id.0,
+                    user_id: self.user_id,
+                },
+            )
+            .await
+    }
+}
+
+impl<'a> IntoFuture for GetChatMemberRequest<'a> {
+    type Output = ResponseResult<ChatMember>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.send())
     }
 }
 

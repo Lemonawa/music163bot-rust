@@ -1,0 +1,111 @@
+# --- generic ---
+cmd_only_admin: "❌ This command is admin-only"
+error_generic: "❌ Processing failed, please try again later"
+invalid_operation: "❌ Invalid operation"
+
+# --- search ---
+search_need_keyword: "Please enter a search keyword"
+search_searching: "🔍 Searching..."
+search_no_results: "No matching songs found"
+search_failed: "Search failed, please try again later"
+inline_search_need_keyword: "Please enter a keyword"
+inline_search_usage: "Usage: type search &lt;keyword&gt; after @%{bot_username} to search music"
+inline_search_help_desc: "Type a keyword to start searching"
+inline_howto_title: "How to use this bot?"
+inline_howto_body: "Usage:\n1. Type a keyword directly to search music\n2. Type search &lt;keyword&gt; to search music\n3. Paste a NetEase Cloud Music link\n4. Enter a song ID"
+inline_howto_desc: "Type a keyword in the input box to start searching music"
+inline_search_error_title: "Search failed"
+inline_search_error_desc: "Search failed, please try again later"
+
+# --- music command ---
+music_need_id: "Please enter a song ID or keyword"
+music_id_extract_failed: "Could not extract music ID from the link"
+download_empty: "Download failed: file is empty"
+download_too_small: "Download failed: file too small (%{bytes} bytes)"
+
+# --- core flow ---
+voice_detail_failed: "❌ Failed to fetch voice details, please try again later"
+label_program: "voice"
+label_song: "song"
+loading_program: "🔄 Fetching voice info..."
+loading_song: "🔄 Fetching song info..."
+download_url_failed: "❌ Could not get download URL (VIP may be required)"
+downloading: "📥 Downloading: %{name} - %{artists}"
+fetch_media_failed: "❌ Failed to fetch %{label} info or download URL, please try again later"
+rate_limited: "⚠️ Telegram rate limit, retrying in %{secs}s"
+
+# --- collection ---
+coll_playlist: "playlist"
+coll_album: "album"
+coll_fetch_failed: "❌ Failed to fetch %{coll} song list, please try again later"
+coll_no_songs: "❌ No downloadable songs in this %{coll}"
+coll_too_many: "❌ This %{coll} contains %{count} songs, exceeding the batch limit of %{max}; download rejected"
+coll_detected: "📚 %{coll} detected (ID: %{id}), %{count} songs in total, starting download"
+coll_partial_failure: "⚠️ %{coll} download finished, but %{count} songs failed"
+dj_fetch_failed: "❌ Failed to fetch podcast episode list, please try again later"
+dj_no_programs: "❌ No downloadable episodes in this podcast"
+dj_too_many: "❌ This podcast contains %{count} episodes, exceeding the batch limit of %{max}; download rejected"
+dj_detected: "📻 Podcast detected (ID: %{id}), %{count} episodes in total, starting download"
+dj_partial_failure: "⚠️ Podcast download finished, but %{count} episodes failed"
+
+# --- lyric ---
+lyric_searching: "🎵 Fetching lyrics..."
+lyric_failed: "Failed to fetch lyrics, please try again later"
+lyric_none: "No lyrics available for this song"
+lyric_song_info_failed: "Failed to fetch song info, please try again later"
+lyric_upload_client_failed: "Failed to initialize upload client, please try again later"
+lyric_upload_permit_failed: "Failed to acquire upload channel, please try again later"
+lyric_send_failed: "Failed to send lyrics, please try again later"
+
+# --- cache admin ---
+rmcache_usage: "Please enter the song ID whose cache to delete\n\nUsage: <code>/rmcache &lt;music ID&gt;</code>"
+rmcache_deleted: "✅ Deleted song cache: %{name}"
+rmcache_not_cached: "Song not cached"
+rmcache_delete_failed: "Failed to delete cache, please try again later"
+rmcache_invalid_id: "Invalid song ID"
+clearallcache_confirm_prompt: "⚠️ Really clear all caches?\n\nThis deletes every song cache record in the database.\n\nSend <code>/clearallcache confirm</code> within 30 seconds to confirm."
+clearallcache_started: "🗑️ Clearing all caches..."
+clearallcache_done: "✅ All caches cleared!\n\n%{count} records deleted"
+clearallcache_failed: "❌ Failed to clear caches, please try again later"
+callback_download_started: "✅ Download started"
+
+# --- status ---
+status_body: "%{title}\n%{subtitle}\n\n%{cache_title}\n• Total: <code>%{total_count}</code>\n• User: <code>%{user_count}</code>\n• Group: <code>%{chat_count}</code>\n\n%{runtime_title}\n• Hits: <code>%{hits}</code>\n• Misses: <code>%{misses}</code>\n• Hit rate: <code>%{hit_rate}%</code>\n\n%{resource_title}\n• CPU: <code>%{cpu}%</code>\n• System memory: <code>%{system_used}/%{system_total} MB</code>\n• Bot memory: <code>%{bot_memory}</code>\n• Uptime: <code>%{uptime}</code>\n\n%{transfer_title}\n• %{download_line}\n• %{upload_line}"
+status_title: "📊 <b>System Status</b>"
+status_subtitle: "<b>Live Runtime Metrics</b>"
+status_cache_title: "<b>💾 Cache</b>"
+status_total_cache: "• Total: <code>%{count}</code>"
+status_user_cache: "• User: <code>%{count}</code>"
+status_chat_cache: "• Group: <code>%{count}</code>"
+status_runtime_title: "<b>⚡ Runtime Cache</b>"
+status_hits: "• Hits: <code>%{count}</code>"
+status_misses: "• Misses: <code>%{count}</code>"
+status_hit_rate: "• Hit rate: <code>%{rate}%</code>"
+status_resource_title: "<b>🖥️ Resources</b>"
+status_memory: "• System memory: <code>%{used}/%{total} MB</code>"
+status_bot_memory: "• Bot memory: <code>%{memory}</code>"
+status_uptime: "• Uptime: <code>%{uptime}</code>"
+status_transfer_title: "<b>🚀 Transfer</b>"
+status_speed_line: "%{label}: live <code>%{last}</code> MB/s | avg <code>%{avg}</code> MB/s | P95 <code>%{p95}</code> MB/s | samples <code>%{samples}</code> (window <code>%{window}</code>)"
+status_speed_no_samples: "%{label}: no cached speed samples yet"
+status_label_download: "Download"
+status_label_upload: "Upload"
+
+# --- caption & keyboard ---
+caption: "「%{title}」- %{artists}\nAlbum: %{album}\n#NetEaseMusic #%{ext} %{size_mb}MB %{kbps}kbps\nvia @%{bot_username}"
+share_button: "Share with friends"
+cover_failure_notice: "⚠️ Cover download failed %{attempts} times in a row; sent without cover"
+
+# --- start & help ---
+start_welcome: "👋 Welcome to the NetEase Cloud Music bot <b>@%{bot_username}</b>\n\nI can parse NetEase Cloud Music links, search music, and fetch lyrics.\n\n<b>Main features:</b>\n• Send a NetEase Cloud Music link directly to parse it\n• Search with <code>/search &lt;keyword&gt;</code>\n• Inline search in any chat with <code>@%{bot_username} &lt;keyword&gt;</code>\n• Fetch lyrics with <code>/lyric &lt;keyword or ID&gt;</code>\n\n<b>Open source:</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">Lemonawa/music163bot-rust</a>"
+help_body: "📖 <b>Help</b>\n\n1️⃣ <b>Direct parsing</b>\nSend a NetEase Cloud Music link to the bot, e.g.:\n<code>https://music.163.com/song?id=12345</code>\n<code>https://music.163.com/playlist?id=12345</code>\n<code>https://music.163.com/album?id=12345</code>\n<code>https://music.163.com/program?id=12345</code>\n<code>https://music.163.com/djradio?id=12345</code>\n\n2️⃣ <b>Search</b>\nUse <code>/search &lt;keyword&gt;</code> in private chats.\n\n3️⃣ <b>Inline search</b>\nType <code>@%{bot_username} &lt;keyword&gt;</code> in any chat to quickly search and share music.\n\n4️⃣ <b>Lyrics</b>\nUse <code>/lyric &lt;keyword or ID&gt;</code> to fetch lyrics.\n\n5️⃣ <b>More commands</b>\n• <code>/status</code> - system status (admin only)\n• <code>/about</code> - about this bot\n\n💬 <b>Project page:</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">GitHub</a>"
+about_body: "🎵 Music163bot-Rust v%{version} (%{commit})\n\nNetEase Cloud Music Telegram bot: link parsing, search & download, lyrics.\n\nWritten in Rust, lightweight and highly concurrent.\n\nSource: GitHub | Original: Music163bot-Go"
+
+# --- /lang ---
+lang_select: "🌐 请选择语言 / Select language:"
+lang_set: "✅ Language set to %{lang}"
+lang_auto: "🔄 Automatic language detection restored"
+lang_admin_only: "❌ This command is group-admin only"
+lang_admin_check_failed: "❌ Could not verify permissions, please try again later"
+lang_unknown: "❌ Invalid language code, available: %{locales}"
+lang_automatic: "自动检测 / Auto"

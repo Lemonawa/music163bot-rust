@@ -32,7 +32,7 @@ fn cover_policy_requires_download_when_embed_or_thumbnail() {
 
 #[test]
 fn cover_download_failure_notice_mentions_retry_budget_and_fallback() {
-    let notice = super::cover_download_failure_notice();
+    let notice = super::cover_download_failure_notice(&crate::i18n::default_lang_zh());
     assert!(notice.contains('5'));
     assert!(notice.contains("无封面"));
 }

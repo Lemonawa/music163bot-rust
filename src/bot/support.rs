@@ -1,15 +1,16 @@
 use super::{
-    Arc, Bot, BotState, Bytes, CallbackQuery, ChatId, Config, InlineQuery, InlineQueryResult,
+    Arc, Bot, BotState, Bytes, CallbackQuery, ChatId, InlineQuery, InlineQueryResult,
     InlineQueryResultArticle, InputMessageContent, InputMessageContentText,
     MaybeInaccessibleMessage, Message, ParseMode, RawDocumentParams, ReplyParameters,
     ResponseResult, StatusTextParams, acquire_upload_client, acquire_upload_permit,
-    build_status_text, clean_filename, clearallcache_confirmation_prompt, ensure_admin,
-    format_artists, format_speed_line, format_uptime, join_futures, parse_inline_query_keyword,
-    parse_music_id, parse_song_id_or_search_first_result, process_music, raw_send_document_bytes,
-    require_command_args_or_reply, rmcache_usage_prompt, sample_resource_snapshot,
-    sanitize_sensitive_text, send_reply_html, send_reply_message, send_reply_text,
-    u64_to_i64_saturating,
+    build_status_text, chat_lang, clean_filename, clearallcache_confirmation_prompt, ensure_admin,
+    format_artists, format_speed_line, format_uptime, handle_lang_callback, join_futures,
+    parse_inline_query_keyword, parse_music_id, parse_song_id_or_search_first_result,
+    process_music, raw_send_document_bytes, require_command_args_or_reply, rmcache_usage_prompt,
+    sample_resource_snapshot, sanitize_sensitive_text, send_reply_html, send_reply_message,
+    send_reply_text, u64_to_i64_saturating,
 };
+use crate::i18n::{self, ChatLanguage};
 
 pub(super) async fn handle_lyric_command(
     bot: &Bot,
@@ -17,7 +18,9 @@ pub(super) async fn handle_lyric_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let Some(args) = require_command_args_or_reply(bot, msg, args, "请输入歌曲ID或关键词").await?
+    let lang = chat_lang(state, msg).await;
+    let Some(args) =
+        require_command_args_or_reply(bot, msg, args, &i18n::tr(&lang, "music_need_id")).await?
     else {
         return Ok(());
     };
@@ -28,7 +31,7 @@ pub(super) async fn handle_lyric_command(
         return Ok(());
     };
 
-    let status_msg = send_reply_message(bot, msg, "🎵 正在获取歌词...").await?;
+    let status_msg = send_reply_message(bot, msg, i18n::tr(&lang, "lyric_searching")).await?;
 
     match join_futures(
         state.music_api.get_song_lyric(music_id),
@@ -37,15 +40,24 @@ pub(super) async fn handle_lyric_command(
     .await
     {
         (Ok(lyric), detail_result) => {
-            handle_lyric_success(bot, msg, state, &status_msg, music_id, lyric, detail_result)
-                .await?;
+            handle_lyric_success(
+                bot,
+                msg,
+                state,
+                &lang,
+                &status_msg,
+                music_id,
+                lyric,
+                detail_result,
+            )
+            .await?;
         }
         (Err(e), _) => {
             tracing::warn!(
                 "Failed to fetch lyric: {}",
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            bot.edit_message_text(msg.chat.id, status_msg.id, "获取歌词失败，请稍后重试")
+            bot.edit_message_text(msg.chat.id, status_msg.id, i18n::tr(&lang, "lyric_failed"))
                 .await?;
         }
     }
@@ -53,17 +65,19 @@ pub(super) async fn handle_lyric_command(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_lyric_success(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
+    lang: &ChatLanguage,
     status_msg: &Message,
     music_id: u64,
     lyric: String,
     detail_result: Result<Arc<crate::music_api::SongDetail>, impl std::fmt::Display>,
 ) -> ResponseResult<()> {
     if lyric.trim().is_empty() || lyric == "No lyrics available" {
-        bot.edit_message_text(msg.chat.id, status_msg.id, "该歌曲暂无歌词")
+        bot.edit_message_text(msg.chat.id, status_msg.id, i18n::tr(lang, "lyric_none"))
             .await?;
         return Ok(());
     }
@@ -75,8 +89,12 @@ async fn handle_lyric_success(
                 "Failed to fetch lyric song detail for {music_id}: {}",
                 sanitize_sensitive_text(&e.to_string())
             );
-            bot.edit_message_text(msg.chat.id, status_msg.id, "获取歌曲信息失败，请稍后重试")
-                .await?;
+            bot.edit_message_text(
+                msg.chat.id,
+                status_msg.id,
+                i18n::tr(lang, "lyric_song_info_failed"),
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -101,7 +119,7 @@ async fn handle_lyric_success(
             bot.edit_message_text(
                 msg.chat.id,
                 status_msg.id,
-                "初始化上传客户端失败，请稍后重试",
+                i18n::tr(lang, "lyric_upload_client_failed"),
             )
             .await?;
             return Ok(());
@@ -114,8 +132,12 @@ async fn handle_lyric_success(
                 "Failed to acquire lyric upload permit: {}",
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            bot.edit_message_text(msg.chat.id, status_msg.id, "等待上传通道失败，请稍后重试")
-                .await?;
+            bot.edit_message_text(
+                msg.chat.id,
+                status_msg.id,
+                i18n::tr(lang, "lyric_upload_permit_failed"),
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -149,8 +171,12 @@ async fn handle_lyric_success(
                 "Failed to upload lyric file: {}",
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            bot.edit_message_text(msg.chat.id, status_msg.id, "发送歌词失败，请稍后重试")
-                .await?;
+            bot.edit_message_text(
+                msg.chat.id,
+                status_msg.id,
+                i18n::tr(lang, "lyric_send_failed"),
+            )
+            .await?;
         }
     }
 
@@ -162,10 +188,11 @@ pub(super) async fn handle_status_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    if !ensure_admin(bot, msg, &state.config).await? {
+    if !ensure_admin(bot, msg, state).await? {
         return Ok(());
     }
 
+    let lang = chat_lang(state, msg).await;
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     let chat_id = msg.chat.id.0;
 
@@ -178,9 +205,15 @@ pub(super) async fn handle_status_command(
     let resource_snapshot = sample_resource_snapshot();
     let (download_speed, upload_speed) = state.runtime_metrics.speed_snapshots();
     let uptime = format_uptime(state.runtime_metrics.uptime());
-    let download_line = format_speed_line("下载", download_speed);
-    let upload_line = format_speed_line("上传", upload_speed);
+    let download_line = format_speed_line(
+        &lang,
+        &i18n::tr(&lang, "status_label_download"),
+        download_speed,
+    );
+    let upload_line =
+        format_speed_line(&lang, &i18n::tr(&lang, "status_label_upload"), upload_speed);
     let status_text = build_status_text(&StatusTextParams {
+        lang: &lang,
         total_count,
         user_count,
         chat_count,
@@ -205,14 +238,15 @@ pub(super) async fn handle_rmcache_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let Some(_user_id) = authorize_admin_command(bot, msg, &state.config, "rmcache").await? else {
+    let Some(_user_id) = authorize_admin_command(bot, msg, state, "rmcache").await? else {
         return Ok(());
     };
 
+    let lang = chat_lang(state, msg).await;
     let args = args.unwrap_or_default();
 
     if args.is_empty() {
-        send_reply_html(bot, msg, rmcache_usage_prompt()).await?;
+        send_reply_html(bot, msg, rmcache_usage_prompt(&lang)).await?;
         return Ok(());
     }
 
@@ -226,11 +260,11 @@ pub(super) async fn handle_rmcache_command(
                         send_reply_text(
                             bot,
                             msg,
-                            format!("✅ 已删除歌曲缓存: {}", song_info.song_name),
+                            i18n::tr_with(&lang, "rmcache_deleted", "name", &song_info.song_name),
                         )
                         .await?;
                     } else {
-                        send_reply_text(bot, msg, "歌曲未缓存").await?;
+                        send_reply_text(bot, msg, i18n::tr(&lang, "rmcache_not_cached")).await?;
                     }
                 }
                 Err(e) => {
@@ -238,14 +272,14 @@ pub(super) async fn handle_rmcache_command(
                         "Failed to delete cached song {music_id}: {}",
                         sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                     );
-                    send_reply_text(bot, msg, "删除缓存失败，请稍后重试").await?;
+                    send_reply_text(bot, msg, i18n::tr(&lang, "rmcache_delete_failed")).await?;
                 }
             }
         } else {
-            send_reply_text(bot, msg, "歌曲未缓存").await?;
+            send_reply_text(bot, msg, i18n::tr(&lang, "rmcache_not_cached")).await?;
         }
     } else {
-        send_reply_text(bot, msg, "无效的歌曲ID").await?;
+        send_reply_text(bot, msg, i18n::tr(&lang, "rmcache_invalid_id")).await?;
     }
 
     Ok(())
@@ -256,12 +290,12 @@ pub(super) async fn handle_clearallcache_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let Some(_user_id) = authorize_admin_command(bot, msg, &state.config, "clearallcache").await?
-    else {
+    let Some(_user_id) = authorize_admin_command(bot, msg, state, "clearallcache").await? else {
         return Ok(());
     };
 
-    send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
+    let lang = chat_lang(state, msg).await;
+    send_reply_html(bot, msg, clearallcache_confirmation_prompt(&lang)).await?;
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     prune_expired_confirmations(&state.clearallcache_confirms);
     state
@@ -276,11 +310,12 @@ pub(super) async fn handle_clearallcache_confirm_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let Some(user_id) =
-        authorize_admin_command(bot, msg, &state.config, "clearallcache confirm").await?
+    let Some(user_id) = authorize_admin_command(bot, msg, state, "clearallcache confirm").await?
     else {
         return Ok(());
     };
+
+    let lang = chat_lang(state, msg).await;
 
     let should_allow = state
         .clearallcache_confirms
@@ -288,11 +323,11 @@ pub(super) async fn handle_clearallcache_confirm_command(
         .and_then(|(_, at)| (at.elapsed() <= CLEARALLCACHE_CONFIRM_WINDOW).then_some(()))
         .is_some();
     if !should_allow {
-        send_reply_html(bot, msg, clearallcache_confirmation_prompt()).await?;
+        send_reply_html(bot, msg, clearallcache_confirmation_prompt(&lang)).await?;
         return Ok(());
     }
 
-    let status_msg = send_reply_message(bot, msg, "🗑️ 正在清除所有缓存...").await?;
+    let status_msg = send_reply_message(bot, msg, i18n::tr(&lang, "clearallcache_started")).await?;
 
     match state.database.clear_all_songs().await {
         Ok(count) => {
@@ -303,7 +338,7 @@ pub(super) async fn handle_clearallcache_confirm_command(
             bot.edit_message_text(
                 msg.chat.id,
                 status_msg.id,
-                format!("✅ 成功清除所有缓存！\n\n删除了 {count} 条记录"),
+                i18n::tr_with(&lang, "clearallcache_done", "count", &count),
             )
             .await?;
 
@@ -314,8 +349,12 @@ pub(super) async fn handle_clearallcache_confirm_command(
             );
         }
         Err(e) => {
-            bot.edit_message_text(msg.chat.id, status_msg.id, "❌ 清除缓存失败，请稍后重试")
-                .await?;
+            bot.edit_message_text(
+                msg.chat.id,
+                status_msg.id,
+                i18n::tr(&lang, "clearallcache_failed"),
+            )
+            .await?;
 
             tracing::error!(
                 "Failed to clear all cache: {}",
@@ -330,10 +369,10 @@ pub(super) async fn handle_clearallcache_confirm_command(
 pub(super) async fn ensure_admin_user_id(
     bot: &Bot,
     msg: &Message,
-    config: &Config,
+    state: &Arc<BotState>,
 ) -> ResponseResult<Option<i64>> {
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
-    if ensure_admin(bot, msg, config).await? {
+    if ensure_admin(bot, msg, state).await? {
         Ok(Some(user_id))
     } else {
         Ok(None)
@@ -343,10 +382,10 @@ pub(super) async fn ensure_admin_user_id(
 pub(super) async fn authorize_admin_command(
     bot: &Bot,
     msg: &Message,
-    config: &Config,
+    state: &Arc<BotState>,
     command_name: &str,
 ) -> ResponseResult<Option<i64>> {
-    let Some(user_id) = ensure_admin_user_id(bot, msg, config).await? else {
+    let Some(user_id) = ensure_admin_user_id(bot, msg, state).await? else {
         return Ok(None);
     };
 
@@ -354,7 +393,7 @@ pub(super) async fn authorize_admin_command(
         "{} command from user_id: {}, configured admins: {:?}",
         command_name,
         user_id,
-        config.bot_admin
+        state.config.bot_admin
     );
 
     Ok(Some(user_id))
@@ -365,7 +404,19 @@ pub(super) async fn handle_callback(
     query: CallbackQuery,
     state: Arc<BotState>,
 ) -> ResponseResult<()> {
-    if let Some(data) = query.data
+    let callback_data = query.data.clone();
+    let callback_lang = match query.message.as_ref() {
+        Some(MaybeInaccessibleMessage::Regular(msg)) => Some(chat_lang(&state, msg).await),
+        _ => None,
+    };
+    let tr = |key: &str| {
+        callback_lang.as_ref().map_or_else(
+            || i18n::tr(&i18n::default_language(&state.config), key),
+            |l| i18n::tr(l, key),
+        )
+    };
+
+    if let Some(data) = callback_data.as_deref()
         && let Some((cmd, rest)) = data.split_once(' ')
         && cmd == "music"
         && let Ok(music_id) = rest.trim_start().parse::<u64>()
@@ -374,7 +425,7 @@ pub(super) async fn handle_callback(
         match process_music(&bot, msg, &state, music_id).await {
             Ok(()) => {
                 bot.answer_callback_query(query.id)
-                    .text("✅ 开始下载")
+                    .text(tr("callback_download_started"))
                     .await?;
             }
             Err(e) => {
@@ -383,15 +434,23 @@ pub(super) async fn handle_callback(
                     sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
                 );
                 bot.answer_callback_query(query.id)
-                    .text("❌ 处理失败，请稍后重试")
+                    .text(tr("error_generic"))
                     .await?;
             }
         }
         return Ok(());
     }
 
+    if let Some(action) = callback_data
+        .as_deref()
+        .and_then(|d| d.strip_prefix("lang:set:"))
+        && handle_lang_callback(&bot, &query, &state, action).await?
+    {
+        return Ok(());
+    }
+
     bot.answer_callback_query(query.id)
-        .text("❌ 无效的操作")
+        .text(tr("invalid_operation"))
         .await?;
 
     Ok(())
@@ -402,6 +461,16 @@ pub(super) async fn handle_inline_query(
     query: InlineQuery,
     state: Arc<BotState>,
 ) -> ResponseResult<()> {
+    // Inline queries always come from a private "chat" with the bot: resolve
+    // the language from the querent's user id (== private chat id).
+    let lang = i18n::resolve_inline_language(
+        &state.database,
+        &state.chat_languages,
+        &query.from,
+        &state.config.default_language,
+    )
+    .await;
+
     // Support "search" prefix for consistency with Go version
     let (search_keyword, is_search_cmd) = parse_inline_query_keyword(&query.query);
 
@@ -409,25 +478,28 @@ pub(super) async fn handle_inline_query(
         if is_search_cmd {
             let help_article = InlineQueryResultArticle::new(
                 "search_help",
-                "请输入关键词",
-                InputMessageContent::Text(InputMessageContentText::new(format!(
-                    "使用方法：在 @{} 后面输入 search 关键词 搜索音乐",
-                    state.bot_username
+                i18n::tr(&lang, "inline_search_need_keyword"),
+                InputMessageContent::Text(InputMessageContentText::new(i18n::tr_with(
+                    &lang,
+                    "inline_search_usage",
+                    "bot_username",
+                    &state.bot_username,
                 ))),
             )
-            .description("输入关键词开始搜索");
+            .description(i18n::tr(&lang, "inline_search_help_desc"));
 
             bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(help_article)])
                 .await?;
         } else {
             let help_article = InlineQueryResultArticle::new(
                 "usage_help",
-                "如何使用此机器人？",
-                InputMessageContent::Text(InputMessageContentText::new(
-                    "使用方法：\n1. 直接输入关键词搜索音乐\n2. 输入 search 关键词 搜索音乐\n3. 粘贴网易云音乐链接\n4. 输入歌曲 ID".to_string()
-                )),
-             )
-            .description("在输入框中输入关键词开始搜索音乐");
+                i18n::tr(&lang, "inline_howto_title"),
+                InputMessageContent::Text(InputMessageContentText::new(i18n::tr(
+                    &lang,
+                    "inline_howto_body",
+                ))),
+            )
+            .description(i18n::tr(&lang, "inline_howto_desc"));
 
             bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(help_article)])
                 .await?;
@@ -466,12 +538,13 @@ pub(super) async fn handle_inline_query(
             );
             let error_article = InlineQueryResultArticle::new(
                 "search_error",
-                "搜索失败",
-                InputMessageContent::Text(InputMessageContentText::new(
-                    "搜索失败，请稍后重试".to_string(),
-                )),
+                i18n::tr(&lang, "inline_search_error_title"),
+                InputMessageContent::Text(InputMessageContentText::new(i18n::tr(
+                    &lang,
+                    "inline_search_error_desc",
+                ))),
             )
-            .description("搜索失败，请稍后重试");
+            .description(i18n::tr(&lang, "inline_search_error_desc"));
 
             bot.answer_inline_query(query.id, vec![InlineQueryResult::Article(error_article)])
                 .await?;
@@ -495,7 +568,9 @@ pub(super) fn prune_expired_confirmations(
 /// 专辑: Album
 /// #网易云音乐 #ext {sizeMB}MB {kbps}kbps
 /// via @`BotName`
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_caption(
+    lang: &ChatLanguage,
     title: &str,
     artists: &str,
     album: &str,
@@ -506,8 +581,18 @@ pub(super) fn build_caption(
 ) -> String {
     let size_mb = format_size_mb(size_bytes);
     let kbps = format_bitrate_kbps(bitrate_bps);
-    format!(
-        "「{title}」- {artists}\n专辑: {album}\n#网易云音乐 #{file_ext} {size_mb}MB {kbps}kbps\nvia @{bot_username}",
+    i18n::tr_many(
+        lang,
+        "caption",
+        &[
+            ("title", &title),
+            ("artists", &artists),
+            ("album", &album),
+            ("ext", &file_ext),
+            ("size_mb", &size_mb),
+            ("kbps", &kbps),
+            ("bot_username", &bot_username),
+        ],
     )
 }
 

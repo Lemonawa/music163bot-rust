@@ -117,13 +117,16 @@ fn runtime_metrics_speed_window_keeps_recent_samples() {
 
 #[test]
 fn speed_line_reports_cache_hit_when_no_samples() {
-    let line = super::format_speed_line("下载", None);
+    let lang = crate::i18n::default_lang_zh();
+    let line = super::format_speed_line(&lang, "下载", None);
     assert!(line.contains("暂无非缓存测速样本"));
 }
 
 #[test]
 fn speed_line_uses_monospace_for_numeric_values() {
+    let lang = crate::i18n::default_lang_zh();
     let line = super::format_speed_line(
+        &lang,
         "下载",
         Some(super::SpeedSnapshot {
             last_mbps: 6.0,
@@ -153,6 +156,7 @@ fn status_text_uses_section_layout_and_split_memory_fields() {
         bot_memory_mb: Some(12),
     };
     let text = super::build_status_text(&super::StatusTextParams {
+        lang: &crate::i18n::default_lang_zh(),
         total_count: 100,
         user_count: 20,
         chat_count: 8,
@@ -175,19 +179,19 @@ fn status_text_uses_section_layout_and_split_memory_fields() {
 
 #[test]
 fn rmcache_usage_prompt_uses_html_code() {
-    let text = super::rmcache_usage_prompt();
+    let text = super::rmcache_usage_prompt(&crate::i18n::default_lang_zh());
     assert!(text.contains("<code>/rmcache &lt;音乐ID&gt;</code>"));
 }
 
 #[test]
 fn clearallcache_confirmation_prompt_uses_html_code() {
-    let text = super::clearallcache_confirmation_prompt();
+    let text = super::clearallcache_confirmation_prompt(&crate::i18n::default_lang_zh());
     assert!(text.contains("<code>/clearallcache confirm</code>"));
 }
 
 #[test]
 fn about_text_includes_build_commit_in_version_line() {
-    let text = super::build_about_text();
+    let text = super::build_about_text(&crate::i18n::default_lang_zh());
     assert!(text.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
     assert!(text.contains(&format!("({})", super::BUILD_GIT_COMMIT)));
 }
@@ -420,6 +424,7 @@ fn format_uptime_99_hours() {
 #[test]
 fn build_caption_formats_all_fields() {
     let caption = super::build_caption(
+        &crate::i18n::default_lang_zh(),
         "Test Song",
         "Artist A",
         "Album B",
@@ -437,14 +442,32 @@ fn build_caption_formats_all_fields() {
 
 #[test]
 fn build_caption_zero_size() {
-    let caption = super::build_caption("S", "A", "B", "mp3", 0, 320_000, "bot");
+    let caption = super::build_caption(
+        &crate::i18n::default_lang_zh(),
+        "S",
+        "A",
+        "B",
+        "mp3",
+        0,
+        320_000,
+        "bot",
+    );
     assert!(caption.contains("0.00MB"));
     assert!(caption.contains("320.00kbps"));
 }
 
 #[test]
 fn build_caption_handles_empty_strings() {
-    let caption = super::build_caption("", "", "", "mp3", 1024, 128_000, "bot");
+    let caption = super::build_caption(
+        &crate::i18n::default_lang_zh(),
+        "",
+        "",
+        "",
+        "mp3",
+        1024,
+        128_000,
+        "bot",
+    );
     assert!(caption.contains("「」- "));
     assert!(caption.contains("专辑: "));
     assert!(caption.contains("#网易云音乐 #mp3"));

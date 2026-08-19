@@ -176,6 +176,9 @@ pub struct Config {
     pub bot_admin: Vec<i64>,
     pub database: String,
     pub log_level: String,
+    /// Fallback language when no `/lang` override exists and auto-detection
+    /// does not apply (group chats). Must match a locale file in `locales/`.
+    pub default_language: String,
     pub cache_dir: String,
     #[serde(flatten)]
     pub flags: ConfigFlags,
@@ -230,6 +233,7 @@ impl Default for Config {
             bot_admin: Vec::new(),
             database: "./data/music_bot.db".to_string(),
             log_level: "info".to_string(),
+            default_language: "zh".to_string(),
             cache_dir: "./downloads".to_string(),
             flags: ConfigFlags::default(),
             max_retry_times: 3,

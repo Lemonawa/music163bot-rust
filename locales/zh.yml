@@ -1,0 +1,111 @@
+# --- generic ---
+cmd_only_admin: "❌ 该命令仅限管理员使用"
+error_generic: "❌ 处理失败，请稍后重试"
+invalid_operation: "❌ 无效的操作"
+
+# --- search ---
+search_need_keyword: "请输入搜索关键词"
+search_searching: "🔍 搜索中..."
+search_no_results: "未找到相关歌曲"
+search_failed: "搜索失败，请稍后重试"
+inline_search_need_keyword: "请输入关键词"
+inline_search_usage: "使用方法：在 @%{bot_username} 后面输入 search 关键词 搜索音乐"
+inline_search_help_desc: "输入关键词开始搜索"
+inline_howto_title: "如何使用此机器人？"
+inline_howto_body: "使用方法：\n1. 直接输入关键词搜索音乐\n2. 输入 search 关键词 搜索音乐\n3. 粘贴网易云音乐链接\n4. 输入歌曲 ID"
+inline_howto_desc: "在输入框中输入关键词开始搜索音乐"
+inline_search_error_title: "搜索失败"
+inline_search_error_desc: "搜索失败，请稍后重试"
+
+# --- music command ---
+music_need_id: "请输入歌曲ID或歌曲关键词"
+music_id_extract_failed: "无法从链接中提取音乐ID"
+download_empty: "下载失败: 文件为空"
+download_too_small: "下载失败: 文件太小(%{bytes} bytes)"
+
+# --- core flow ---
+voice_detail_failed: "❌ 获取声音详情失败，请稍后重试"
+label_program: "声音"
+label_song: "歌曲"
+loading_program: "🔄 正在获取声音信息..."
+loading_song: "🔄 正在获取歌曲信息..."
+download_url_failed: "❌ 无法获取下载链接，可能需要VIP权限"
+downloading: "📥 正在下载: %{name} - %{artists}"
+fetch_media_failed: "❌ 获取%{label}信息或下载链接失败，请稍后重试"
+rate_limited: "⚠️ Telegram 限流，等待 %{secs} 秒后重试"
+
+# --- collection ---
+coll_playlist: "歌单"
+coll_album: "专辑"
+coll_fetch_failed: "❌ 获取%{coll}歌曲列表失败，请稍后重试"
+coll_no_songs: "❌ 该%{coll}中没有可下载歌曲"
+coll_too_many: "❌ 该%{coll}包含 %{count} 首歌曲，超过单次下载上限 %{max} 首，已拒绝全部下载"
+coll_detected: "📚 检测到%{coll}（ID: %{id}），共 %{count} 首，开始下载"
+coll_partial_failure: "⚠️ %{coll}下载完成，但有 %{count} 首歌曲处理失败"
+dj_fetch_failed: "❌ 获取播客声音列表失败，请稍后重试"
+dj_no_programs: "❌ 该播客中没有可下载声音"
+dj_too_many: "❌ 该播客包含 %{count} 条声音，超过单次下载上限 %{max} 条，已拒绝全部下载"
+dj_detected: "📻 检测到播客（ID: %{id}），共 %{count} 条声音，开始下载"
+dj_partial_failure: "⚠️ 播客下载完成，但有 %{count} 条声音处理失败"
+
+# --- lyric ---
+lyric_searching: "🎵 正在获取歌词..."
+lyric_failed: "获取歌词失败，请稍后重试"
+lyric_none: "该歌曲暂无歌词"
+lyric_song_info_failed: "获取歌曲信息失败，请稍后重试"
+lyric_upload_client_failed: "初始化上传客户端失败，请稍后重试"
+lyric_upload_permit_failed: "等待上传通道失败，请稍后重试"
+lyric_send_failed: "发送歌词失败，请稍后重试"
+
+# --- cache admin ---
+rmcache_usage: "请输入要删除缓存的歌曲ID\n\n用法: <code>/rmcache &lt;音乐ID&gt;</code>"
+rmcache_deleted: "✅ 已删除歌曲缓存: %{name}"
+rmcache_not_cached: "歌曲未缓存"
+rmcache_delete_failed: "删除缓存失败，请稍后重试"
+rmcache_invalid_id: "无效的歌曲ID"
+clearallcache_confirm_prompt: "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 <code>/clearallcache confirm</code> 确认操作。"
+clearallcache_started: "🗑️ 正在清除所有缓存..."
+clearallcache_done: "✅ 成功清除所有缓存！\n\n删除了 %{count} 条记录"
+clearallcache_failed: "❌ 清除缓存失败，请稍后重试"
+callback_download_started: "✅ 开始下载"
+
+# --- status ---
+status_body: "%{title}\n%{subtitle}\n\n%{cache_title}\n• 总缓存: <code>%{total_count}</code>\n• 用户缓存: <code>%{user_count}</code>\n• 群组缓存: <code>%{chat_count}</code>\n\n%{runtime_title}\n• 命中: <code>%{hits}</code>\n• 未命中: <code>%{misses}</code>\n• 命中率: <code>%{hit_rate}%</code>\n\n%{resource_title}\n• CPU: <code>%{cpu}%</code>\n• 系统内存: <code>%{system_used}/%{system_total} MB</code>\n• Bot 内存: <code>%{bot_memory}</code>\n• 运行时长: <code>%{uptime}</code>\n\n%{transfer_title}\n• %{download_line}\n• %{upload_line}"
+status_title: "📊 <b>系统状态</b>"
+status_subtitle: "<b>实时运行指标</b>"
+status_cache_title: "<b>💾 缓存</b>"
+status_total_cache: "• 总缓存: <code>%{count}</code>"
+status_user_cache: "• 用户缓存: <code>%{count}</code>"
+status_chat_cache: "• 群组缓存: <code>%{count}</code>"
+status_runtime_title: "<b>⚡ 运行缓存</b>"
+status_hits: "• 命中: <code>%{count}</code>"
+status_misses: "• 未命中: <code>%{count}</code>"
+status_hit_rate: "• 命中率: <code>%{rate}%</code>"
+status_resource_title: "<b>🖥️ 资源</b>"
+status_memory: "• 系统内存: <code>%{used}/%{total} MB</code>"
+status_bot_memory: "• Bot 内存: <code>%{memory}</code>"
+status_uptime: "• 运行时长: <code>%{uptime}</code>"
+status_transfer_title: "<b>🚀 传输</b>"
+status_speed_line: "%{label}: 实时 <code>%{last}</code> MB/s | 平均 <code>%{avg}</code> MB/s | P95 <code>%{p95}</code> MB/s | 样本 <code>%{samples}</code> (窗口 <code>%{window}</code>)"
+status_speed_no_samples: "%{label}: 暂无非缓存测速样本"
+status_label_download: "下载"
+status_label_upload: "上传"
+
+# --- caption & keyboard ---
+caption: "「%{title}」- %{artists}\n专辑: %{album}\n#网易云音乐 #%{ext} %{size_mb}MB %{kbps}kbps\nvia @%{bot_username}"
+share_button: "分享给朋友"
+cover_failure_notice: "⚠️ 封面下载连续失败 %{attempts} 次，已发送无封面版本"
+
+# --- start & help ---
+start_welcome: "👋 欢迎使用网易云音乐机器人 <b>@%{bot_username}</b>\n\n我可以帮你解析网易云音乐链接、搜索音乐、获取歌词。\n\n<b>主要功能：</b>\n• 直接发送网易云音乐链接进行解析\n• 使用 <code>/search &lt;关键词&gt;</code> 搜索音乐\n• 在任何聊天中使用 <code>@%{bot_username} &lt;关键词&gt;</code> 进行 Inline 搜索\n• 使用 <code>/lyric &lt;关键词或ID&gt;</code> 获取歌词\n\n<b>开源地址：</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">Lemonawa/music163bot-rust</a>"
+help_body: "📖 <b>使用帮助</b>\n\n1️⃣ <b>直接解析</b>\n发送网易云音乐链接给机器人，例如：\n<code>https://music.163.com/song?id=12345</code>\n<code>https://music.163.com/playlist?id=12345</code>\n<code>https://music.163.com/album?id=12345</code>\n<code>https://music.163.com/program?id=12345</code>\n<code>https://music.163.com/djradio?id=12345</code>\n\n2️⃣ <b>搜索音乐</b>\n使用 <code>/search &lt;关键词&gt;</code> 在私聊中搜索。\n\n3️⃣ <b>Inline 搜索</b>\n在任何对话框输入 <code>@%{bot_username} &lt;关键词&gt;</code> 即可快速搜索并分享音乐。\n\n4️⃣ <b>获取歌词</b>\n使用 <code>/lyric &lt;关键词或ID&gt;</code> 获取歌词。\n\n5️⃣ <b>更多命令</b>\n• <code>/status</code> - 查看系统状态（仅管理员）\n• <code>/about</code> - 关于机器人\n\n💬 <b>项目主页：</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">GitHub</a>"
+about_body: "🎵 Music163bot-Rust v%{version} (%{commit})\n\n网易云音乐 Telegram Bot，支持链接解析、搜索下载、歌词获取。\n\nRust 编写，轻量高并发。\n\n源码：GitHub | 原版：Music163bot-Go"
+
+# --- /lang ---
+lang_select: "🌐 请选择语言 / Select language:"
+lang_set: "✅ 语言已设置为 %{lang}"
+lang_auto: "🔄 已恢复自动检测语言"
+lang_admin_only: "❌ 此命令仅限群管理员使用"
+lang_admin_check_failed: "❌ 无法验证权限，请稍后重试"
+lang_unknown: "❌ 无效的语言代码，可用: %{locales}"
+lang_automatic: "自动检测 / Auto"

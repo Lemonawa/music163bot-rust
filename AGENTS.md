@@ -1,5 +1,15 @@
 # Repository Guidelines
 
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (github.com/Lemonawa/music163bot-rust) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 ## Project Structure & Module Organization
 Core application code is in `src/`. Entry/runtime setup is in `src/main.rs`. Major domains are split into root files plus submodules: `src/bot.rs` + `src/bot/`, `src/music_api.rs` + `src/music_api/`, `src/audio_buffer.rs` + `src/audio_buffer/`, `src/config.rs` + `src/config/`, and `src/database.rs` + `src/database/`. Common support code lives in `src/error.rs`, `src/memory.rs`, `src/utils.rs`, and `src/test_helpers.rs` (`#[cfg(test)]` mock HTTP utilities). Tests are colocated with source files (for example `src/bot/tests.rs`, `src/music_api/tests/*.rs`) rather than a top-level `tests/` directory.
 

@@ -116,6 +116,18 @@ impl Database {
         // Migration for existing databases created before podcast support.
         ensure_song_infos_has_program_id(&pool).await?;
 
+        // Per-chat bot settings (currently: language override via /lang).
+        sqlx::query(
+            r"
+            CREATE TABLE IF NOT EXISTS chat_settings (
+                chat_id INTEGER PRIMARY KEY,
+                language TEXT NOT NULL
+            )
+            ",
+        )
+        .execute(&pool)
+        .await?;
+
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_song_infos_from_user_id ON song_infos(from_user_id)",
         )
@@ -209,6 +221,52 @@ impl Database {
         let result = result?;
 
         Ok(result.last_insert_rowid())
+    }
+
+    /// Get the persisted `/lang` override for a chat, if any.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
+    pub async fn get_chat_language(&self, chat_id: i64) -> Result<Option<String>> {
+        let query_start = Instant::now();
+        let row = sqlx::query("SELECT language FROM chat_settings WHERE chat_id = ?")
+            .bind(chat_id)
+            .fetch_optional(&self.pool)
+            .await;
+        log_db_perf("get_chat_language", query_start.elapsed());
+        Ok(row?.map(|row| row.get("language")))
+    }
+
+    /// Persist (or replace) the `/lang` override for a chat.
+    ///
+    /// # Errors
+    /// Returns an error if the database write fails.
+    pub async fn set_chat_language(&self, chat_id: i64, language: &str) -> Result<()> {
+        let query_start = Instant::now();
+        let result = sqlx::query(
+            "INSERT INTO chat_settings (chat_id, language) VALUES (?, ?) \
+             ON CONFLICT(chat_id) DO UPDATE SET language = excluded.language",
+        )
+        .bind(chat_id)
+        .bind(language)
+        .execute(&self.pool)
+        .await;
+        log_db_perf("set_chat_language", query_start.elapsed());
+        result.map(|_| ()).map_err(Into::into)
+    }
+
+    /// Remove the `/lang` override for a chat ("Auto" restores detection).
+    ///
+    /// # Errors
+    /// Returns an error if the database write fails.
+    pub async fn clear_chat_language(&self, chat_id: i64) -> Result<()> {
+        let query_start = Instant::now();
+        let result = sqlx::query("DELETE FROM chat_settings WHERE chat_id = ?")
+            .bind(chat_id)
+            .execute(&self.pool)
+            .await;
+        log_db_perf("clear_chat_language", query_start.elapsed());
+        result.map(|_| ()).map_err(Into::into)
     }
 
     /// Count total songs

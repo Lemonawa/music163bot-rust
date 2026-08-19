@@ -52,11 +52,40 @@ fn max_disk_download_has_default() {
 #[test]
 fn max_disk_download_parses() {
     let content = "bot.token=token\n\
-download.max_disk_download_mb=512\n";
+ download.max_disk_download_mb=512\n";
 
     let loaded = load_temp_config("disk_cap", content);
 
     assert_eq!(loaded.max_disk_download_mb, 512);
+}
+
+#[test]
+fn default_language_defaults_to_zh() {
+    let config = Config::default();
+    assert_eq!(config.default_language, "zh");
+}
+
+#[test]
+fn default_language_parses_supported_locale_case_insensitively() {
+    let content = "bot.token=token\n\
+ [bot]\ndefault_language = EN\n";
+
+    let loaded = load_temp_config("lang_en", content);
+
+    assert_eq!(loaded.default_language, "en");
+}
+
+#[test]
+fn default_language_ignores_unsupported_locale() {
+    let content = "bot.token=token\n\
+ [bot]\ndefault_language = fr\n";
+
+    let loaded = load_temp_config("lang_fr", content);
+
+    assert_eq!(
+        loaded.default_language, "zh",
+        "unsupported locale should keep the default"
+    );
 }
 
 #[test]

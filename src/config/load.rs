@@ -57,6 +57,17 @@ impl Config {
         if let Some(db) = config_map.get("database") {
             config.database.clone_from(db);
         }
+        if let Some(lang) = config_map.get("bot.default_language") {
+            let normalized = lang.trim().to_ascii_lowercase();
+            if crate::i18n::is_supported_locale(&normalized) {
+                config.default_language = normalized;
+            } else {
+                tracing::warn!(
+                    "Invalid bot.default_language '{lang}' (not in locales/), using default '{}'",
+                    config.default_language
+                );
+            }
+        }
         let database_explicit =
             config_map.contains_key("database.url") || config_map.contains_key("database");
         warn_on_legacy_database_path(&config.database, database_explicit);

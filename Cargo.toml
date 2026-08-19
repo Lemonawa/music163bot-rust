@@ -42,6 +42,9 @@ hex = "0.4"
 # Config
 clap = { version = "4.0", default-features = false, features = ["derive", "std"] }
 
+# i18n (compile-time embedded locale files in locales/)
+rust-i18n = "3"
+
 # File operations
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
@@ -60,6 +63,9 @@ metaflac = "0.2"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 # Memory allocator with better memory return behavior
+[dev-dependencies]
+serde_yaml = "0.9"
+
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.7" }
 tikv-jemalloc-sys = { version = "0.7" }

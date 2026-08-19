@@ -1,9 +1,9 @@
 use super::{
-    Arc, AudioBuffer, AudioFormat, Bot, BotError, Bytes, CACHE_PRUNE_INTERVAL_REQUESTS, ChatId,
-    Config, Database, InflightClaim, InflightDownloads, InflightLeaderGuard, InlineKeyboardButton,
-    InlineKeyboardMarkup, MIN_DOWNLOAD_CHUNK_BYTES, MaintenanceCounters, MaintenanceSignal,
-    Message, MessageId, MusicApi, MusicLinkTarget, ParseMode, ReplyParameters, ResponseResult,
-    Result, ThumbnailBuffer, UploadClientState, extract_retry_after_seconds,
+    Arc, AudioBuffer, AudioFormat, Bot, BotError, BotState, Bytes, CACHE_PRUNE_INTERVAL_REQUESTS,
+    ChatId, Config, Database, InflightClaim, InflightDownloads, InflightLeaderGuard,
+    InlineKeyboardButton, InlineKeyboardMarkup, MIN_DOWNLOAD_CHUNK_BYTES, MaintenanceCounters,
+    MaintenanceSignal, Message, MessageId, MusicApi, MusicLinkTarget, ParseMode, ReplyParameters,
+    ResponseResult, Result, ThumbnailBuffer, UploadClientState, extract_retry_after_seconds,
     sanitize_sensitive_text,
 };
 
@@ -55,6 +55,7 @@ pub(super) fn cached_music_link_target(program_id: Option<i64>, music_id: u64) -
 }
 
 pub(super) fn create_music_keyboard_for_target(
+    lang: &crate::i18n::ChatLanguage,
     link_target: MusicLinkTarget,
     music_id: u64,
     song_name: &str,
@@ -91,7 +92,7 @@ pub(super) fn create_music_keyboard_for_target(
         }
     };
     rows.push(vec![InlineKeyboardButton::switch_inline_query(
-        "分享给朋友",
+        crate::i18n::tr(lang, "share_button"),
         switch_inline_query_url,
     )]);
 
@@ -132,12 +133,13 @@ pub(super) fn is_admin(msg: &Message, config: &Config) -> bool {
 pub(super) async fn ensure_admin(
     bot: &Bot,
     msg: &Message,
-    config: &Config,
+    state: &Arc<BotState>,
 ) -> ResponseResult<bool> {
-    if is_admin(msg, config) {
+    if is_admin(msg, &state.config) {
         Ok(true)
     } else {
-        send_reply_text(bot, msg, "❌ 该命令仅限管理员使用").await?;
+        let lang = crate::bot::chat_lang(state, msg).await;
+        send_reply_text(bot, msg, crate::i18n::tr(&lang, "cmd_only_admin")).await?;
         Ok(false)
     }
 }
@@ -220,7 +222,6 @@ pub(super) fn should_remove_song_cache_after_partial_failure(cover_retry_exhaust
 }
 
 pub(super) const MESSAGE_TASK_LINK_HINTS: [&str; 3] = ["music.163.com", "163cn.tv", "163cn.link"];
-pub(super) const MUSIC_ID_EXTRACT_FAILED_TEXT: &str = "无法从链接中提取音乐ID";
 
 pub(super) fn contains_music_link_hint(text: &str) -> bool {
     MESSAGE_TASK_LINK_HINTS
@@ -243,7 +244,7 @@ pub(super) fn should_spawn_message_task(text: &str) -> bool {
 pub(super) fn should_log_command(command: &str) -> bool {
     matches!(
         command,
-        "music" | "netease" | "search" | "rmcache" | "clearallcache"
+        "music" | "netease" | "search" | "rmcache" | "clearallcache" | "lang"
     )
 }
 
@@ -267,12 +268,12 @@ pub(super) fn is_clearallcache_confirm(args: Option<&str>) -> bool {
     matches!(args.map(str::trim), Some("confirm"))
 }
 
-pub(super) fn rmcache_usage_prompt() -> &'static str {
-    "请输入要删除缓存的歌曲ID\n\n用法: <code>/rmcache &lt;音乐ID&gt;</code>"
+pub(super) fn rmcache_usage_prompt(lang: &crate::i18n::ChatLanguage) -> String {
+    crate::i18n::tr(lang, "rmcache_usage")
 }
 
-pub(super) fn clearallcache_confirmation_prompt() -> &'static str {
-    "⚠️ 确认要清除所有缓存吗？\n\n这将删除数据库中的所有歌曲缓存记录。\n\n请在30秒内再次发送 <code>/clearallcache confirm</code> 确认操作。"
+pub(super) fn clearallcache_confirmation_prompt(lang: &crate::i18n::ChatLanguage) -> String {
+    crate::i18n::tr(lang, "clearallcache_confirm_prompt")
 }
 
 pub(super) async fn send_reply_message(

@@ -82,6 +82,7 @@ fn critical_path_stage_labels() -> [&'static str; 2] {
 
 mod command_ui;
 mod concurrency;
+mod lang_ui;
 mod scheduling;
 mod telegram;
 mod upload;
