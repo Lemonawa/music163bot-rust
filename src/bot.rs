@@ -60,7 +60,10 @@ use entry::{
     sample_current_process_memory_mb, sample_resource_snapshot, should_download_cover,
 };
 use help_entry::{handle_help_command, handle_music_command};
-use lang_command::{handle_lang_callback, handle_lang_command};
+use lang_command::{handle_lang_callback, handle_lang_command, register_bot_commands};
+
+#[cfg(test)]
+use lang_command::bot_commands_for_locale;
 
 #[cfg(test)]
 use lang_command::build_lang_keyboard;

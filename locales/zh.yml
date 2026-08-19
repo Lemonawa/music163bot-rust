@@ -1,3 +1,16 @@
+# --- bot command descriptions (registered via setMyCommands) ---
+cmd_desc.start: "启动机器人或解析歌曲ID"
+cmd_desc.music: "下载/分享音乐（关键词或ID）"
+cmd_desc.netease: "同 /music"
+cmd_desc.search: "搜索网易云音乐"
+cmd_desc.lyric: "获取歌词"
+cmd_desc.lang: "设置回复语言"
+cmd_desc.status: "缓存与运行统计（管理员）"
+cmd_desc.about: "版本信息"
+cmd_desc.rmcache: "删除单曲缓存（管理员）"
+cmd_desc.clearallcache: "清除全部缓存（管理员，需确认）"
+cmd_desc.help: "使用帮助"
+
 # --- generic ---
 cmd_only_admin: "❌ 该命令仅限管理员使用"
 error_generic: "❌ 处理失败，请稍后重试"
@@ -98,7 +111,7 @@ cover_failure_notice: "⚠️ 封面下载连续失败 %{attempts} 次，已发�
 
 # --- start & help ---
 start_welcome: "👋 欢迎使用网易云音乐机器人 <b>@%{bot_username}</b>\n\n我可以帮你解析网易云音乐链接、搜索音乐、获取歌词。\n\n<b>主要功能：</b>\n• 直接发送网易云音乐链接进行解析\n• 使用 <code>/search &lt;关键词&gt;</code> 搜索音乐\n• 在任何聊天中使用 <code>@%{bot_username} &lt;关键词&gt;</code> 进行 Inline 搜索\n• 使用 <code>/lyric &lt;关键词或ID&gt;</code> 获取歌词\n\n<b>开源地址：</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">Lemonawa/music163bot-rust</a>"
-help_body: "📖 <b>使用帮助</b>\n\n1️⃣ <b>直接解析</b>\n发送网易云音乐链接给机器人，例如：\n<code>https://music.163.com/song?id=12345</code>\n<code>https://music.163.com/playlist?id=12345</code>\n<code>https://music.163.com/album?id=12345</code>\n<code>https://music.163.com/program?id=12345</code>\n<code>https://music.163.com/djradio?id=12345</code>\n\n2️⃣ <b>搜索音乐</b>\n使用 <code>/search &lt;关键词&gt;</code> 在私聊中搜索。\n\n3️⃣ <b>Inline 搜索</b>\n在任何对话框输入 <code>@%{bot_username} &lt;关键词&gt;</code> 即可快速搜索并分享音乐。\n\n4️⃣ <b>获取歌词</b>\n使用 <code>/lyric &lt;关键词或ID&gt;</code> 获取歌词。\n\n5️⃣ <b>更多命令</b>\n• <code>/status</code> - 查看系统状态（仅管理员）\n• <code>/about</code> - 关于机器人\n\n💬 <b>项目主页：</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">GitHub</a>"
+help_body: "📖 <b>使用帮助</b>\n\n1️⃣ <b>直接解析</b>\n发送网易云音乐链接给机器人，例如：\n<code>https://music.163.com/song?id=12345</code>\n<code>https://music.163.com/playlist?id=12345</code>\n<code>https://music.163.com/album?id=12345</code>\n<code>https://music.163.com/program?id=12345</code>\n<code>https://music.163.com/djradio?id=12345</code>\n\n2️⃣ <b>搜索音乐</b>\n使用 <code>/search &lt;关键词&gt;</code> 在私聊中搜索。\n\n3️⃣ <b>Inline 搜索</b>\n在任何对话框输入 <code>@%{bot_username} &lt;关键词&gt;</code> 即可快速搜索并分享音乐。\n\n4️⃣ <b>获取歌词</b>\n使用 <code>/lyric &lt;关键词或ID&gt;</code> 获取歌词。\n\n5️⃣ <b>更多命令</b>\n• <code>/lang</code> - 设置回复语言（群聊需管理员）\n• <code>/status</code> - 查看系统状态（仅管理员）\n• <code>/about</code> - 关于机器人\n\n💬 <b>项目主页：</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">GitHub</a>"
 about_body: "🎵 Music163bot-Rust v%{version} (%{commit})\n\n网易云音乐 Telegram Bot，支持链接解析、搜索下载、歌词获取。\n\nRust 编写，轻量高并发。\n\n源码：GitHub | 原版：Music163bot-Go"
 
 # --- /lang ---

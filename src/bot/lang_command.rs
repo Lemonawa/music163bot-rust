@@ -9,6 +9,65 @@ pub(super) fn locales() -> Vec<&'static str> {
     crate::_rust_i18n_available_locales()
 }
 
+/// Build the `setMyCommands` payload for one locale, from `cmd_desc.*` keys.
+/// Commands without a translation in that locale fall back to the default
+/// (empty `language_code`) list registered separately.
+#[must_use]
+pub fn bot_commands_for_locale(
+    lang: &crate::i18n::ChatLanguage,
+) -> Vec<crate::telegram::BotCommand> {
+    const COMMANDS: [&str; 11] = [
+        "start",
+        "music",
+        "netease",
+        "search",
+        "lyric",
+        "lang",
+        "status",
+        "about",
+        "rmcache",
+        "clearallcache",
+        "help",
+    ];
+
+    COMMANDS
+        .iter()
+        .map(|cmd| {
+            crate::telegram::BotCommand::new(
+                *cmd,
+                crate::i18n::tr(lang, &format!("cmd_desc.{cmd}")),
+            )
+        })
+        .collect()
+}
+
+/// Register localized command menus with Telegram at startup: one list per
+/// compiled locale (clients pick by their UI language) plus the default
+/// list for languages we do not ship.
+pub async fn register_bot_commands(bot: &Bot) {
+    let fallback = bot_commands_for_locale(&crate::i18n::default_lang_zh());
+
+    if let Err(e) = bot.set_my_commands(fallback).await {
+        tracing::warn!("Failed to register default command menu: {}", e);
+        return;
+    }
+
+    for locale in locales() {
+        if locale == "zh" {
+            continue; // zh is the default list
+        }
+        let lang = crate::i18n::ChatLanguage::new(locale);
+        if let Err(e) = bot
+            .set_my_commands(bot_commands_for_locale(&lang))
+            .language_code(locale)
+            .await
+        {
+            tracing::warn!("Failed to register {locale} command menu: {}", e);
+        }
+    }
+    tracing::info!("Registered localized command menus for {:?}", locales());
+}
+
 /// Callback data prefix used by the language keyboard buttons.
 const LANG_CALLBACK_PREFIX: &str = "lang:set:";
 

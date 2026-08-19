@@ -61,6 +61,7 @@ url = ./data/music_bot.db
 | `token` | (required) | Telegram bot token |
 | `api` | `https://api.telegram.org` | Telegram API endpoint |
 | `admin` | (none) | Comma-separated admin user IDs |
+| `default_language` | `zh` | Fallback reply language when a chat has no `/lang` override and auto-detection does not apply (group chats). Must match a locale under `locales/` (`zh`, `en`). Private chats auto-detect from the user's Telegram client language. |
 
 **[music]**
 
@@ -179,12 +180,18 @@ music - Download/share music (keyword or ID)
 netease - Same as /music
 search - Search NetEase Cloud Music
 lyric - Get song lyrics
+lang - Set reply language (group admins only)
 status - Cache and runtime stats (admin)
 about - Version info
 rmcache - Remove cache for a track (admin)
 clearallcache - Clear all cache (admin, requires confirmation)
 help - Usage help
 ```
+
+Command menus are registered automatically at bot startup via
+`setMyCommands`, localized per compiled locale (`locales/*.yml`,
+`cmd_desc.*` keys); users' Telegram clients show the matching language when
+they type `/`.
 
 ## License
 

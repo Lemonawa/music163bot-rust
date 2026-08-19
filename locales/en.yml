@@ -1,3 +1,16 @@
+# --- bot command descriptions (registered via setMyCommands) ---
+cmd_desc.start: "Start the bot or parse a song ID"
+cmd_desc.music: "Download/share music (keyword or ID)"
+cmd_desc.netease: "Same as /music"
+cmd_desc.search: "Search NetEase Cloud Music"
+cmd_desc.lyric: "Get song lyrics"
+cmd_desc.lang: "Set reply language"
+cmd_desc.status: "Cache and runtime stats (admin)"
+cmd_desc.about: "Version info"
+cmd_desc.rmcache: "Remove cache for a track (admin)"
+cmd_desc.clearallcache: "Clear all cache (admin, requires confirmation)"
+cmd_desc.help: "Usage help"
+
 # --- generic ---
 cmd_only_admin: "❌ This command is admin-only"
 error_generic: "❌ Processing failed, please try again later"
@@ -98,7 +111,7 @@ cover_failure_notice: "⚠️ Cover download failed %{attempts} times in a row; 
 
 # --- start & help ---
 start_welcome: "👋 Welcome to the NetEase Cloud Music bot <b>@%{bot_username}</b>\n\nI can parse NetEase Cloud Music links, search music, and fetch lyrics.\n\n<b>Main features:</b>\n• Send a NetEase Cloud Music link directly to parse it\n• Search with <code>/search &lt;keyword&gt;</code>\n• Inline search in any chat with <code>@%{bot_username} &lt;keyword&gt;</code>\n• Fetch lyrics with <code>/lyric &lt;keyword or ID&gt;</code>\n\n<b>Open source:</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">Lemonawa/music163bot-rust</a>"
-help_body: "📖 <b>Help</b>\n\n1️⃣ <b>Direct parsing</b>\nSend a NetEase Cloud Music link to the bot, e.g.:\n<code>https://music.163.com/song?id=12345</code>\n<code>https://music.163.com/playlist?id=12345</code>\n<code>https://music.163.com/album?id=12345</code>\n<code>https://music.163.com/program?id=12345</code>\n<code>https://music.163.com/djradio?id=12345</code>\n\n2️⃣ <b>Search</b>\nUse <code>/search &lt;keyword&gt;</code> in private chats.\n\n3️⃣ <b>Inline search</b>\nType <code>@%{bot_username} &lt;keyword&gt;</code> in any chat to quickly search and share music.\n\n4️⃣ <b>Lyrics</b>\nUse <code>/lyric &lt;keyword or ID&gt;</code> to fetch lyrics.\n\n5️⃣ <b>More commands</b>\n• <code>/status</code> - system status (admin only)\n• <code>/about</code> - about this bot\n\n💬 <b>Project page:</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">GitHub</a>"
+help_body: "📖 <b>Help</b>\n\n1️⃣ <b>Direct parsing</b>\nSend a NetEase Cloud Music link to the bot, e.g.:\n<code>https://music.163.com/song?id=12345</code>\n<code>https://music.163.com/playlist?id=12345</code>\n<code>https://music.163.com/album?id=12345</code>\n<code>https://music.163.com/program?id=12345</code>\n<code>https://music.163.com/djradio?id=12345</code>\n\n2️⃣ <b>Search</b>\nUse <code>/search &lt;keyword&gt;</code> in private chats.\n\n3️⃣ <b>Inline search</b>\nType <code>@%{bot_username} &lt;keyword&gt;</code> in any chat to quickly search and share music.\n\n4️⃣ <b>Lyrics</b>\nUse <code>/lyric &lt;keyword or ID&gt;</code> to fetch lyrics.\n\n5️⃣ <b>More commands</b>\n• <code>/lang</code> - set reply language (group admins only)\n• <code>/status</code> - system status (admin only)\n• <code>/about</code> - about this bot\n\n💬 <b>Project page:</b> <a href=\"https://github.com/Lemonawa/music163bot-rust\">GitHub</a>"
 about_body: "🎵 Music163bot-Rust v%{version} (%{commit})\n\nNetEase Cloud Music Telegram bot: link parsing, search & download, lyrics.\n\nWritten in Rust, lightweight and highly concurrent.\n\nSource: GitHub | Original: Music163bot-Go"
 
 # --- /lang ---

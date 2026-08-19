@@ -5,8 +5,8 @@ use serde::Deserialize;
 
 use super::error::{ResponseResult, TelegramError};
 use super::types::{
-    ChatId, ChatMember, InlineKeyboardMarkup, InlineQueryResult, InputFile, Message, MessageId,
-    ParseMode, ReplyParameters, Update, User,
+    BotCommand, ChatId, ChatMember, InlineKeyboardMarkup, InlineQueryResult, InputFile, Message,
+    MessageId, ParseMode, ReplyParameters, Update, User,
 };
 
 #[derive(Debug, Clone)]
@@ -198,6 +198,59 @@ impl TelegramBot {
             chat_id: chat_id.into(),
             user_id,
         }
+    }
+
+    #[must_use]
+    pub fn set_my_commands(&self, commands: Vec<BotCommand>) -> SetMyCommandsRequest<'_> {
+        SetMyCommandsRequest {
+            bot: self,
+            commands,
+            language_code: None,
+        }
+    }
+}
+
+// --- SetMyCommands ---
+
+pub struct SetMyCommandsRequest<'a> {
+    bot: &'a TelegramBot,
+    commands: Vec<BotCommand>,
+    language_code: Option<String>,
+}
+
+impl SetMyCommandsRequest<'_> {
+    /// Localize the command list for clients with this UI language
+    /// (e.g. "zh" or "en"). Omit for the default (empty) list.
+    #[must_use]
+    pub fn language_code(mut self, code: impl Into<String>) -> Self {
+        self.language_code = Some(code.into());
+        self
+    }
+
+    pub async fn send(self) -> ResponseResult<bool> {
+        #[derive(serde::Serialize)]
+        struct Params {
+            commands: Vec<BotCommand>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            language_code: Option<String>,
+        }
+        self.bot
+            .call_api(
+                "setMyCommands",
+                &Params {
+                    commands: self.commands,
+                    language_code: self.language_code,
+                },
+            )
+            .await
+    }
+}
+
+impl<'a> IntoFuture for SetMyCommandsRequest<'a> {
+    type Output = ResponseResult<bool>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.send())
     }
 }
 

@@ -302,6 +302,22 @@ impl ChatMember {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BotCommand {
+    pub command: String,
+    pub description: String,
+}
+
+impl BotCommand {
+    #[must_use]
+    pub fn new(command: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            description: description.into(),
+        }
+    }
+}
+
 // --- Telegram API response wrapper ---
 
 #[derive(Debug, Deserialize)]

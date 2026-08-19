@@ -10,8 +10,8 @@ use super::{
     handle_inline_query, handle_lang_command, handle_lyric_command, handle_music_command,
     handle_music_url, handle_rmcache_command, handle_search_command, handle_status_command,
     is_clearallcache_confirm, is_official_telegram_api, lock_unpoisoned, maintenance_worker,
-    message_task_limit, process_music, run_upload_prewarm, sanitize_sensitive_text,
-    should_log_command, should_spawn_message_task, upload_task_limit,
+    message_task_limit, process_music, register_bot_commands, run_upload_prewarm,
+    sanitize_sensitive_text, should_log_command, should_spawn_message_task, upload_task_limit,
 };
 use crate::i18n;
 
@@ -241,6 +241,10 @@ pub(super) async fn run(config: Config) -> Result<()> {
     tokio::spawn(async move {
         let _ = run_upload_prewarm(|| acquire_upload_client(&prewarm_state)).await;
     });
+
+    // Register localized command menus so clients' "/" autocomplete shows
+    // /lang and friends in the user's UI language.
+    register_bot_commands(&bot).await;
 
     // Delete webhook and drop pending updates before starting polling
     bot.delete_webhook().await.ok();
