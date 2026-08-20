@@ -43,7 +43,7 @@ hex = "0.4"
 clap = { version = "4.0", default-features = false, features = ["derive", "std"] }
 
 # i18n (compile-time embedded locale files in locales/)
-rust-i18n = "3"
+rust-i18n = "4"
 
 # File operations
 tokio-util = { version = "0.7", features = ["io"] }

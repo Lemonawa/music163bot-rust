@@ -4,9 +4,13 @@ use super::{
 };
 use crate::i18n::{self, ChatLanguage};
 
-/// Locales compiled into the binary (from `locales/*.yml`).
+/// Locales compiled into the binary (from `locales/*.yml`). Leaked on
+/// purpose: the locale set is static for the process lifetime.
 pub(super) fn locales() -> Vec<&'static str> {
     crate::_rust_i18n_available_locales()
+        .into_iter()
+        .map(|l| Box::leak(l.into_owned().into_boxed_str()) as &'static str)
+        .collect()
 }
 
 /// Build the `setMyCommands` payload for one locale, from `cmd_desc.*` keys.

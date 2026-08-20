@@ -81,7 +81,9 @@ pub fn map_language_code(code: &str) -> Option<&'static str> {
 /// interface: adding a YAML file under `locales/` extends this set).
 #[must_use]
 pub fn is_supported_locale(locale: &str) -> bool {
-    crate::_rust_i18n_available_locales().contains(&locale)
+    crate::_rust_i18n_available_locales()
+        .iter()
+        .any(|l| l == locale)
 }
 
 /// Validate a user-supplied `/lang` argument ("en", "auto", ...).
@@ -98,7 +100,8 @@ pub fn parse_lang_argument(arg: &str) -> Result<Option<&'static str>, ()> {
     }
     for locale in crate::_rust_i18n_available_locales() {
         if locale == normalized {
-            return Ok(Some(locale));
+            // Leak intentionally: the locale set is static for the process.
+            return Ok(Some(Box::leak(locale.into_owned().into_boxed_str())));
         }
     }
     Err(())
