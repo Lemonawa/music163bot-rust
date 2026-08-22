@@ -1,8 +1,8 @@
 use super::{
     Arc, Bot, BotState, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseResult,
     append_search_result_line, dispatch_parsed_music_target, extract_first_trusted_music_share_url,
-    format_artists, parse_direct_music_target, sanitize_sensitive_text, send_reply_message,
-    send_reply_text,
+    format_artists, is_known_non_song_share_url, parse_direct_music_target,
+    sanitize_sensitive_text, send_reply_message, send_reply_text,
 };
 use crate::i18n::{self, ChatLanguage};
 
@@ -22,6 +22,11 @@ pub(super) async fn handle_music_url(
         return Ok(());
     };
 
+    if is_known_non_song_share_url(&url) {
+        tracing::debug!("Ignoring known non-song share page");
+        return Ok(());
+    }
+
     if let Some(target) = parse_direct_music_target(&url) {
         return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
@@ -37,6 +42,14 @@ pub(super) async fn handle_music_url(
             return Ok(());
         }
     };
+
+    if is_known_non_song_share_url(&final_url) {
+        tracing::debug!(
+            "Ignoring share link resolved to a known non-song page: {}",
+            sanitize_sensitive_text(&final_url)
+        );
+        return Ok(());
+    }
 
     if let Some(target) = parse_direct_music_target(&final_url) {
         dispatch_parsed_music_target(bot, msg, state, target).await

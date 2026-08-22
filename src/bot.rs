@@ -25,8 +25,9 @@ use crate::telegram::{
 use crate::utils::{
     MusicCollectionTarget, build_http_client, bytes_to_mb_f64, clean_filename, ensure_dir,
     extract_first_trusted_music_share_url, extract_retry_after_seconds, format_error_chain,
-    i64_to_u32_saturating, parse_music_collection_target, parse_music_id, parse_music_program_id,
-    sanitize_sensitive_text, throughput_mbps, u64_to_f64, u64_to_i64_saturating, update_peak,
+    i64_to_u32_saturating, is_known_non_song_share_url, parse_music_collection_target,
+    parse_music_id, parse_music_program_id, sanitize_sensitive_text, throughput_mbps, u64_to_f64,
+    u64_to_i64_saturating, update_peak,
 };
 
 /// Type alias so submodules can keep using `Bot` without renaming everywhere.

@@ -215,6 +215,43 @@ fn is_trusted_music_share_url_rejects_untrusted_domains() {
 }
 
 #[test]
+fn is_known_non_song_share_url_detects_listen_together_invite() {
+    let url = "https://st.music.163.com/listen-together/multishare/index.html?roomId=59e39da9e1b9b68828b06528df45d6f4_1787329428149&inviterUid=2086066993";
+    assert!(super::is_known_non_song_share_url(url));
+}
+
+#[test]
+fn is_known_non_song_share_url_detects_vip_invite_cashier() {
+    let url = "https://y.music.163.com/g/vip-invite-cashier/radsjl658?token=2F39240642405E8869A9615A0E4523AA659C889DBC441081277B84920A5693AE";
+    assert!(super::is_known_non_song_share_url(url));
+}
+
+#[test]
+fn is_known_non_song_share_url_rejects_song_urls() {
+    assert!(!super::is_known_non_song_share_url(
+        "https://music.163.com/song?id=123"
+    ));
+    assert!(!super::is_known_non_song_share_url(
+        "https://music.163.com/playlist?id=17607381913"
+    ));
+}
+
+#[test]
+fn is_known_non_song_share_url_rejects_unresolved_short_links() {
+    assert!(!super::is_known_non_song_share_url(
+        "https://163cn.tv/9Gs9r0s"
+    ));
+}
+
+#[test]
+fn is_known_non_song_share_url_rejects_untrusted_hosts_with_markers() {
+    assert!(!super::is_known_non_song_share_url(
+        "https://evil.example.com/listen-together/multishare/index.html?roomId=x"
+    ));
+    assert!(!super::is_known_non_song_share_url("not a url"));
+}
+
+#[test]
 fn extract_first_trusted_music_share_url_skips_untrusted_urls() {
     let text = "see https://example.com/x and https://163cn.link/abcd";
     assert_eq!(

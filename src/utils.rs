@@ -269,6 +269,10 @@ pub fn is_trusted_music_share_url(url: &str) -> bool {
         return false;
     }
 
+    is_trusted_music_share_host(&parsed)
+}
+
+fn is_trusted_music_share_host(parsed: &reqwest::Url) -> bool {
     let Some(host) = parsed.host_str() else {
         return false;
     };
@@ -277,6 +281,29 @@ pub fn is_trusted_music_share_url(url: &str) -> bool {
         || host.ends_with(".music.163.com")
         || host.ends_with(".163cn.tv")
         || host.ends_with(".163cn.link")
+}
+
+/// Path markers of trusted `NetEase` share pages that never reference a playable song.
+const NON_SONG_SHARE_PATH_MARKERS: [&str; 2] = ["listen-together", "vip-invite"];
+
+/// Return whether the URL is a trusted `NetEase` share page that is known to be
+/// unrelated to songs (e.g. listen-together invites, VIP membership invites).
+///
+/// Short links cannot be classified before redirect resolution.
+#[must_use]
+pub fn is_known_non_song_share_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+
+    if !matches!(parsed.scheme(), "http" | "https") || !is_trusted_music_share_host(&parsed) {
+        return false;
+    }
+
+    let path = parsed.path().to_ascii_lowercase();
+    NON_SONG_SHARE_PATH_MARKERS
+        .iter()
+        .any(|marker| path.contains(marker))
 }
 
 /// Check if directory exists, create if not
