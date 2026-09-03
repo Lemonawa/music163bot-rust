@@ -2,7 +2,11 @@ use super::{
     Arc, Bot, BotState, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
     MaybeInaccessibleMessage, Message, ReplyParameters, ResponseResult, send_reply_text,
 };
+use crate::database::Database;
 use crate::i18n::{self, ChatLanguage};
+use crate::telegram::{Chat, User};
+
+use dashmap::DashMap;
 
 /// Locales compiled into the binary (from `locales/*.yml`). Leaked on
 /// purpose: the locale set is static for the process lifetime.
@@ -11,6 +15,118 @@ pub(super) fn locales() -> Vec<&'static str> {
         .into_iter()
         .map(|l| Box::leak(l.into_owned().into_boxed_str()) as &'static str)
         .collect()
+}
+
+/// Resolve the Chat Language for an incoming message: cached Language
+/// Override, else the persisted override from the database (re-cached),
+/// else auto-detection / Default Language per `i18n::resolve_chat_language`.
+pub(super) async fn resolve_message(
+    database: &Database,
+    chat_languages: &DashMap<i64, String>,
+    default_language: &str,
+    msg: &Message,
+) -> ChatLanguage {
+    let is_private = msg.chat.type_ == "private";
+    let sender_code = msg.from.as_ref().and_then(|u| u.language_code.as_deref());
+    let override_lang = cached_override(database, chat_languages, msg.chat.id.0).await;
+    i18n::resolve_chat_language(
+        is_private,
+        sender_code,
+        override_lang.as_deref(),
+        default_language,
+    )
+    .0
+}
+
+/// Resolve the Chat Language for an inline query. Inline queries behave like
+/// a private chat with the querent (their user id == the private chat id),
+/// so their Language Override and their Telegram `language_code` both apply.
+pub(super) async fn resolve_inline(
+    database: &Database,
+    chat_languages: &DashMap<i64, String>,
+    default_language: &str,
+    from: &User,
+) -> ChatLanguage {
+    let override_lang = cached_override(database, chat_languages, from.id).await;
+    i18n::resolve_chat_language(
+        true,
+        from.language_code.as_deref(),
+        override_lang.as_deref(),
+        default_language,
+    )
+    .0
+}
+
+/// Single lookup behind the Chat Language seam: shared override cache first,
+/// then the database (re-caching on hit).
+async fn cached_override(
+    database: &Database,
+    chat_languages: &DashMap<i64, String>,
+    key: i64,
+) -> Option<String> {
+    match chat_languages.get(&key) {
+        Some(entry) => Some(entry.value().clone()),
+        None => match database.get_chat_language(key).await.ok().flatten() {
+            Some(lang) => {
+                chat_languages.insert(key, lang.clone());
+                Some(lang)
+            }
+            None => None,
+        },
+    }
+}
+
+/// Persist a Language Override: cache and database stay coherent here, in
+/// the one place that writes them.
+async fn set_override(
+    database: &Database,
+    chat_languages: &DashMap<i64, String>,
+    chat_id: i64,
+    locale: &str,
+) {
+    chat_languages.insert(chat_id, locale.to_string());
+    if let Err(e) = database.set_chat_language(chat_id, locale).await {
+        tracing::warn!("Failed to persist chat language for {chat_id}: {}", e);
+    }
+}
+
+/// Clear a Language Override (Auto): cache and database stay coherent here.
+async fn clear_override(database: &Database, chat_languages: &DashMap<i64, String>, chat_id: i64) {
+    chat_languages.remove(&chat_id);
+    if let Err(e) = database.clear_chat_language(chat_id).await {
+        tracing::warn!("Failed to clear chat language: {}", e);
+    }
+}
+
+/// Outcome of the shared group-privilege check. Private chats and configured
+/// bot admins pass without consulting Telegram.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Privilege {
+    Allowed,
+    Denied,
+    CheckFailed,
+}
+
+/// The one place that decides who may change a chat language: private chats
+/// allow anyone, configured bot admins always pass, otherwise the Telegram
+/// member status decides.
+async fn check_privilege(bot: &Bot, bot_admin: &[i64], chat: &Chat, user_id: i64) -> Privilege {
+    if chat.type_ == "private" || bot_admin.contains(&user_id) {
+        return Privilege::Allowed;
+    }
+    match bot.get_chat_member(chat.id, user_id).await {
+        Ok(member) if member.is_privileged() => Privilege::Allowed,
+        Ok(_) => Privilege::Denied,
+        Err(e) => {
+            tracing::warn!(
+                "getChatMember failed for chat {} user {}: {}",
+                chat.id.0,
+                user_id,
+                super::sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+            );
+            Privilege::CheckFailed
+        }
+    }
 }
 
 /// Build the `setMyCommands` payload for one locale, from `cmd_desc.*` keys.
@@ -102,11 +218,11 @@ pub(super) async fn handle_lang_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let lang = i18n::chat_language_for_message(
+    let lang = resolve_message(
         &state.database,
         &state.chat_languages,
-        msg,
         &state.config.default_language,
+        msg,
     )
     .await;
 
@@ -119,7 +235,7 @@ pub(super) async fn handle_lang_command(
                 .await?;
         }
         Some(arg) => {
-            let user_id = authorize_lang_change(bot, msg, state).await?;
+            let user_id = authorize_lang_change(bot, msg, state, &lang).await?;
             apply_lang_argument(bot, msg, state, &lang, &arg, user_id).await?;
         }
     }
@@ -128,58 +244,28 @@ pub(super) async fn handle_lang_command(
 }
 
 /// In groups, only Telegram admins (or configured bot admins) may change the
-/// chat language; in private chats anyone may. Returns the caller's user id
-/// on success.
+/// chat language; in private chats anyone may. Takes the already-resolved
+/// language so the override lookup happens once. Returns the caller's user
+/// id on success.
 async fn authorize_lang_change(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
+    lang: &ChatLanguage,
 ) -> ResponseResult<Option<i64>> {
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
 
-    if msg.chat.type_ == "private" {
-        return Ok(Some(user_id));
-    }
-
-    if state.config.bot_admin.contains(&user_id) {
-        return Ok(Some(user_id));
-    }
-
-    let lang = i18n::chat_language_for_message(
-        &state.database,
-        &state.chat_languages,
-        msg,
-        &state.config.default_language,
-    )
-    .await;
-
-    match bot.get_chat_member(msg.chat.id, user_id).await {
-        Ok(member) if member.is_privileged() => Ok(Some(user_id)),
-        Ok(_) => {
-            send_reply_text(bot, msg, i18n::tr(&lang, "lang_admin_only")).await?;
+    match check_privilege(bot, &state.config.bot_admin, &msg.chat, user_id).await {
+        Privilege::Allowed => Ok(Some(user_id)),
+        Privilege::Denied => {
+            send_reply_text(bot, msg, i18n::tr(lang, "lang_admin_only")).await?;
             Ok(None)
         }
-        Err(e) => {
-            tracing::warn!(
-                "getChatMember failed for chat {} user {}: {}",
-                msg.chat.id.0,
-                user_id,
-                super::sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
-            send_reply_text(bot, msg, i18n::tr(&lang, "lang_admin_check_failed")).await?;
+        Privilege::CheckFailed => {
+            send_reply_text(bot, msg, i18n::tr(lang, "lang_admin_check_failed")).await?;
             Ok(None)
         }
     }
-}
-
-async fn lang_fallback(state: &Arc<BotState>, msg: &Message) -> ChatLanguage {
-    i18n::chat_language_for_message(
-        &state.database,
-        &state.chat_languages,
-        msg,
-        &state.config.default_language,
-    )
-    .await
 }
 
 async fn apply_lang_argument(
@@ -192,7 +278,13 @@ async fn apply_lang_argument(
 ) -> ResponseResult<()> {
     match i18n::parse_lang_argument(arg) {
         Ok(Some(locale)) => {
-            persist_language(state, msg.chat.id.0, locale).await;
+            set_override(
+                &state.database,
+                &state.chat_languages,
+                msg.chat.id.0,
+                locale,
+            )
+            .await;
             send_reply_text(
                 bot,
                 msg,
@@ -201,10 +293,7 @@ async fn apply_lang_argument(
             .await?;
         }
         Ok(None) => {
-            state.chat_languages.remove(&msg.chat.id.0);
-            if let Err(e) = state.database.clear_chat_language(msg.chat.id.0).await {
-                tracing::warn!("Failed to clear chat language: {}", e);
-            }
+            clear_override(&state.database, &state.chat_languages, msg.chat.id.0).await;
             send_reply_text(bot, msg, i18n::tr(lang, "lang_auto")).await?;
         }
         Err(()) => {
@@ -218,13 +307,6 @@ async fn apply_lang_argument(
         }
     }
     Ok(())
-}
-
-async fn persist_language(state: &Arc<BotState>, chat_id: i64, locale: &str) {
-    state.chat_languages.insert(chat_id, locale.to_string());
-    if let Err(e) = state.database.set_chat_language(chat_id, locale).await {
-        tracing::warn!("Failed to persist chat language for {chat_id}: {}", e);
-    }
 }
 
 /// Handle `lang:set:<locale|auto>` callback buttons.
@@ -244,13 +326,16 @@ pub(super) async fn handle_lang_callback(
 
     let user = query.from.id;
 
-    let lang = lang_fallback(state, chat_msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        chat_msg,
+    )
+    .await;
 
     if action == "auto" {
-        state.chat_languages.remove(&chat_msg.chat.id.0);
-        if let Err(e) = state.database.clear_chat_language(chat_msg.chat.id.0).await {
-            tracing::warn!("Failed to clear chat language: {}", e);
-        }
+        clear_override(&state.database, &state.chat_languages, chat_msg.chat.id.0).await;
         bot.answer_callback_query(query.id.clone())
             .text(i18n::tr(&lang, "lang_auto"))
             .await?;
@@ -265,26 +350,29 @@ pub(super) async fn handle_lang_callback(
     }
 
     // Authorization: callback source must be privileged in groups.
-    if chat_msg.chat.type_ != "private" && !state.config.bot_admin.contains(&user) {
-        match bot.get_chat_member(chat_msg.chat.id, user).await {
-            Ok(member) if member.is_privileged() => {}
-            Ok(_) => {
-                bot.answer_callback_query(query.id.clone())
-                    .text(i18n::tr(&lang, "lang_admin_only"))
-                    .await?;
-                return Ok(true);
-            }
-            Err(e) => {
-                tracing::warn!("getChatMember failed: {}", e);
-                bot.answer_callback_query(query.id.clone())
-                    .text(i18n::tr(&lang, "lang_admin_check_failed"))
-                    .await?;
-                return Ok(true);
-            }
+    match check_privilege(bot, &state.config.bot_admin, &chat_msg.chat, user).await {
+        Privilege::Allowed => {}
+        Privilege::Denied => {
+            bot.answer_callback_query(query.id.clone())
+                .text(i18n::tr(&lang, "lang_admin_only"))
+                .await?;
+            return Ok(true);
+        }
+        Privilege::CheckFailed => {
+            bot.answer_callback_query(query.id.clone())
+                .text(i18n::tr(&lang, "lang_admin_check_failed"))
+                .await?;
+            return Ok(true);
         }
     }
 
-    persist_language(state, chat_msg.chat.id.0, action).await;
+    set_override(
+        &state.database,
+        &state.chat_languages,
+        chat_msg.chat.id.0,
+        action,
+    )
+    .await;
     bot.answer_callback_query(query.id.clone())
         .text(i18n::tr_with(
             &ChatLanguage::new(action),

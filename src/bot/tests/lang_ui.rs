@@ -77,3 +77,79 @@ fn bot_command_serializes_command_and_description() {
         .expect("serialize");
     assert_eq!(json, r#"{"command":"lang","description":"Set language"}"#);
 }
+
+fn temp_db_path(prefix: &str) -> String {
+    std::env::temp_dir()
+        .join(format!(
+            "{prefix}_{}.db",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn test_message(chat_id: i64, chat_type: &str) -> crate::telegram::Message {
+    crate::telegram::Message {
+        id: crate::telegram::MessageId(1),
+        from: None,
+        chat: crate::telegram::Chat {
+            id: crate::telegram::ChatId(chat_id),
+            type_: chat_type.to_string(),
+            username: None,
+        },
+        date: 0,
+        text: None,
+        reply_to_message: None,
+    }
+}
+
+#[tokio::test]
+async fn resolve_message_uses_db_override_and_caches_it() {
+    let db = crate::database::Database::new(&temp_db_path("lang_msg"))
+        .await
+        .unwrap();
+    db.set_chat_language(777, "en").await.unwrap();
+
+    let msg = test_message(777, "private");
+    let cache = dashmap::DashMap::new();
+    let lang = super::resolve_message(&db, &cache, "zh", &msg).await;
+    assert_eq!(lang.code(), "en");
+    assert_eq!(
+        cache.get(&777).map(|e| e.value().clone()),
+        Some("en".to_string())
+    );
+
+    // Second call hits the cache (still correct even if DB row disappears).
+    db.clear_chat_language(777).await.unwrap();
+    let lang = super::resolve_message(&db, &cache, "zh", &msg).await;
+    assert_eq!(lang.code(), "en");
+}
+
+#[tokio::test]
+async fn resolve_inline_prefers_override_then_detects_then_defaults() {
+    let db = crate::database::Database::new(&temp_db_path("lang_inline"))
+        .await
+        .unwrap();
+    db.set_chat_language(888, "en").await.unwrap();
+
+    let user = crate::telegram::User {
+        id: 888,
+        first_name: "test".to_string(),
+        username: None,
+        language_code: Some("zh-CN".to_string()),
+    };
+    let cache = dashmap::DashMap::new();
+
+    // Override wins over auto-detection.
+    let lang = super::resolve_inline(&db, &cache, "zh", &user).await;
+    assert_eq!(lang.code(), "en");
+
+    // Without an override, the Telegram language_code applies.
+    db.clear_chat_language(888).await.unwrap();
+    cache.remove(&888);
+    let lang = super::resolve_inline(&db, &cache, "en", &user).await;
+    assert_eq!(lang.code(), "zh");
+}

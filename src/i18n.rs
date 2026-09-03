@@ -155,72 +155,10 @@ pub fn tr_many_strings(lang: &ChatLanguage, key: &str, args: &[(&str, String)]) 
     translated
 }
 
-/// Resolve the language for an incoming message, consulting the shared
-/// language cache then the database.
-pub async fn chat_language_for_message(
-    database: &crate::database::Database,
-    chat_languages: &dashmap::DashMap<i64, String>,
-    msg: &crate::telegram::Message,
-    default_language: &str,
-) -> ChatLanguage {
-    let is_private = msg.chat.type_ == "private";
-    let sender_code = msg.from.as_ref().and_then(|u| u.language_code.as_deref());
-    let override_lang = match chat_languages.get(&msg.chat.id.0) {
-        Some(entry) => Some(entry.value().clone()),
-        None => match database
-            .get_chat_language(msg.chat.id.0)
-            .await
-            .ok()
-            .flatten()
-        {
-            Some(lang) => {
-                chat_languages.insert(msg.chat.id.0, lang.clone());
-                Some(lang)
-            }
-            None => None,
-        },
-    };
-    resolve_chat_language(
-        is_private,
-        sender_code,
-        override_lang.as_deref(),
-        default_language,
-    )
-    .0
-}
-
 /// Default language from config (used at startup before a chat is known).
 #[must_use]
 pub fn default_language(config: &Config) -> ChatLanguage {
     ChatLanguage::new(config.default_language.clone())
-}
-
-/// Resolve the language for an inline query. Inline queries behave like a
-/// private chat with the querent (their user id == the private chat id), so
-/// their `/lang` override and their Telegram `language_code` both apply.
-pub async fn resolve_inline_language(
-    database: &crate::database::Database,
-    chat_languages: &dashmap::DashMap<i64, String>,
-    from: &crate::telegram::User,
-    default_language: &str,
-) -> ChatLanguage {
-    let override_lang = match chat_languages.get(&from.id) {
-        Some(entry) => Some(entry.value().clone()),
-        None => match database.get_chat_language(from.id).await.ok().flatten() {
-            Some(lang) => {
-                chat_languages.insert(from.id, lang.clone());
-                Some(lang)
-            }
-            None => None,
-        },
-    };
-    resolve_chat_language(
-        true,
-        from.language_code.as_deref(),
-        override_lang.as_deref(),
-        default_language,
-    )
-    .0
 }
 
 #[cfg(test)]

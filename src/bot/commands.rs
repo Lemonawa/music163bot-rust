@@ -1,10 +1,10 @@
 use super::{
     Arc, Bot, BotState, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseResult,
     append_search_result_line, dispatch_parsed_music_target, extract_first_trusted_music_share_url,
-    format_artists, is_known_non_song_share_url, parse_direct_music_target,
+    format_artists, is_known_non_song_share_url, parse_direct_music_target, resolve_message,
     sanitize_sensitive_text, send_reply_message, send_reply_text,
 };
-use crate::i18n::{self, ChatLanguage};
+use crate::i18n;
 
 pub(super) async fn handle_music_url(
     bot: &Bot,
@@ -12,7 +12,13 @@ pub(super) async fn handle_music_url(
     state: &Arc<BotState>,
     text: &str,
 ) -> ResponseResult<()> {
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     if let Some(target) = parse_direct_music_target(text) {
         return dispatch_parsed_music_target(bot, msg, state, target).await;
     }
@@ -59,23 +65,19 @@ pub(super) async fn handle_music_url(
     }
 }
 
-pub(super) async fn chat_lang(state: &Arc<BotState>, msg: &Message) -> ChatLanguage {
-    i18n::chat_language_for_message(
-        &state.database,
-        &state.chat_languages,
-        msg,
-        &state.config.default_language,
-    )
-    .await
-}
-
 pub(super) async fn handle_search_command(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let keyword = match args {
         Some(kw) if !kw.is_empty() => kw,
         _ => {

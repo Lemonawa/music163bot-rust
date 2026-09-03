@@ -1,8 +1,8 @@
 use super::{
     Arc, Bot, BotState, Bytes, CoverMode, Message, MusicCollectionTarget,
-    PERF_STAGE_COVER_DOWNLOAD, PerfTraceContext, ResponseResult, ThumbnailBuffer, chat_lang,
+    PERF_STAGE_COVER_DOWNLOAD, PerfTraceContext, ResponseResult, ThumbnailBuffer,
     exceeds_batch_download_limit, extract_retry_after_seconds, process_music,
-    process_music_with_context, sanitize_sensitive_text, send_reply_text,
+    process_music_with_context, resolve_message, sanitize_sensitive_text, send_reply_text,
 };
 use crate::i18n;
 
@@ -17,6 +17,9 @@ pub(super) fn collection_retry_delay_seconds(
     extract_retry_after_seconds(&error.to_string()).map(|seconds| seconds.saturating_add(1))
 }
 
+/// Orchestration for playlist/album collections (djradio returns early).
+/// Long by nature; collapses into the delivery module in the next deepening.
+#[allow(clippy::too_many_lines)]
 pub(super) async fn process_music_collection(
     bot: &Bot,
     msg: &Message,
@@ -27,7 +30,13 @@ pub(super) async fn process_music_collection(
         return process_djradio_collection(bot, msg, state, radio_id).await;
     }
 
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
 
     let (collection_name, collection_id, song_ids_result) = match target {
         MusicCollectionTarget::Playlist(playlist_id) => (
@@ -180,7 +189,13 @@ pub(super) async fn process_djradio_collection(
     state: &Arc<BotState>,
     radio_id: u64,
 ) -> ResponseResult<()> {
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
     let fetch_limit = max_tracks.saturating_add(1);
     let (total_programs, program_tracks) = match state

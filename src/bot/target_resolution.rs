@@ -1,7 +1,8 @@
 use super::{
-    Arc, Bot, BotState, Message, MusicCollectionTarget, ResponseResult, chat_lang,
+    Arc, Bot, BotState, Message, MusicCollectionTarget, ResponseResult,
     parse_music_collection_target, parse_music_id, parse_music_program_id, process_music,
-    process_music_collection, process_program, sanitize_sensitive_text, send_reply_text,
+    process_music_collection, process_program, resolve_message, sanitize_sensitive_text,
+    send_reply_text,
 };
 use crate::i18n;
 
@@ -46,7 +47,13 @@ pub(super) async fn search_first_song_id_or_reply(
     keyword: &str,
     log_context: &str,
 ) -> ResponseResult<Option<u64>> {
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     match state.music_api.search_songs(keyword, 1).await {
         Ok(songs) => {
             if let Some(song) = songs.first() {

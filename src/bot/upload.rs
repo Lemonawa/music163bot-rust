@@ -4,7 +4,7 @@ use super::{
     InlineKeyboardButton, InlineKeyboardMarkup, MIN_DOWNLOAD_CHUNK_BYTES, MaintenanceCounters,
     MaintenanceSignal, Message, MessageId, MusicApi, MusicLinkTarget, ParseMode, ReplyParameters,
     ResponseResult, Result, ThumbnailBuffer, UploadClientState, extract_retry_after_seconds,
-    sanitize_sensitive_text,
+    resolve_message, sanitize_sensitive_text,
 };
 
 pub(super) async fn apply_tags_in_blocking(
@@ -138,7 +138,13 @@ pub(super) async fn ensure_admin(
     if is_admin(msg, &state.config) {
         Ok(true)
     } else {
-        let lang = crate::bot::chat_lang(state, msg).await;
+        let lang = resolve_message(
+            &state.database,
+            &state.chat_languages,
+            &state.config.default_language,
+            msg,
+        )
+        .await;
         send_reply_text(bot, msg, crate::i18n::tr(&lang, "cmd_only_admin")).await?;
         Ok(false)
     }

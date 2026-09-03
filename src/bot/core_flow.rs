@@ -5,8 +5,8 @@ use super::{
     ResponseResult, acquire_download_leader, build_caption, build_perf_trace_context,
     cached_music_link_target, create_music_keyboard_for_target, delete_status_message_resilient,
     download_and_send_music, edit_status_message_resilient, extract_retry_after_seconds,
-    format_artists, format_error_chain, log_perf, sanitize_sensitive_text, send_reply_text,
-    u64_to_i64_saturating, url_bitrate_candidates,
+    format_artists, format_error_chain, log_perf, resolve_message, sanitize_sensitive_text,
+    send_reply_text, u64_to_i64_saturating, url_bitrate_candidates,
 };
 use crate::i18n;
 
@@ -59,7 +59,13 @@ pub(super) async fn try_send_cached_song(
         8 * cached_song.music_size / duration_sec
     };
 
-    let lang = crate::bot::chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let caption = build_caption(
         &lang,
         &cached_song.song_name,
@@ -126,7 +132,13 @@ pub(super) async fn process_program(
                 "Failed to fetch program detail for {program_id}: {}",
                 sanitize_sensitive_text(&format_error_chain(&e))
             );
-            let lang = crate::bot::chat_lang(state, msg).await;
+            let lang = resolve_message(
+                &state.database,
+                &state.chat_languages,
+                &state.config.default_language,
+                msg,
+            )
+            .await;
             send_reply_text(bot, msg, i18n::tr(&lang, "voice_detail_failed")).await?;
             return Ok(());
         }
@@ -230,7 +242,13 @@ pub(super) async fn process_music_with_context(
     let e2e_start = std::time::Instant::now();
     let mut perf_ctx = build_perf_trace_context(state, music_id, "initial");
     let preferred_program_id = program_context.as_ref().map(|program| program.program_id);
-    let lang = crate::bot::chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let media_label = if program_context.is_some() {
         i18n::tr(&lang, "label_program")
     } else {
@@ -404,7 +422,13 @@ async fn fetch_detail_and_status(
                 sanitize_sensitive_text(&format_error_chain(&e))
             );
             let failure_text = {
-                let lang = crate::bot::chat_lang(state, msg).await;
+                let lang = resolve_message(
+                    &state.database,
+                    &state.chat_languages,
+                    &state.config.default_language,
+                    msg,
+                )
+                .await;
                 i18n::tr_with(&lang, "fetch_media_failed", "label", &media_label)
             };
             edit_status_message_resilient(bot, msg.chat.id, status_msg.id, failure_text).await;
@@ -526,13 +550,25 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
                         retry_delay_secs
                     );
                     edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
-                        let lang = crate::bot::chat_lang(ctx.state, ctx.msg).await;
+                        let lang = resolve_message(
+                            &ctx.state.database,
+                            &ctx.state.chat_languages,
+                            &ctx.state.config.default_language,
+                            ctx.msg,
+                        )
+                        .await;
                         i18n::tr_with(&lang, "rate_limited", "secs", &retry_delay_secs)
                     })
                     .await;
                     tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
                     edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
-                        let lang = crate::bot::chat_lang(ctx.state, ctx.msg).await;
+                        let lang = resolve_message(
+                            &ctx.state.database,
+                            &ctx.state.chat_languages,
+                            &ctx.state.config.default_language,
+                            ctx.msg,
+                        )
+                        .await;
                         i18n::tr_many_strings(
                             &lang,
                             "downloading",
@@ -552,7 +588,13 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
                         .await;
                 } else {
                     edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
-                        let lang = crate::bot::chat_lang(ctx.state, ctx.msg).await;
+                        let lang = resolve_message(
+                            &ctx.state.database,
+                            &ctx.state.chat_languages,
+                            &ctx.state.config.default_language,
+                            ctx.msg,
+                        )
+                        .await;
                         i18n::tr(&lang, "error_generic")
                     })
                     .await;

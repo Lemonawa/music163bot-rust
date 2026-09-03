@@ -52,7 +52,7 @@ use about::handle_about_command;
 use collection_flow::{
     cover_download_failure_notice, download_cover_assets, process_music_collection,
 };
-use commands::{chat_lang, handle_music_url, handle_search_command};
+use commands::{handle_music_url, handle_search_command};
 use core_flow::{process_music, process_music_with_context, process_program};
 use download_flow::{DownloadAndSendParams, download_and_send_music};
 use entry::{
@@ -61,7 +61,10 @@ use entry::{
     sample_current_process_memory_mb, sample_resource_snapshot, should_download_cover,
 };
 use help_entry::{handle_help_command, handle_music_command};
-use lang_command::{handle_lang_callback, handle_lang_command, register_bot_commands};
+use lang_command::{
+    handle_lang_callback, handle_lang_command, register_bot_commands, resolve_inline,
+    resolve_message,
+};
 
 #[cfg(test)]
 use lang_command::bot_commands_for_locale;

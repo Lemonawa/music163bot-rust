@@ -3,12 +3,12 @@ use super::{
     InlineQueryResultArticle, InputMessageContent, InputMessageContentText,
     MaybeInaccessibleMessage, Message, ParseMode, RawDocumentParams, ReplyParameters,
     ResponseResult, StatusTextParams, acquire_upload_client, acquire_upload_permit,
-    build_status_text, chat_lang, clean_filename, clearallcache_confirmation_prompt, ensure_admin,
+    build_status_text, clean_filename, clearallcache_confirmation_prompt, ensure_admin,
     format_artists, format_speed_line, format_uptime, handle_lang_callback, join_futures,
     parse_inline_query_keyword, parse_music_id, parse_song_id_or_search_first_result,
-    process_music, raw_send_document_bytes, require_command_args_or_reply, rmcache_usage_prompt,
-    sample_resource_snapshot, sanitize_sensitive_text, send_reply_html, send_reply_message,
-    send_reply_text, u64_to_i64_saturating,
+    process_music, raw_send_document_bytes, require_command_args_or_reply, resolve_inline,
+    resolve_message, rmcache_usage_prompt, sample_resource_snapshot, sanitize_sensitive_text,
+    send_reply_html, send_reply_message, send_reply_text, u64_to_i64_saturating,
 };
 use crate::i18n::{self, ChatLanguage};
 
@@ -18,7 +18,13 @@ pub(super) async fn handle_lyric_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let Some(args) =
         require_command_args_or_reply(bot, msg, args, &i18n::tr(&lang, "music_need_id")).await?
     else {
@@ -192,7 +198,13 @@ pub(super) async fn handle_status_command(
         return Ok(());
     }
 
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     let chat_id = msg.chat.id.0;
 
@@ -242,7 +254,13 @@ pub(super) async fn handle_rmcache_command(
         return Ok(());
     };
 
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let args = args.unwrap_or_default();
 
     if args.is_empty() {
@@ -294,7 +312,13 @@ pub(super) async fn handle_clearallcache_command(
         return Ok(());
     };
 
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     send_reply_html(bot, msg, clearallcache_confirmation_prompt(&lang)).await?;
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     prune_expired_confirmations(&state.clearallcache_confirms);
@@ -315,7 +339,13 @@ pub(super) async fn handle_clearallcache_confirm_command(
         return Ok(());
     };
 
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
 
     let should_allow = state
         .clearallcache_confirms
@@ -406,7 +436,15 @@ pub(super) async fn handle_callback(
 ) -> ResponseResult<()> {
     let callback_data = query.data.clone();
     let callback_lang = match query.message.as_ref() {
-        Some(MaybeInaccessibleMessage::Regular(msg)) => Some(chat_lang(&state, msg).await),
+        Some(MaybeInaccessibleMessage::Regular(msg)) => Some(
+            resolve_message(
+                &state.database,
+                &state.chat_languages,
+                &state.config.default_language,
+                msg,
+            )
+            .await,
+        ),
         _ => None,
     };
     let tr = |key: &str| {
@@ -463,11 +501,11 @@ pub(super) async fn handle_inline_query(
 ) -> ResponseResult<()> {
     // Inline queries always come from a private "chat" with the bot: resolve
     // the language from the querent's user id (== private chat id).
-    let lang = i18n::resolve_inline_language(
+    let lang = resolve_inline(
         &state.database,
         &state.chat_languages,
-        &query.from,
         &state.config.default_language,
+        &query.from,
     )
     .await;
 

@@ -1,7 +1,5 @@
-use super::{Arc, Bot, BotState, Message, ReplyParameters, ResponseResult};
+use super::{Arc, Bot, BotState, Message, ReplyParameters, ResponseResult, resolve_message};
 use crate::i18n;
-
-use super::commands::chat_lang;
 
 pub(super) const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
     Some(value) => value,
@@ -25,7 +23,13 @@ pub(super) async fn handle_about_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let lang = chat_lang(state, msg).await;
+    let lang = resolve_message(
+        &state.database,
+        &state.chat_languages,
+        &state.config.default_language,
+        msg,
+    )
+    .await;
     let about_text = build_about_text(&lang);
 
     bot.send_message(msg.chat.id, about_text)

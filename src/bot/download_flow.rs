@@ -8,9 +8,10 @@ use super::{
     cleanup_thumbnail_buffer, collect_maintenance_signals, cover_download_failure_notice,
     create_music_keyboard_for_target, delete_status_message_resilient, download_chunk_bytes,
     download_cover_assets, edit_status_message_resilient, extract_file_id_from_response,
-    i64_to_u32_saturating, log_perf, raw_send_file, resolve_cover_policy, sanitize_sensitive_text,
-    send_reply_text, should_download_cover, should_remove_song_cache_after_partial_failure,
-    throughput_mbps, u64_to_i64_saturating, update_peak,
+    i64_to_u32_saturating, log_perf, raw_send_file, resolve_cover_policy, resolve_message,
+    sanitize_sensitive_text, send_reply_text, should_download_cover,
+    should_remove_song_cache_after_partial_failure, throughput_mbps, u64_to_i64_saturating,
+    update_peak,
 };
 use futures_util::{StreamExt, TryStreamExt};
 
@@ -183,7 +184,13 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
         msg: p.msg,
     });
 
-    let lang = crate::bot::chat_lang(p.state, p.msg).await;
+    let lang = resolve_message(
+        &p.state.database,
+        &p.state.chat_languages,
+        &p.state.config.default_language,
+        p.msg,
+    )
+    .await;
     let caption = {
         build_caption(
             &lang,
@@ -249,7 +256,13 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
 
     if p.cover_retry_exhausted {
         let notice = {
-            let lang = crate::bot::chat_lang(p.state, p.msg).await;
+            let lang = resolve_message(
+                &p.state.database,
+                &p.state.chat_languages,
+                &p.state.config.default_language,
+                p.msg,
+            )
+            .await;
             cover_download_failure_notice(&lang)
         };
         if let Err(e) = send_reply_text(p.bot, p.msg, notice).await {
