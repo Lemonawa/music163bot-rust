@@ -231,6 +231,22 @@ pub(super) async fn process_music(
     process_music_with_context(bot, msg, state, music_id, None).await
 }
 
+/// Shared rate-limit policy behind the delivery seam: the first attempt may
+/// sleep past the server's `retry-after` and retry; later attempts give up.
+/// Returns the sleep duration (already padded) when the caller should wait
+/// and retry.
+#[must_use]
+pub(super) fn rate_limit_retry_delay_secs(
+    error: &impl std::fmt::Display,
+    attempt: u32,
+) -> Option<u64> {
+    if attempt > 0 {
+        return None;
+    }
+
+    extract_retry_after_seconds(&error.to_string()).map(|seconds| seconds.saturating_add(1))
+}
+
 #[allow(clippy::too_many_lines)]
 pub(super) async fn process_music_with_context(
     bot: &Bot,
@@ -396,8 +412,7 @@ async fn fetch_detail_and_status(
         Ok(m) => m,
         Err(e) => {
             let sanitized = sanitize_sensitive_text(&format_error_chain(&e));
-            if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
-                let retry_delay_secs = delay_secs.saturating_add(1);
+            if let Some(retry_delay_secs) = rate_limit_retry_delay_secs(&sanitized, 0) {
                 tracing::warn!(
                     "Status message rate limited for music_id {}. Waiting {}s before retry",
                     music_id,
@@ -540,10 +555,9 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
             Ok(()) => break,
             Err(e) => {
                 let sanitized = sanitize_sensitive_text(&format_error_chain(&e));
-                if process_attempt == 0
-                    && let Some(delay_secs) = extract_retry_after_seconds(&sanitized)
+                if let Some(retry_delay_secs) =
+                    rate_limit_retry_delay_secs(&sanitized, process_attempt)
                 {
-                    let retry_delay_secs = delay_secs.saturating_add(1);
                     process_attempt = process_attempt.saturating_add(1);
                     tracing::warn!(
                         "Upload rate limited for music_id {}. Waiting {}s before retry",

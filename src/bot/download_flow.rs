@@ -9,8 +9,7 @@ use super::{
     create_music_keyboard_for_target, delete_status_message_resilient, download_cover_assets,
     edit_status_message_resilient, extract_file_id_from_response, i64_to_u32_saturating, log_perf,
     raw_send_file, resolve_cover_policy, resolve_message, sanitize_sensitive_text, send_reply_text,
-    should_download_cover, should_remove_song_cache_after_partial_failure, throughput_mbps,
-    u64_to_i64_saturating, update_peak,
+    should_download_cover, throughput_mbps, u64_to_i64_saturating, update_peak,
 };
 use futures_util::{StreamExt, TryStreamExt};
 
@@ -28,6 +27,13 @@ pub(super) struct DownloadAndSendParams<'a> {
 }
 
 pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Result<()> {
+    let lang = resolve_message(
+        &p.state.database,
+        &p.state.chat_languages,
+        &p.state.config.default_language,
+        p.msg,
+    )
+    .await;
     let audio_format = if p.song_url.url.contains(".flac") {
         AudioFormat::Flac
     } else {
@@ -79,8 +85,7 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         }
     };
 
-    let should_remove_song_cache =
-        should_remove_song_cache_after_partial_failure(cover_retry_exhausted);
+    let should_remove_song_cache = cover_retry_exhausted;
 
     if cover_retry_exhausted {
         tracing::warn!(
@@ -89,7 +94,7 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         );
     }
 
-    if let Some(err_msg) = validate_downloaded_audio(downloaded) {
+    if let Some(err_msg) = validate_downloaded_audio(&lang, downloaded) {
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;
         edit_status_message_resilient(p.bot, p.msg.chat.id, p.status_msg.id, err_msg).await;
@@ -100,6 +105,7 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         bot: p.bot,
         msg: p.msg,
         state: p.state,
+        lang: &lang,
         audio_buffer,
         thumbnail_buffer: &mut thumbnail_buffer,
         audio_format,
@@ -127,6 +133,7 @@ struct TagAndUploadParams<'a> {
     bot: &'a Bot,
     msg: &'a Message,
     state: &'a Arc<BotState>,
+    lang: &'a crate::i18n::ChatLanguage,
     audio_buffer: AudioBuffer,
     thumbnail_buffer: &'a mut Option<crate::bot::ThumbnailBuffer>,
     audio_format: AudioFormat,
@@ -183,16 +190,9 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
         msg: p.msg,
     });
 
-    let lang = resolve_message(
-        &p.state.database,
-        &p.state.chat_languages,
-        &p.state.config.default_language,
-        p.msg,
-    )
-    .await;
     let caption = {
         build_caption(
-            &lang,
+            p.lang,
             &song_info.song_name,
             &song_info.song_artists,
             &song_info.song_album,
@@ -204,7 +204,7 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
     };
 
     let reply_markup_json = serde_json::to_string(&create_music_keyboard_for_target(
-        &lang,
+        p.lang,
         p.link_target,
         p.song_id,
         &song_info.song_name,
@@ -254,16 +254,7 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
     .await?;
 
     if p.cover_retry_exhausted {
-        let notice = {
-            let lang = resolve_message(
-                &p.state.database,
-                &p.state.chat_languages,
-                &p.state.config.default_language,
-                p.msg,
-            )
-            .await;
-            cover_download_failure_notice(&lang)
-        };
+        let notice = cover_download_failure_notice(p.lang);
         if let Err(e) = send_reply_text(p.bot, p.msg, notice).await {
             tracing::warn!(
                 "Failed to send cover fallback notice for music_id {}: {}",
@@ -303,14 +294,13 @@ async fn acquire_permit_and_upload(mut p: UploadFlowParams<'_>) -> Result<Option
     execute_upload(&mut p).await
 }
 
-fn validate_downloaded_audio(downloaded: u64) -> Option<String> {
-    let lang = crate::i18n::ChatLanguage::new("zh");
+fn validate_downloaded_audio(lang: &crate::i18n::ChatLanguage, downloaded: u64) -> Option<String> {
     if downloaded == 0 {
-        return Some(crate::i18n::tr(&lang, "download_empty"));
+        return Some(crate::i18n::tr(lang, "download_empty"));
     }
     if downloaded < 1024 {
         return Some(crate::i18n::tr_with(
-            &lang,
+            lang,
             "download_too_small",
             "bytes",
             &downloaded,

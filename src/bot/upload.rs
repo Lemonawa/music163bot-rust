@@ -165,10 +165,6 @@ pub(super) fn is_official_telegram_api(api_url: &str) -> bool {
         .is_some_and(|host| host.eq_ignore_ascii_case("api.telegram.org"))
 }
 
-pub(super) fn should_remove_song_cache_after_partial_failure(cover_retry_exhausted: bool) -> bool {
-    cover_retry_exhausted
-}
-
 pub(super) const MESSAGE_TASK_LINK_HINTS: [&str; 3] = ["music.163.com", "163cn.tv", "163cn.link"];
 
 pub(super) fn contains_music_link_hint(text: &str) -> bool {

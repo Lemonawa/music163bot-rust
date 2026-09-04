@@ -52,7 +52,9 @@ use collection_flow::{
     cover_download_failure_notice, download_cover_assets, process_music_collection,
 };
 use commands::{handle_music_url, handle_search_command};
-use core_flow::{process_music, process_music_with_context, process_program};
+use core_flow::{
+    process_music, process_music_with_context, process_program, rate_limit_retry_delay_secs,
+};
 use download_flow::{DownloadAndSendParams, download_and_send_music};
 use entry::{
     StatusTextParams, build_status_text, format_speed_line, format_uptime,
@@ -93,8 +95,7 @@ use upload::{
     is_clearallcache_confirm, is_official_telegram_api, join_futures, log_perf, maintenance_worker,
     require_command_args_or_reply, rmcache_usage_prompt, send_reply_html, send_reply_message,
     send_reply_text, should_log_command, should_refresh_upload_client,
-    should_remove_song_cache_after_partial_failure, should_set_upload_pool_idle_timeout,
-    should_spawn_message_task,
+    should_set_upload_pool_idle_timeout, should_spawn_message_task,
 };
 use wiring::{
     AudioFormat, BotState, CACHE_PRUNE_INTERVAL_REQUESTS, CacheSnapshot, InflightClaim,
@@ -109,8 +110,6 @@ use wiring::{
 
 #[cfg(test)]
 use about::{BUILD_GIT_COMMIT, build_about_text};
-#[cfg(test)]
-use collection_flow::collection_retry_delay_seconds;
 #[cfg(test)]
 use download_flow::{PostUploadDbAction, classify_post_upload_db_result, max_download_size_bytes};
 #[cfg(test)]

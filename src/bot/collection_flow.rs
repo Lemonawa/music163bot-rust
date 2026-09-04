@@ -1,24 +1,12 @@
 use super::{
     Arc, Bot, BotState, Bytes, CoverMode, Message, MusicCollectionTarget,
     PERF_STAGE_COVER_DOWNLOAD, PerfTraceContext, ResponseResult, ThumbnailBuffer,
-    exceeds_batch_download_limit, extract_retry_after_seconds, process_music,
-    process_music_with_context, resolve_message, sanitize_sensitive_text, send_reply_text,
+    exceeds_batch_download_limit, process_music, process_music_with_context,
+    rate_limit_retry_delay_secs, resolve_message, sanitize_sensitive_text, send_reply_text,
 };
 use crate::i18n;
 
-pub(super) fn collection_retry_delay_seconds(
-    error: &impl std::fmt::Display,
-    attempt: u32,
-) -> Option<u64> {
-    if attempt > 0 {
-        return None;
-    }
-
-    extract_retry_after_seconds(&error.to_string()).map(|seconds| seconds.saturating_add(1))
-}
-
 /// Orchestration for playlist/album collections (djradio returns early).
-/// Long by nature; collapses into the delivery module in the next deepening.
 #[allow(clippy::too_many_lines)]
 pub(super) async fn process_music_collection(
     bot: &Bot,
@@ -153,7 +141,7 @@ async fn download_songs_with_retry(
             match process_music(bot, msg, state, song_id).await {
                 Ok(()) => break,
                 Err(e) => {
-                    if let Some(delay_secs) = collection_retry_delay_seconds(&e, attempt) {
+                    if let Some(delay_secs) = rate_limit_retry_delay_secs(&e, attempt) {
                         attempt = attempt.saturating_add(1);
                         tracing::warn!(
                             "Rate limited while processing song {} from {} {}. Waiting {}s before retry",
@@ -236,13 +224,7 @@ pub(super) async fn process_djradio_collection(
         return Ok(());
     }
 
-    let mut seen_track_ids = std::collections::HashSet::new();
-    let mut unique_tracks = Vec::with_capacity(program_tracks.len());
-    for program in program_tracks {
-        if seen_track_ids.insert(program.main_track_id) {
-            unique_tracks.push(program);
-        }
-    }
+    let unique_tracks = dedupe_programs(program_tracks);
 
     if unique_tracks.is_empty() {
         send_reply_text(bot, msg, i18n::tr(&lang, "dj_no_programs")).await?;
@@ -275,7 +257,7 @@ pub(super) async fn process_djradio_collection(
             {
                 Ok(()) => break,
                 Err(e) => {
-                    if let Some(delay_secs) = collection_retry_delay_seconds(&e, attempt) {
+                    if let Some(delay_secs) = rate_limit_retry_delay_secs(&e, attempt) {
                         attempt = attempt.saturating_add(1);
                         tracing::warn!(
                             "Rate limited while processing program {} from radio {}. Waiting {}s before retry",
@@ -426,4 +408,53 @@ pub(super) fn cover_download_failure_notice(lang: &crate::i18n::ChatLanguage) ->
         "attempts",
         &crate::music_api::ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS,
     )
+}
+
+/// Drop repeat tracks from a radio listing, keeping first-seen order.
+fn dedupe_programs(
+    programs: Vec<crate::music_api::ProgramMainTrack>,
+) -> Vec<crate::music_api::ProgramMainTrack> {
+    let mut seen_track_ids = std::collections::HashSet::new();
+    let mut unique_tracks = Vec::with_capacity(programs.len());
+    for program in programs {
+        if seen_track_ids.insert(program.main_track_id) {
+            unique_tracks.push(program);
+        }
+    }
+    unique_tracks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dedupe_programs;
+
+    fn program(program_id: u64, main_track_id: u64) -> crate::music_api::ProgramMainTrack {
+        crate::music_api::ProgramMainTrack {
+            program_id,
+            main_track_id,
+            program_name: format!("program {program_id}"),
+            author_name: "dj".to_string(),
+            radio_name: "radio".to_string(),
+            cover_url: None,
+        }
+    }
+
+    #[test]
+    fn dedupe_programs_keeps_first_seen_order() {
+        let programs = vec![
+            program(1, 10),
+            program(2, 20),
+            program(3, 10),
+            program(4, 30),
+        ];
+        let unique = dedupe_programs(programs);
+        let ids: Vec<u64> = unique.iter().map(|p| p.main_track_id).collect();
+        assert_eq!(ids, vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn dedupe_programs_keeps_all_when_distinct() {
+        let programs = vec![program(1, 10), program(2, 20)];
+        assert_eq!(dedupe_programs(programs).len(), 2);
+    }
 }
