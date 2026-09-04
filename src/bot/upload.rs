@@ -119,10 +119,6 @@ pub(super) fn build_program_url(
     Ok(url)
 }
 
-pub(super) fn parse_api_url(api_url: &str) -> std::result::Result<reqwest::Url, url::ParseError> {
-    reqwest::Url::parse(api_url)
-}
-
 pub(super) fn is_admin(msg: &Message, config: &Config) -> bool {
     let Some(user) = msg.from.as_ref() else {
         return false;
@@ -167,45 +163,6 @@ pub(super) fn is_official_telegram_api(api_url: &str) -> bool {
 
     url.host_str()
         .is_some_and(|host| host.eq_ignore_ascii_case("api.telegram.org"))
-}
-
-pub(super) async fn local_file_uri_from_path(path: &std::path::Path) -> Option<String> {
-    let canonical = tokio::fs::canonicalize(path).await.ok()?;
-    url::Url::from_file_path(canonical)
-        .ok()
-        .map(|url| url.to_string())
-}
-
-pub(super) async fn maybe_local_file_uri(
-    config: &Config,
-    is_official_api: bool,
-    path: &std::path::Path,
-) -> Option<String> {
-    if !config.flags.upload_local_file_uri() {
-        return None;
-    }
-
-    if is_official_api {
-        return None;
-    }
-
-    local_file_uri_from_path(path).await
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum UploadFileTarget {
-    LocalUri(String),
-    Multipart,
-}
-
-pub(super) async fn select_local_upload_target(
-    config: &Config,
-    is_official_api: bool,
-    path: &std::path::Path,
-) -> UploadFileTarget {
-    maybe_local_file_uri(config, is_official_api, path)
-        .await
-        .map_or(UploadFileTarget::Multipart, UploadFileTarget::LocalUri)
 }
 
 pub(super) fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
@@ -550,8 +507,6 @@ pub(super) struct UploadBotBundle {
     pub(super) api_base_url: String,
 }
 
-pub(super) const RAW_UPLOAD_CHUNK_SIZE: usize = 256 * 1024;
-
 pub(super) struct RawUploadParams<'a> {
     pub(super) chat_id: i64,
     pub(super) caption: &'a str,
@@ -563,9 +518,4 @@ pub(super) struct RawUploadParams<'a> {
     pub(super) thumbnail: Option<&'a ThumbnailBuffer>,
 }
 
-pub(super) struct RawDocumentParams<'a> {
-    pub(super) chat_id: i64,
-    pub(super) caption: Option<&'a str>,
-    pub(super) reply_to_message_id: i32,
-    pub(super) reply_markup_json: Option<String>,
-}
+pub(super) const RAW_UPLOAD_CHUNK_SIZE: usize = 256 * 1024;

@@ -1,8 +1,7 @@
 use super::{
     Arc, AudioBuffer, Bot, BotError, BotState, Bytes, Config, RAW_UPLOAD_CHUNK_SIZE,
     RawUploadParams, ReaderStream, Result, ThumbnailBuffer, UploadBotBundle, UploadClientState,
-    UploadFileTarget, build_http_client, extract_retry_after_seconds, get_upload_bot,
-    parse_api_url, sanitize_sensitive_text, select_local_upload_target,
+    build_http_client, extract_retry_after_seconds, get_upload_bot, sanitize_sensitive_text,
     should_refresh_upload_client, should_set_upload_pool_idle_timeout,
 };
 use std::fmt::Write as _;
@@ -78,14 +77,7 @@ pub(super) async fn raw_send_file(args: &RawSendFileArgs<'_>) -> Result<serde_js
                     .file_name(filename.clone())
                     .mime_str(mime_type)?
             } else if let AudioBuffer::Disk { path, .. } = audio_buffer {
-                let file = tokio::fs::File::open(path)
-                    .await
-                    .map_err(BotError::FileOperation)?;
-                let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
-                let body = reqwest::Body::wrap_stream(stream);
-                reqwest::multipart::Part::stream_with_length(body, file_size)
-                    .file_name(filename.clone())
-                    .mime_str(mime_type)?
+                disk_stream_part(path, &filename, mime_type).await?
             } else {
                 return Err(BotError::Other(anyhow::anyhow!(
                     "Memory buffer without pre-shared Bytes"
@@ -127,19 +119,7 @@ pub(super) async fn raw_send_file(args: &RawSendFileArgs<'_>) -> Result<serde_js
                         form = form.text("thumbnail", uri);
                     }
                     UploadFileTarget::Multipart => {
-                        let file = tokio::fs::File::open(path)
-                            .await
-                            .map_err(BotError::FileOperation)?;
-                        let len = file
-                            .metadata()
-                            .await
-                            .map_err(BotError::FileOperation)?
-                            .len();
-                        let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
-                        let body = reqwest::Body::wrap_stream(stream);
-                        let thumb_part = reqwest::multipart::Part::stream_with_length(body, len)
-                            .file_name("thumb.jpg")
-                            .mime_str("image/jpeg")?;
+                        let thumb_part = disk_stream_part(path, "thumb.jpg", "image/jpeg").await?;
                         form = form.part("thumbnail", thumb_part);
                     }
                 }
@@ -149,6 +129,105 @@ pub(super) async fn raw_send_file(args: &RawSendFileArgs<'_>) -> Result<serde_js
 
     let url = format!("{api_base_url}sendAudio");
     send_raw_upload_form(client, &url, form, "sendAudio").await
+}
+
+/// Stream a disk file as a multipart part with a known length (so the
+/// request carries Content-Length), using 256 KiB chunks.
+async fn disk_stream_part(
+    path: &std::path::Path,
+    filename: &str,
+    mime_type: &str,
+) -> Result<reqwest::multipart::Part> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(BotError::FileOperation)?;
+    let len = file
+        .metadata()
+        .await
+        .map_err(BotError::FileOperation)?
+        .len();
+    let stream = ReaderStream::with_capacity(file, RAW_UPLOAD_CHUNK_SIZE);
+    let body = reqwest::Body::wrap_stream(stream);
+    Ok(reqwest::multipart::Part::stream_with_length(body, len)
+        .file_name(filename.to_owned())
+        .mime_str(mime_type)?)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum UploadFileTarget {
+    LocalUri(String),
+    Multipart,
+}
+
+pub(super) async fn select_local_upload_target(
+    config: &Config,
+    is_official_api: bool,
+    path: &std::path::Path,
+) -> UploadFileTarget {
+    maybe_local_file_uri(config, is_official_api, path)
+        .await
+        .map_or(UploadFileTarget::Multipart, UploadFileTarget::LocalUri)
+}
+
+pub(super) async fn maybe_local_file_uri(
+    config: &Config,
+    is_official_api: bool,
+    path: &std::path::Path,
+) -> Option<String> {
+    if !config.flags.upload_local_file_uri() {
+        return None;
+    }
+
+    if is_official_api {
+        return None;
+    }
+
+    local_file_uri_from_path(path).await
+}
+
+pub(super) async fn local_file_uri_from_path(path: &std::path::Path) -> Option<String> {
+    let canonical = tokio::fs::canonicalize(path).await.ok()?;
+    url::Url::from_file_path(canonical)
+        .ok()
+        .map(|url| url.to_string())
+}
+
+pub(super) struct RawDocumentParams<'a> {
+    pub(super) chat_id: i64,
+    pub(super) caption: Option<&'a str>,
+    pub(super) reply_to_message_id: i32,
+    pub(super) reply_markup_json: Option<String>,
+}
+
+/// Upload an in-memory document via raw reqwest multipart.
+pub(super) async fn raw_send_document_bytes(
+    client: &reqwest::Client,
+    api_base_url: &str,
+    filename: &str,
+    content: Bytes,
+    params: &RawDocumentParams<'_>,
+) -> Result<serde_json::Value> {
+    let len = content.len() as u64;
+    let mut form = reqwest::multipart::Form::new().text("chat_id", params.chat_id.to_string());
+
+    if let Some(caption) = params.caption {
+        form = form.text("caption", caption.to_owned());
+    }
+
+    let file_part = reqwest::multipart::Part::stream_with_length(content, len)
+        .file_name(filename.to_owned())
+        .mime_str("text/plain; charset=utf-8")?;
+    form = form.part("document", file_part);
+
+    let reply_params = format!(r#"{{"message_id":{}}}"#, params.reply_to_message_id);
+    form = form.text("reply_parameters", reply_params);
+
+    if let Some(ref markup_json) = params.reply_markup_json {
+        form = form.text("reply_markup", markup_json.clone());
+    }
+
+    let url = format!("{api_base_url}sendDocument");
+    send_raw_upload_form(client, &url, form, "sendDocument").await
 }
 
 pub(super) fn redact_bot_token_in_error_message(message: &str) -> String {
@@ -218,7 +297,7 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
         "https://api.telegram.org/".to_string()
     };
 
-    let api_url = match parse_api_url(&api_url_str) {
+    let api_url = match reqwest::Url::parse(&api_url_str) {
         Ok(url) => url,
         Err(e) => {
             tracing::warn!(
@@ -226,7 +305,7 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
                 sanitize_sensitive_text(&api_url_str),
                 sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
             );
-            match parse_api_url("https://api.telegram.org/") {
+            match reqwest::Url::parse("https://api.telegram.org/") {
                 Ok(url) => url,
                 Err(err) => {
                     tracing::error!(

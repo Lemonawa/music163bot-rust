@@ -75,14 +75,14 @@ fn cached_music_link_target_falls_back_to_song() {
 }
 
 #[test]
-fn parse_api_url_accepts_valid_base() {
-    let url = parse_api_url("https://api.telegram.org/").expect("valid url");
+fn upload_base_url_accepts_valid_base() {
+    let url = reqwest::Url::parse("https://api.telegram.org/").expect("valid url");
     assert_eq!(url.as_str(), "https://api.telegram.org/");
 }
 
 #[test]
-fn parse_api_url_rejects_invalid_base() {
-    assert!(parse_api_url("not a url").is_err());
+fn upload_base_url_rejects_invalid_base() {
+    assert!(reqwest::Url::parse("not a url").is_err());
 }
 
 #[tokio::test]

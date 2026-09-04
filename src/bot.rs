@@ -45,7 +45,6 @@ mod support;
 mod target_resolution;
 mod telegram_api;
 mod upload;
-mod upload_document;
 mod wiring;
 
 use about::handle_about_command;
@@ -80,25 +79,23 @@ use target_resolution::{
     dispatch_parsed_music_target, parse_direct_music_target, parse_song_id_or_search_first_result,
 };
 use telegram_api::{
-    RawSendFileArgs, acquire_download_permit, acquire_upload_client, acquire_upload_permit,
-    acquire_upload_permit_owned, extract_file_id_from_response, raw_send_file, run_upload_prewarm,
-    send_raw_upload_form,
+    RawDocumentParams, RawSendFileArgs, acquire_download_permit, acquire_upload_client,
+    acquire_upload_permit, acquire_upload_permit_owned, extract_file_id_from_response,
+    raw_send_document_bytes, raw_send_file, run_upload_prewarm,
 };
 use upload::{
     MessageTaskRoute, PERF_STAGE_PRE_UPLOAD_PATH, PERF_STAGE_SELECT_URL, RAW_UPLOAD_CHUNK_SIZE,
-    RawDocumentParams, RawUploadParams, UploadBotBundle, UploadFileTarget, acquire_download_leader,
-    append_search_result_line, apply_tags_in_blocking, cached_music_link_target,
-    classify_message_task, cleanup_audio_buffer, cleanup_thumbnail_buffer,
-    clearallcache_confirmation_prompt, collect_maintenance_signals,
+    RawUploadParams, UploadBotBundle, acquire_download_leader, append_search_result_line,
+    apply_tags_in_blocking, cached_music_link_target, classify_message_task, cleanup_audio_buffer,
+    cleanup_thumbnail_buffer, clearallcache_confirmation_prompt, collect_maintenance_signals,
     create_music_keyboard_for_target, delete_status_message_resilient,
     edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit, get_upload_bot,
     is_clearallcache_confirm, is_official_telegram_api, join_futures, log_perf, maintenance_worker,
-    parse_api_url, require_command_args_or_reply, rmcache_usage_prompt, select_local_upload_target,
-    send_reply_html, send_reply_message, send_reply_text, should_log_command,
-    should_refresh_upload_client, should_remove_song_cache_after_partial_failure,
-    should_set_upload_pool_idle_timeout, should_spawn_message_task, url_bitrate_candidates,
+    require_command_args_or_reply, rmcache_usage_prompt, send_reply_html, send_reply_message,
+    send_reply_text, should_log_command, should_refresh_upload_client,
+    should_remove_song_cache_after_partial_failure, should_set_upload_pool_idle_timeout,
+    should_spawn_message_task, url_bitrate_candidates,
 };
-use upload_document::raw_send_document_bytes;
 use wiring::{
     AudioFormat, BotState, CACHE_PRUNE_INTERVAL_REQUESTS, CacheSnapshot, InflightClaim,
     InflightDownloads, InflightLeaderGuard, MAINTENANCE_QUEUE_CAPACITY, MaintenanceCounters,
@@ -123,11 +120,13 @@ use support::{CLEARALLCACHE_CONFIRM_WINDOW, format_bitrate_kbps, prune_expired_c
 #[cfg(test)]
 use target_resolution::ParsedMusicTarget;
 #[cfg(test)]
-use telegram_api::{parse_telegram_api_response, redact_bot_token_in_error_message};
+use telegram_api::{
+    UploadFileTarget, maybe_local_file_uri, parse_telegram_api_response,
+    redact_bot_token_in_error_message, select_local_upload_target,
+};
 #[cfg(test)]
 use upload::{
     build_music_url, build_program_url, format_perf, is_command_text, is_spawnable_command_text,
-    maybe_local_file_uri,
 };
 #[cfg(test)]
 use wiring::{
