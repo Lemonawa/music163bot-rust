@@ -11,8 +11,8 @@ use super::resize_image_with_padding;
 use super::{Album, Artist, MusicApi, SongDetail, SongUrl};
 use super::{
     CachePruneStats, MUSIC_API_CACHE_MAX_ENTRIES, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL,
-    SONG_URL_CACHE_TTL, TimedCacheEntry, cache_entry_is_fresh, format_artists, requests,
-    resize_album_art_to_thumbnail, rewrite_media_url, shared, song_url_cache_key,
+    SONG_URL_CACHE_TTL, TimedCacheEntry, cache_entry_is_fresh, eapi_crypto, format_artists,
+    resize_album_art_to_thumbnail, rewrite_media_url, song_url_cache_key,
 };
 use crate::config::Config;
 use crate::error::BotError;
@@ -261,7 +261,7 @@ fn parse_form_field_as_u64(body: &str, field: &str) -> Option<u64> {
 fn decode_eapi_song_url_request(body: &str) -> Option<u64> {
     let params_hex = url::form_urlencoded::parse(body.as_bytes())
         .find_map(|(k, v)| (k == "params").then(|| v.into_owned()))?;
-    let plaintext = MusicApi::eapi_decrypt(&params_hex).ok()?;
+    let plaintext = eapi_crypto::eapi_decrypt(&params_hex).ok()?;
     let json_blob = plaintext.split("-36cd479b6b5-").nth(1)?;
     let parsed: serde_json::Value = serde_json::from_str(json_blob).ok()?;
     let level = parsed.get("level").and_then(|v| v.as_str())?;

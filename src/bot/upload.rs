@@ -165,21 +165,6 @@ pub(super) fn is_official_telegram_api(api_url: &str) -> bool {
         .is_some_and(|host| host.eq_ignore_ascii_case("api.telegram.org"))
 }
 
-pub(super) fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
-    if has_music_u {
-        // Ordered high→low. Each value maps to an eapi `level` via
-        // `bitrate_to_eapi_level`: 1_999_000 → "hires" (24-bit FLAC, the tier a
-        // logged-in user with a VIP cookie can pull), 999_000 → "lossless"
-        // (16-bit FLAC), then MP3 fallbacks. NetEase silently downgrades a tier
-        // the account/song cannot serve, so requesting hires first and relying on
-        // the fallback chain yields the best available quality without extra hops
-        // when hires is honored, and degrades cleanly when it is not.
-        &[1_999_000, 999_000, 320_000, 128_000]
-    } else {
-        &[320_000, 128_000]
-    }
-}
-
 pub(super) fn should_remove_song_cache_after_partial_failure(cover_retry_exhausted: bool) -> bool {
     cover_retry_exhausted
 }

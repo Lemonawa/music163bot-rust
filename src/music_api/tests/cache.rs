@@ -85,20 +85,6 @@ async fn run_with_attempts_and_overall_timeout_fails_when_attempts_outlast_overa
 }
 
 #[test]
-fn fallback_candidates_skip_primary_after_attempt() {
-    let candidates = [320_000, 192_000, 128_000];
-    let fallback = super::requests::fallback_bitrate_candidates(&candidates, true);
-    assert_eq!(fallback, &[192_000, 128_000]);
-}
-
-#[test]
-fn fallback_candidates_keep_primary_when_not_attempted() {
-    let candidates = [320_000, 192_000, 128_000];
-    let fallback = super::requests::fallback_bitrate_candidates(&candidates, false);
-    assert_eq!(fallback, &[320_000, 192_000, 128_000]);
-}
-
-#[test]
 fn cache_entry_expires_after_ttl() {
     let created_at = std::time::Instant::now();
     let ttl = Duration::from_secs(1);
@@ -119,9 +105,9 @@ fn song_url_deserializes_null_fields() {
 }
 
 #[test]
-fn shared_song_url_helper_rejects_empty_urls() {
+fn song_url_without_download_url_is_rejected() {
     let song_url = sample_song_url(42, 320_000, "");
-    assert!(!super::shared::song_url_has_download_url(&song_url));
+    assert!(!song_url.has_download_url());
 }
 
 #[test]

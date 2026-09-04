@@ -94,7 +94,7 @@ use upload::{
     require_command_args_or_reply, rmcache_usage_prompt, send_reply_html, send_reply_message,
     send_reply_text, should_log_command, should_refresh_upload_client,
     should_remove_song_cache_after_partial_failure, should_set_upload_pool_idle_timeout,
-    should_spawn_message_task, url_bitrate_candidates,
+    should_spawn_message_task,
 };
 use wiring::{
     AudioFormat, BotState, CACHE_PRUNE_INTERVAL_REQUESTS, CacheSnapshot, InflightClaim,

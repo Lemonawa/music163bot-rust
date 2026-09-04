@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
+use super::super::eapi_crypto;
 use super::super::{
     DjProgramItem, MusicApi, ProgramMainTrack, Result, SongDetail, SongDetailResponse, SongUrl,
     SongUrlResponse,
 };
+use super::bitrate_selection::bitrate_to_eapi_level;
 use crate::error::BotError;
 
 impl MusicApi {
@@ -82,13 +84,14 @@ impl MusicApi {
             "header": "{}",
         });
         let payload_str = serde_json::to_string(&payload)?;
-        let body = Self::eapi_params(path, &payload_str)?;
+        let body = eapi_crypto::eapi_params(path, &payload_str)
+            .map_err(|e| BotError::MusicApi(e.to_string()))?;
 
         let response = self
             .client
             .post(url)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("User-Agent", Self::choose_eapi_user_agent())
+            .header("User-Agent", eapi_crypto::EAPI_USER_AGENT)
             .header("Cookie", self.build_eapi_cookie())
             .body(body)
             .send()
@@ -105,7 +108,8 @@ impl MusicApi {
         } else {
             let trimmed_str = std::str::from_utf8(trimmed_bytes)
                 .map_err(|e| BotError::MusicApi(format!("Invalid UTF-8 in response: {e}")))?;
-            let decrypted = Self::eapi_decrypt(trimmed_str)?;
+            let decrypted = eapi_crypto::eapi_decrypt(trimmed_str)
+                .map_err(|e| BotError::MusicApi(e.to_string()))?;
             serde_json::from_str(&decrypted)?
         };
 
@@ -132,15 +136,5 @@ impl MusicApi {
     /// Returns an error if the API request fails or returns an error code.
     pub async fn get_song_detail(&self, song_id: u64) -> Result<Arc<SongDetail>> {
         self.get_song_detail_shared(song_id).await
-    }
-}
-
-fn bitrate_to_eapi_level(br: u64) -> &'static str {
-    match br {
-        0..=128_000 => "standard",
-        128_001..=192_000 => "higher",
-        192_001..=320_000 => "exhigh",
-        320_001..=999_000 => "lossless",
-        _ => "hires",
     }
 }

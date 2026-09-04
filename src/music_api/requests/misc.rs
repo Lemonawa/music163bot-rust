@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use super::super::{
     ALBUM_ART_DOWNLOAD_OVERALL_TIMEOUT, EapiSearchResponse, LyricResponse, MusicApi, Result,
-    SHORT_USER_AGENT, SearchSong, resize_album_art_to_thumbnail, rewrite_media_url,
+    SHORT_USER_AGENT, SearchSong, eapi_crypto, resize_album_art_to_thumbnail, rewrite_media_url,
     run_with_attempts_and_overall_timeout_with_err,
 };
 use crate::error::BotError;
@@ -60,12 +60,13 @@ impl MusicApi {
             offset: 0,
             limit: limit.max(1),
         })?;
-        let body = Self::eapi_params(path, &payload_str)?;
+        let body = eapi_crypto::eapi_params(path, &payload_str)
+            .map_err(|e| BotError::MusicApi(e.to_string()))?;
         let request = self
             .client
             .post(url)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("User-Agent", Self::choose_eapi_user_agent())
+            .header("User-Agent", eapi_crypto::EAPI_USER_AGENT)
             .header("Cookie", self.build_eapi_cookie())
             .body(body);
 
@@ -81,7 +82,8 @@ impl MusicApi {
         } else {
             let trimmed_str = std::str::from_utf8(trimmed_bytes)
                 .map_err(|e| BotError::MusicApi(format!("Invalid UTF-8 in response: {e}")))?;
-            let decrypted = Self::eapi_decrypt(trimmed_str)?;
+            let decrypted = eapi_crypto::eapi_decrypt(trimmed_str)
+                .map_err(|e| BotError::MusicApi(e.to_string()))?;
             serde_json::from_str(&decrypted)?
         };
 

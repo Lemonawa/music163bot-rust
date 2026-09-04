@@ -8,16 +8,17 @@ use tokio::time::Duration;
 use crate::error::Result;
 
 mod cache_and_crypto;
+mod eapi_crypto;
 mod media;
 mod models;
 mod requests;
-mod shared;
 
 pub use self::media::{format_artists, resize_album_art_to_thumbnail};
 pub use self::models::{
     Album, Artist, LyricContent, LyricResponse, ProgramMainTrack, SearchResponse, SearchResult,
     SearchSong, SongDetail, SongDetailResponse, SongUrl, SongUrlResponse,
 };
+pub(crate) use self::requests::bitrate_selection::url_bitrate_candidates;
 
 #[cfg(test)]
 use self::media::resize_image_with_padding;

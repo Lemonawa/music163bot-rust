@@ -70,19 +70,19 @@ async fn get_djradio_program_main_tracks_returns_tracks_and_sets_referer() {
 
 #[test]
 fn eapi_encrypt_rejects_invalid_key_length() {
-    let result = MusicApi::eapi_encrypt_with_key("data", b"short");
+    let result = super::eapi_crypto::eapi_encrypt_with_key("data", b"short");
     assert!(result.is_err());
 }
 
 #[test]
 fn eapi_encrypt_accepts_valid_key_length() {
-    let result = MusicApi::eapi_encrypt_with_key("data", b"e82ckenh8dichen8");
+    let result = super::eapi_crypto::eapi_encrypt_with_key("data", b"e82ckenh8dichen8");
     assert!(result.is_ok());
 }
 
 #[test]
 fn eapi_decrypt_rejects_invalid_key_length() {
-    let result = MusicApi::eapi_decrypt_with_key("deadbeef", b"short");
+    let result = super::eapi_crypto::eapi_decrypt_with_key("deadbeef", b"short");
     assert!(result.is_err());
 }
 
@@ -90,8 +90,8 @@ fn eapi_decrypt_rejects_invalid_key_length() {
 fn eapi_encrypt_decrypt_round_trip() {
     let key = b"e82ckenh8dichen8";
     let plaintext = "roundtrip";
-    let encrypted = MusicApi::eapi_encrypt_with_key(plaintext, key).expect("encrypted");
-    let decrypted = MusicApi::eapi_decrypt_with_key(&encrypted, key).expect("decrypted");
+    let encrypted = super::eapi_crypto::eapi_encrypt_with_key(plaintext, key).expect("encrypted");
+    let decrypted = super::eapi_crypto::eapi_decrypt_with_key(&encrypted, key).expect("decrypted");
     assert_eq!(decrypted, plaintext);
 }
 

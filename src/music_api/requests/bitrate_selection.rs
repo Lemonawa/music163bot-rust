@@ -4,14 +4,35 @@ use std::time::Instant;
 use tokio::time::Duration;
 
 use super::super::{MusicApi, PERF_API_LOG_PREFIX, Result, SongDetail, SongUrl};
-use super::{
-    fallback_bitrate_candidates as request_fallback_bitrate_candidates,
-    log_music_api_perf as request_log_music_api_perf,
-    song_url_has_download_url as request_song_url_has_download_url,
-};
 use crate::error::BotError;
 
-pub(super) fn fallback_bitrate_candidates_impl(
+/// Bitrate candidates ordered high→low for URL selection. With a `MUSIC_U`
+/// login each value maps to an eapi `level` via [`bitrate_to_eapi_level`]:
+/// `1_999_000` → "hires" (24-bit FLAC, the tier a logged-in VIP account can
+/// pull), `999_000` → "lossless" (16-bit FLAC), then MP3 fallbacks. The
+/// provider silently downgrades a tier the account/song cannot serve, so
+/// requesting hires first and relying on the fallback chain yields the best
+/// available quality without extra hops when hires is honored.
+#[must_use]
+pub fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
+    if has_music_u {
+        &[1_999_000, 999_000, 320_000, 128_000]
+    } else {
+        &[320_000, 128_000]
+    }
+}
+
+pub(super) fn bitrate_to_eapi_level(br: u64) -> &'static str {
+    match br {
+        0..=128_000 => "standard",
+        128_001..=192_000 => "higher",
+        192_001..=320_000 => "exhigh",
+        320_001..=999_000 => "lossless",
+        _ => "hires",
+    }
+}
+
+pub(super) fn fallback_bitrate_candidates(
     bitrate_candidates: &[u64],
     primary_attempted_unavailable: bool,
 ) -> &[u64] {
@@ -24,7 +45,7 @@ pub(super) fn fallback_bitrate_candidates_impl(
     }
 }
 
-pub(super) fn log_music_api_perf_impl(song_id: u64, stage: &str, duration: Duration) {
+pub(super) fn log_music_api_perf(song_id: u64, stage: &str, duration: Duration) {
     tracing::debug!(
         "{PERF_API_LOG_PREFIX}|music_id={song_id}|stage={stage}|elapsed_ms={}",
         duration.as_millis()
@@ -50,7 +71,7 @@ impl MusicApi {
         if let Some(ref detail) = cached_detail
             && let Some(song_url) = self.get_first_cached_song_url(song_id, bitrate_candidates)
         {
-            request_log_music_api_perf(
+            log_music_api_perf(
                 song_id,
                 "select_url_total",
                 select_url_total_start.elapsed(),
@@ -80,7 +101,7 @@ impl MusicApi {
         }
 
         let Some(detail) = cached_detail else {
-            request_log_music_api_perf(
+            log_music_api_perf(
                 song_id,
                 "select_url_total",
                 select_url_total_start.elapsed(),
@@ -136,7 +157,7 @@ impl MusicApi {
         let mut fetched_url = None;
         if let Some(result) = url_result {
             match result {
-                Ok(song_url) if request_song_url_has_download_url(&song_url) => {
+                Ok(song_url) if song_url.has_download_url() => {
                     fetched_url = Some(song_url);
                 }
                 Ok(_) => {
@@ -159,7 +180,7 @@ impl MusicApi {
             "[parallel_fetch] {}ms (detail={need_detail}, url={need_url})",
             parallel_start.elapsed().as_millis()
         );
-        request_log_music_api_perf(song_id, "parallel_fetch", parallel_start.elapsed());
+        log_music_api_perf(song_id, "parallel_fetch", parallel_start.elapsed());
         Ok((fetched_detail, fetched_url, primary_attempted_unavailable))
     }
 
@@ -176,7 +197,7 @@ impl MusicApi {
         let mut last_error = None;
         let mut fallback_url_start = None;
         for &bitrate in
-            request_fallback_bitrate_candidates(bitrate_candidates, primary_attempted_unavailable)
+            fallback_bitrate_candidates(bitrate_candidates, primary_attempted_unavailable)
         {
             let fetched_url = if bitrate == primary_bitrate {
                 if let Some(song_url) = primary_url.take() {
@@ -191,7 +212,7 @@ impl MusicApi {
             };
 
             match fetched_url {
-                Ok(song_url) if request_song_url_has_download_url(&song_url) => {
+                Ok(song_url) if song_url.has_download_url() => {
                     log_url_selection_completion(
                         song_id,
                         fallback_url_start,
@@ -235,12 +256,47 @@ fn log_url_selection_completion(
     if let Some(start) = fallback_url_start {
         let fallback_duration = start.elapsed();
         tracing::debug!("[fallback_url] {}ms", fallback_duration.as_millis());
-        request_log_music_api_perf(song_id, "fallback_url", fallback_duration);
+        log_music_api_perf(song_id, "fallback_url", fallback_duration);
     }
 
-    request_log_music_api_perf(
+    log_music_api_perf(
         song_id,
         "select_url_total",
         select_url_total_start.elapsed(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bitrate_to_eapi_level, fallback_bitrate_candidates, url_bitrate_candidates};
+
+    #[test]
+    fn fallback_candidates_skip_primary_after_attempt() {
+        let candidates = [320_000, 192_000, 128_000];
+        let fallback = fallback_bitrate_candidates(&candidates, true);
+        assert_eq!(fallback, &[192_000, 128_000]);
+    }
+
+    #[test]
+    fn fallback_candidates_keep_primary_when_not_attempted() {
+        let candidates = [320_000, 192_000, 128_000];
+        let fallback = fallback_bitrate_candidates(&candidates, false);
+        assert_eq!(fallback, &[320_000, 192_000, 128_000]);
+    }
+
+    #[test]
+    fn candidate_tables_agree_on_quality_order() {
+        // Every URL candidate must map to the level the table comment claims,
+        // ordered high→low.
+        let levels: Vec<&str> = url_bitrate_candidates(true)
+            .iter()
+            .map(|&br| bitrate_to_eapi_level(br))
+            .collect();
+        assert_eq!(levels, ["hires", "lossless", "exhigh", "standard"]);
+        let levels: Vec<&str> = url_bitrate_candidates(false)
+            .iter()
+            .map(|&br| bitrate_to_eapi_level(br))
+            .collect();
+        assert_eq!(levels, ["exhigh", "standard"]);
+    }
 }

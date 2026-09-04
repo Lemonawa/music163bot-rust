@@ -57,86 +57,19 @@ use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 
 // ---------------------------------------------------------------------------
-// eapi crypto — mirrors the bot's `cache_and_crypto.rs` implementation.
-// The bin is a separate compilation unit so it must carry its own copy.
+// eapi crypto — shared with the bot (src/music_api/eapi_crypto.rs).
 // ---------------------------------------------------------------------------
 
-/// NetEase eapi AES-ECB key (same as `e82ckenh8dichen8` in the main crate).
-const EAPI_KEY: &[u8; 16] = b"e82ckenh8dichen8";
+/// NetEase eapi crypto primitives, shared with the bot crate.
+#[path = "../music_api/eapi_crypto.rs"]
+mod eapi_crypto;
 
-/// The `User-Agent` header the bot sends for eapi requests.
-const EAPI_USER_AGENT: &str = "NeteaseMusic/9.3.40.1753206443(164);Dalvik/2.1.0 (Linux; U; Android 9; MIX 2 MIUI/V12.0.1.0.PDECNXM)";
+use eapi_crypto::{EAPI_USER_AGENT, eapi_cookie, eapi_decrypt, eapi_params};
 
 /// Minimum served/cached size ratio to consider a row genuinely upgradeable.
 /// 1.15 means the served file must be at least 15% larger (well above re-encode
 /// noise).  Genuine resolution jumps (16-bit → 24-bit) are typically 1.5×–3.5×.
 const MIN_UPGRADE_RATIO: f64 = 1.15;
-
-// ---------------------------------------------------------------------------
-// eapi crypto helpers
-// ---------------------------------------------------------------------------
-
-fn eapi_splice(path: &str, json: &str) -> String {
-    let text = format!("nobody{path}use{json}md5forencrypt");
-    let digest = md5::compute(text.as_bytes());
-    format!("{path}-36cd479b6b5-{json}-36cd479b6b5-{digest:x}")
-}
-
-fn eapi_encrypt(data: &str) -> Result<String> {
-    use aes::Aes128;
-    use cipher::{BlockModeEncrypt, KeyInit, block_padding::Pkcs7};
-    use ecb::Encryptor;
-
-    let data_len = data.len();
-    let block_size = 16_usize;
-    let padded_len = ((data_len + block_size) / block_size) * block_size;
-    let mut buf = vec![0u8; padded_len];
-    buf[..data_len].copy_from_slice(data.as_bytes());
-
-    let encrypted = Encryptor::<Aes128>::new_from_slice(EAPI_KEY)
-        .map_err(|_| anyhow::anyhow!("invalid eapi key length"))?
-        .encrypt_padded::<Pkcs7>(&mut buf, data_len)
-        .map_err(|_| anyhow::anyhow!("failed to encrypt eapi payload"))?;
-
-    Ok(hex::encode_upper(encrypted))
-}
-
-fn eapi_decrypt(hex_data: &str) -> Result<String> {
-    use aes::Aes128;
-    use cipher::{BlockModeDecrypt, KeyInit, block_padding::Pkcs7};
-    use ecb::Decryptor;
-
-    let mut bytes = hex::decode(hex_data).context("invalid hex in eapi response")?;
-    let decrypted = Decryptor::<Aes128>::new_from_slice(EAPI_KEY)
-        .map_err(|_| anyhow::anyhow!("invalid eapi key length"))?
-        .decrypt_padded::<Pkcs7>(&mut bytes)
-        .context("failed to decrypt eapi response")?;
-
-    String::from_utf8(decrypted.to_vec()).context("non-utf8 decrypted eapi response")
-}
-
-fn eapi_params(path: &str, json: &str) -> Result<String> {
-    Ok(format!(
-        "params={}",
-        eapi_encrypt(&eapi_splice(path, json))?
-    ))
-}
-
-/// Build the `Cookie` header the bot sends for eapi requests.
-/// Mirrors `generate_eapi_cookie` in `cache_and_crypto.rs`.
-fn build_eapi_cookie(music_u: &str) -> String {
-    let device_id = uuid::Uuid::new_v4().simple().to_string();
-    let appver = "9.3.40";
-    let buildver = std::time::UNIX_EPOCH
-        .elapsed()
-        .map(|d| d.as_secs().to_string())
-        .unwrap_or_else(|_| "0".to_string());
-    let buildver = &buildver[..buildver.len().min(10)];
-    format!(
-        "deviceId={device_id}; appver={appver}; buildver={buildver}; \
-         resolution=1920x1080; os=Android; MUSIC_U={music_u}"
-    )
-}
 
 // ---------------------------------------------------------------------------
 // Config reading (shared with the bot: src/config/ini.rs)
@@ -291,7 +224,7 @@ async fn main() -> Result<()> {
              the tool cannot discover hires upgrades.",
         )?;
 
-    let cookie = build_eapi_cookie(&music_u);
+    let cookie = eapi_cookie(Some(&music_u));
 
     let client = build_http_client()?;
     let limiter = Arc::new(Semaphore::new(args.concurrency.max(1)));

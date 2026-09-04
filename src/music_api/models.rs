@@ -141,6 +141,15 @@ pub struct SongUrl {
     pub format: String,
 }
 
+impl SongUrl {
+    /// Whether this entry carries a usable download URL (empty means the
+    /// tier is unavailable for this song/account).
+    #[must_use]
+    pub fn has_download_url(&self) -> bool {
+        !self.url.is_empty()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LyricResponse {
     pub code: i32,

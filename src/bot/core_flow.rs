@@ -6,7 +6,7 @@ use super::{
     cached_music_link_target, create_music_keyboard_for_target, delete_status_message_resilient,
     download_and_send_music, edit_status_message_resilient, extract_retry_after_seconds,
     format_artists, format_error_chain, log_perf, resolve_message, sanitize_sensitive_text,
-    send_reply_text, u64_to_i64_saturating, url_bitrate_candidates,
+    send_reply_text, u64_to_i64_saturating,
 };
 use crate::i18n;
 
@@ -380,7 +380,8 @@ async fn fetch_detail_and_status(
     ),
     FetchOutcome,
 > {
-    let bitrate_candidates = url_bitrate_candidates(state.music_api.music_u.is_some());
+    let bitrate_candidates =
+        crate::music_api::url_bitrate_candidates(state.music_api.music_u.is_some());
 
     let status_fut = bot
         .send_message(msg.chat.id, loading_text.clone())

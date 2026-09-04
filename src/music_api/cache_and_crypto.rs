@@ -1,17 +1,11 @@
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
-use aes::Aes128;
-use cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyInit, block_padding::Pkcs7};
 use dashmap::DashMap;
-use ecb::{Decryptor, Encryptor};
-use hex::encode_upper;
-use md5::compute as md5_compute;
 use reqwest::Client;
 use tokio::time::Duration;
-use uuid::Uuid;
 
-use super::shared::song_url_has_download_url;
+use super::eapi_crypto;
 use super::{
     ALBUM_ART_DOWNLOAD_TOTAL_ATTEMPTS, BROWSER_USER_AGENT, CachePruneStats,
     MUSIC_API_CACHE_MAX_ENTRIES, MusicApi, SHORT_USER_AGENT, SONG_DETAIL_CACHE_TTL,
@@ -19,7 +13,7 @@ use super::{
     song_url_cache_key,
 };
 use crate::config::Config;
-use crate::error::{BotError, Result};
+use crate::error::Result;
 use crate::utils::build_http_client;
 
 fn enforce_cache_capacity<K, V>(cache: &DashMap<K, TimedCacheEntry<V>>, max_entries: usize)
@@ -99,7 +93,7 @@ impl MusicApi {
             build_redirect_disabled_fallback_client()
         });
 
-        let eapi_cookie = Self::generate_eapi_cookie(music_u.as_deref());
+        let eapi_cookie = eapi_crypto::eapi_cookie(music_u.as_deref());
         let music_u_cookie = music_u.as_ref().map(|u| format!("MUSIC_U={u}"));
 
         Self {
@@ -162,7 +156,7 @@ impl MusicApi {
     ) -> Option<Arc<SongUrl>> {
         for &bitrate in bitrate_candidates {
             if let Some(song_url) = self.get_cached_song_url(song_id, bitrate)
-                && song_url_has_download_url(&song_url)
+                && song_url.has_download_url()
             {
                 return Some(song_url);
             }
@@ -226,34 +220,6 @@ impl MusicApi {
         }
     }
 
-    fn generate_eapi_cookie(music_u: Option<&str>) -> String {
-        let device_id = Uuid::new_v4().simple().to_string();
-        let appver = "9.3.40";
-        let buildver = SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
-            |_| "0".to_string(),
-            |duration| duration.as_secs().to_string(),
-        );
-        let mut cookie_parts = vec![
-            format!("deviceId={}", device_id),
-            format!("appver={}", appver),
-            format!("buildver={}", &buildver[..buildver.len().min(10)]),
-            "resolution=1920x1080".to_string(),
-            "os=Android".to_string(),
-        ];
-
-        if let Some(music_u) = music_u {
-            cookie_parts.push(format!("MUSIC_U={music_u}"));
-        } else {
-            // Public anonymous MUSIC_A token carried over from the upstream Go project
-            // (Music163bot-Go). It is intentionally hard-coded so a fresh deployment can
-            // hit the search/eapi endpoints without per-user login. When operators
-            // configure their own `music.music_u`, that value takes precedence above.
-            cookie_parts.push("MUSIC_A=4ee5f776c9ed1e4d5f031b09e084c6cb333e43ee4a841afeebbef9bbf4b7e4152b51ff20ecb9e8ee9e89ab23044cf50d1609e4781e805e73a138419e5583bc7fd1e5933c52368d9127ba9ce4e2f233bf5a77ba40ea6045ae1fc612ead95d7b0e0edf70a74334194e1a190979f5fc12e9968c3666a981495b33a649814e309366".to_string());
-        }
-
-        cookie_parts.join("; ")
-    }
-
     pub(super) fn build_eapi_cookie(&self) -> &str {
         &self.eapi_cookie
     }
@@ -297,60 +263,6 @@ impl MusicApi {
             .header("Sec-Fetch-Dest", "audio")
             .header("Sec-Fetch-Mode", "cors")
             .header("Sec-Fetch-Site", "cross-site")
-    }
-
-    fn eapi_splice(path: &str, json: &str) -> String {
-        let text = format!("nobody{path}use{json}md5forencrypt");
-        let digest = md5_compute(text.as_bytes());
-        let hex_digest = format!("{digest:x}");
-        // Pre-allocate: path + "-36cd479b6b5-" + json + "-36cd479b6b5-" + hex_digest
-        let mut result = String::with_capacity(path.len() + json.len() + hex_digest.len() + 26);
-        result.push_str(path);
-        result.push_str("-36cd479b6b5-");
-        result.push_str(json);
-        result.push_str("-36cd479b6b5-");
-        result.push_str(&hex_digest);
-        result
-    }
-
-    fn eapi_encrypt(data: &str) -> Result<String> {
-        Self::eapi_encrypt_with_key(data, b"e82ckenh8dichen8")
-    }
-
-    pub(super) fn eapi_encrypt_with_key(data: &str, key: &[u8]) -> Result<String> {
-        let block_size = 16;
-        let data_len = data.len();
-        let padded_len = ((data_len + block_size) / block_size) * block_size;
-        let mut buf = vec![0u8; padded_len];
-        buf[..data_len].copy_from_slice(data.as_bytes());
-        let encrypted = Encryptor::<Aes128>::new_from_slice(key)
-            .map_err(|_| BotError::MusicApi("Invalid eapi key length".to_string()))?
-            .encrypt_padded::<Pkcs7>(&mut buf, data_len)
-            .map_err(|_| BotError::MusicApi("Failed to encrypt eapi payload".to_string()))?;
-        Ok(encode_upper(encrypted))
-    }
-
-    pub(super) fn eapi_decrypt(hex_data: &str) -> Result<String> {
-        Self::eapi_decrypt_with_key(hex_data, b"e82ckenh8dichen8")
-    }
-
-    pub(super) fn eapi_decrypt_with_key(hex_data: &str, key: &[u8]) -> Result<String> {
-        let mut bytes = hex::decode(hex_data).map_err(|e| BotError::MusicApi(e.to_string()))?;
-        let decrypted = Decryptor::<Aes128>::new_from_slice(key)
-            .map_err(|_| BotError::MusicApi("Invalid eapi key length".to_string()))?
-            .decrypt_padded::<Pkcs7>(&mut bytes)
-            .map_err(|e| BotError::MusicApi(e.to_string()))?;
-        String::from_utf8(decrypted.to_vec()).map_err(|e| BotError::MusicApi(e.to_string()))
-    }
-
-    pub(super) fn eapi_params(path: &str, json: &str) -> Result<String> {
-        let data = Self::eapi_splice(path, json);
-        let encrypted = Self::eapi_encrypt(&data)?;
-        Ok(format!("params={encrypted}"))
-    }
-
-    pub(super) fn choose_eapi_user_agent() -> &'static str {
-        "NeteaseMusic/9.3.40.1753206443(164);Dalvik/2.1.0 (Linux; U; Android 9; MIX 2 MIUI/V12.0.1.0.PDECNXM)"
     }
 }
 
