@@ -1,6 +1,6 @@
 use super::{
-    Arc, AudioBuffer, AudioFormat, Bot, BotState, Context, Message, MusicLinkTarget, Ordering,
-    PERF_STAGE_DB_SAVE, PERF_STAGE_DOWNLOAD_AUDIO, PERF_STAGE_PRE_UPLOAD_PATH,
+    Arc, AudioBuffer, AudioFormat, Bot, BotState, Context, CoverMode, Message, MusicLinkTarget,
+    Ordering, PERF_STAGE_DB_SAVE, PERF_STAGE_DOWNLOAD_AUDIO, PERF_STAGE_PRE_UPLOAD_PATH,
     PERF_STAGE_TAG_PROCESS, PERF_STAGE_UPLOAD_CLIENT_ACQUIRE, PERF_STAGE_UPLOAD_PERMIT_WAIT,
     PERF_STAGE_UPLOAD_SEND, PerfTraceContext, RawSendFileArgs, RawUploadParams, Result, SongInfo,
     StreamReader, acquire_download_permit, acquire_upload_client, acquire_upload_permit_owned,
@@ -8,8 +8,8 @@ use super::{
     cleanup_thumbnail_buffer, collect_maintenance_signals, cover_download_failure_notice,
     create_music_keyboard_for_target, delete_status_message_resilient, download_cover_assets,
     edit_status_message_resilient, extract_file_id_from_response, i64_to_u32_saturating, log_perf,
-    raw_send_file, resolve_cover_policy, resolve_message, sanitize_sensitive_text, send_reply_text,
-    should_download_cover, throughput_mbps, u64_to_i64_saturating, update_peak,
+    raw_send_file, resolve_message, sanitize_sensitive_text, send_reply_text, throughput_mbps,
+    u64_to_i64_saturating, update_peak,
 };
 use futures_util::{StreamExt, TryStreamExt};
 
@@ -24,6 +24,29 @@ pub(super) struct DownloadAndSendParams<'a> {
     pub(super) perf_ctx: &'a PerfTraceContext,
     pub(super) artists: &'a str,
     pub(super) link_target: MusicLinkTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CoverPolicy {
+    pub(super) download_original: bool,
+    pub(super) download_thumbnail: bool,
+    pub(super) embed_cover: bool,
+}
+
+pub(super) fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
+    let download_original = matches!(cover_mode, CoverMode::Original | CoverMode::Both);
+    let download_thumbnail = matches!(cover_mode, CoverMode::Thumbnail | CoverMode::Both);
+
+    CoverPolicy {
+        download_original,
+        download_thumbnail,
+        embed_cover: download_original || download_thumbnail,
+    }
+}
+
+#[must_use]
+pub(super) fn should_download_cover(policy: CoverPolicy) -> bool {
+    policy.embed_cover || policy.download_thumbnail
 }
 
 pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Result<()> {

@@ -1,7 +1,7 @@
 use super::{
-    Arc, Bot, BotState, CacheSnapshot, Config, CoverMode, DashMap, Database, InflightDownloads,
-    Instant, MAINTENANCE_QUEUE_CAPACITY, MaintenanceCounters, Message, MessageTaskRoute, MusicApi,
-    Mutex, ParseMode, ProcessRefreshKind, ProcessesToUpdate, ReplyParameters, ResourceSnapshot,
+    Arc, Bot, BotState, CacheSnapshot, Config, DashMap, Database, InflightDownloads, Instant,
+    MAINTENANCE_QUEUE_CAPACITY, MaintenanceCounters, Message, MessageTaskRoute, MusicApi, Mutex,
+    ParseMode, ProcessRefreshKind, ProcessesToUpdate, ReplyParameters, ResourceSnapshot,
     ResponseResult, Result, RuntimeMetrics, STATUS_RESOURCE_CACHE,
     STATUS_RESOURCE_REFRESH_INTERVAL, SpeedSnapshot, System, Update, UploadClientState,
     UploadCounters, VecDeque, acquire_upload_client, build_http_client, classify_message_task,
@@ -146,29 +146,6 @@ pub(super) fn format_speed_line(
     } else {
         i18n::tr_with(lang, "status_speed_no_samples", "label", &label)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct CoverPolicy {
-    pub(super) download_original: bool,
-    pub(super) download_thumbnail: bool,
-    pub(super) embed_cover: bool,
-}
-
-pub(super) fn resolve_cover_policy(cover_mode: CoverMode) -> CoverPolicy {
-    let download_original = matches!(cover_mode, CoverMode::Original | CoverMode::Both);
-    let download_thumbnail = matches!(cover_mode, CoverMode::Thumbnail | CoverMode::Both);
-
-    CoverPolicy {
-        download_original,
-        download_thumbnail,
-        embed_cover: download_original || download_thumbnail,
-    }
-}
-
-#[must_use]
-pub(super) fn should_download_cover(policy: CoverPolicy) -> bool {
-    policy.embed_cover || policy.download_thumbnail
 }
 
 pub(super) async fn run(config: Config) -> Result<()> {

@@ -58,8 +58,8 @@ use core_flow::{
 use download_flow::{DownloadAndSendParams, download_and_send_music};
 use entry::{
     StatusTextParams, build_status_text, format_speed_line, format_uptime,
-    parse_inline_query_keyword, percentile_95, resolve_cover_policy,
-    sample_current_process_memory_mb, sample_resource_snapshot, should_download_cover,
+    parse_inline_query_keyword, percentile_95, sample_current_process_memory_mb,
+    sample_resource_snapshot,
 };
 use help_entry::{handle_help_command, handle_music_command};
 use lang_command::{
@@ -111,9 +111,12 @@ use wiring::{
 #[cfg(test)]
 use about::{BUILD_GIT_COMMIT, build_about_text};
 #[cfg(test)]
-use download_flow::{PostUploadDbAction, classify_post_upload_db_result, max_download_size_bytes};
+use download_flow::{
+    CoverPolicy, PostUploadDbAction, classify_post_upload_db_result, max_download_size_bytes,
+    resolve_cover_policy, should_download_cover,
+};
 #[cfg(test)]
-use entry::{CoverPolicy, parse_command_and_args, parse_start_music_id};
+use entry::{parse_command_and_args, parse_start_music_id};
 #[cfg(test)]
 use support::{CLEARALLCACHE_CONFIRM_WINDOW, format_bitrate_kbps, prune_expired_confirmations};
 #[cfg(test)]
