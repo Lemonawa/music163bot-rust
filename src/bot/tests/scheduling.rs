@@ -89,10 +89,17 @@ fn spawn_gate_identifies_supported_messages() {
 
 #[test]
 fn spawn_gate_calculates_reasonable_limit() {
-    assert_eq!(super::message_task_limit(0), 8);
-    assert_eq!(super::message_task_limit(1), 8);
-    assert_eq!(super::message_task_limit(3), 12);
-    assert_eq!(super::message_task_limit(200), 256);
+    let limit = |downloads: u32| {
+        Config {
+            max_concurrent_downloads: downloads,
+            ..Config::default()
+        }
+        .message_task_limit()
+    };
+    assert_eq!(limit(0), 8);
+    assert_eq!(limit(1), 8);
+    assert_eq!(limit(3), 12);
+    assert_eq!(limit(200), 256);
 }
 
 #[test]
@@ -149,7 +156,7 @@ fn download_chunk_bytes_uses_configured_kib() {
         ..Config::default()
     };
 
-    assert_eq!(super::download_chunk_bytes(&config), 512 * 1024);
+    assert_eq!(config.download_chunk_bytes(), 512 * 1024);
 }
 
 #[test]
@@ -160,17 +167,24 @@ fn download_chunk_bytes_clamps_zero_to_minimum() {
     };
 
     assert_eq!(
-        super::download_chunk_bytes(&config),
-        super::MIN_DOWNLOAD_CHUNK_BYTES
+        config.download_chunk_bytes(),
+        crate::config::MIN_DOWNLOAD_CHUNK_BYTES
     );
 }
 
 #[test]
 fn upload_limit_clamps_bounds() {
-    assert_eq!(super::upload_task_limit(0), 1);
-    assert_eq!(super::upload_task_limit(1), 1);
-    assert_eq!(super::upload_task_limit(4), 4);
-    assert_eq!(super::upload_task_limit(1000), 64);
+    let limit = |uploads: u32| {
+        Config {
+            upload_max_concurrent: uploads,
+            ..Config::default()
+        }
+        .upload_task_limit()
+    };
+    assert_eq!(limit(0), 1);
+    assert_eq!(limit(1), 1);
+    assert_eq!(limit(4), 4);
+    assert_eq!(limit(1000), 64);
 }
 
 #[test]

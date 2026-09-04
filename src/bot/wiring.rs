@@ -71,7 +71,6 @@ pub(super) enum MusicLinkTarget {
 pub(super) const SPEED_SAMPLE_WINDOW: usize = 20;
 pub(super) const STATUS_RESOURCE_REFRESH_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(2);
-pub(super) const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 pub(super) const MAINTENANCE_QUEUE_CAPACITY: usize = 32;
 pub(super) const CACHE_PRUNE_INTERVAL_REQUESTS: u32 = 50;
 pub(super) const PERF_LOG_PREFIX: &str = "PERF";

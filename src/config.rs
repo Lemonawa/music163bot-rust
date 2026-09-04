@@ -260,7 +260,38 @@ impl Default for Config {
     }
 }
 
+/// Floor for [`Config::download_chunk_bytes`]: chunks smaller than this
+/// hurt throughput without saving meaningful memory.
+pub const MIN_DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
+
+impl Config {
+    /// Message-task semaphore size derived from download concurrency.
+    #[must_use]
+    pub fn message_task_limit(&self) -> usize {
+        (self.max_concurrent_downloads as usize)
+            .saturating_mul(4)
+            .clamp(8, 256)
+    }
+
+    /// Upload-task semaphore size derived from upload concurrency.
+    #[must_use]
+    pub fn upload_task_limit(&self) -> usize {
+        (self.upload_max_concurrent as usize).clamp(1, 64)
+    }
+
+    /// Download chunk size in bytes, floored at [`MIN_DOWNLOAD_CHUNK_BYTES`].
+    #[must_use]
+    pub fn download_chunk_bytes(&self) -> usize {
+        self.download_chunk_size_kb
+            .saturating_mul(1024)
+            .max(MIN_DOWNLOAD_CHUNK_BYTES)
+    }
+}
+
+mod ini;
 mod load;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use ini::parse_ini_text;

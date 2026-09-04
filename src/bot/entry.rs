@@ -10,8 +10,8 @@ use super::{
     handle_inline_query, handle_lang_command, handle_lyric_command, handle_music_command,
     handle_music_url, handle_rmcache_command, handle_search_command, handle_status_command,
     is_clearallcache_confirm, is_official_telegram_api, lock_unpoisoned, maintenance_worker,
-    message_task_limit, process_music, register_bot_commands, run_upload_prewarm,
-    sanitize_sensitive_text, should_log_command, should_spawn_message_task, upload_task_limit,
+    process_music, register_bot_commands, run_upload_prewarm, sanitize_sensitive_text,
+    should_log_command, should_spawn_message_task,
 };
 use crate::i18n;
 
@@ -204,7 +204,8 @@ pub(super) async fn run(config: Config) -> Result<()> {
     tracing::info!("Bot @{} started successfully!", bot_username);
 
     let max_concurrent_downloads = config.max_concurrent_downloads;
-    let upload_max_concurrent = config.upload_max_concurrent;
+    let message_limit = config.message_task_limit();
+    let upload_limit = config.upload_task_limit();
     let is_official_api = is_official_telegram_api(bot.api_url());
 
     let bot_state = Arc::new(BotState {
@@ -215,12 +216,8 @@ pub(super) async fn run(config: Config) -> Result<()> {
         download_semaphore: Arc::new(tokio::sync::Semaphore::new(
             max_concurrent_downloads as usize,
         )),
-        upload_semaphore: Arc::new(tokio::sync::Semaphore::new(upload_task_limit(
-            upload_max_concurrent,
-        ))),
-        message_task_semaphore: Arc::new(tokio::sync::Semaphore::new(message_task_limit(
-            max_concurrent_downloads,
-        ))),
+        upload_semaphore: Arc::new(tokio::sync::Semaphore::new(upload_limit)),
+        message_task_semaphore: Arc::new(tokio::sync::Semaphore::new(message_limit)),
         maintenance_tx,
         bot_username,
         upload_client_state: Arc::new(Mutex::new(UploadClientState {

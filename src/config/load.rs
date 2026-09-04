@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 
 use anyhow::Result;
 
 use super::{Config, CoverMode, StorageMode, apply_bool_field, parse_admin_list, parse_field};
+use crate::config::parse_ini_text;
 
 impl Config {
     /// # Errors
@@ -266,41 +265,6 @@ fn warn_on_legacy_database_path(configured: &str, configured_explicitly: bool) {
 }
 
 fn parse_ini_file(path: &str) -> Result<HashMap<String, String>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut config_map = HashMap::with_capacity(32);
-    let mut current_section = String::new();
-
-    for line in reader.lines() {
-        let line = line?;
-        let line = line.trim();
-
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        if line.starts_with('[') {
-            current_section = line
-                .strip_prefix('[')
-                .and_then(|section| section.strip_suffix(']'))
-                .unwrap_or("")
-                .to_lowercase();
-            continue;
-        }
-
-        if let Some((raw_key, raw_value)) = line.split_once('=') {
-            let key = raw_key.trim().to_lowercase();
-            let value = raw_value.trim().to_string();
-
-            let full_key = if current_section.is_empty() {
-                key
-            } else {
-                format!("{current_section}.{key}")
-            };
-
-            config_map.insert(full_key, value);
-        }
-    }
-
-    Ok(config_map)
+    let content = std::fs::read_to_string(path)?;
+    Ok(parse_ini_text(&content))
 }

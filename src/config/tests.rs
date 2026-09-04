@@ -374,3 +374,42 @@ fn legacy_db_warning_emitted_for_explicit_path_with_legacy() {
     let warning = super::load::classify_legacy_database_state(false, true, true);
     assert_eq!(warning, super::load::LegacyDbWarning::LegacyAndExplicit);
 }
+
+#[test]
+fn ini_text_parses_sections_case_insensitively() {
+    let map = super::parse_ini_text("[Bot]\nToken = abc\n[DATABASE]\nURL = x.db\n");
+    assert_eq!(map.get("bot.token").map(String::as_str), Some("abc"));
+    assert_eq!(map.get("database.url").map(String::as_str), Some("x.db"));
+}
+
+#[test]
+fn ini_text_skips_hash_and_semicolon_comments() {
+    let map = super::parse_ini_text(
+        "# full\n; semicolon\n[bot]\n#token = no\n;token = no\ntoken = yes\n",
+    );
+    assert_eq!(map.len(), 1);
+    assert_eq!(map.get("bot.token").map(String::as_str), Some("yes"));
+}
+
+#[test]
+fn ini_text_keeps_values_containing_equals() {
+    let map = super::parse_ini_text("[music]\nmusic_u = abc==\n");
+    assert_eq!(map.get("music.music_u").map(String::as_str), Some("abc=="));
+}
+
+#[test]
+fn ini_text_last_entry_wins_on_duplicates() {
+    let map = super::parse_ini_text("[bot]\ntoken = first\ntoken = second\n");
+    assert_eq!(map.get("bot.token").map(String::as_str), Some("second"));
+}
+
+#[test]
+fn task_limits_derive_from_concurrency() {
+    let config = Config {
+        max_concurrent_downloads: 3,
+        upload_max_concurrent: 4,
+        ..Config::default()
+    };
+    assert_eq!(config.message_task_limit(), 12);
+    assert_eq!(config.upload_task_limit(), 4);
+}

@@ -139,32 +139,14 @@ fn build_eapi_cookie(music_u: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Config reading
+// Config reading (shared with the bot: src/config/ini.rs)
 // ---------------------------------------------------------------------------
 
-/// Parse the bot's config.ini into a flat `section.key → value` map.
-/// Returns an empty map if the file doesn't exist.
-fn parse_ini(config_path: &str) -> HashMap<String, String> {
-    let content = match std::fs::read_to_string(config_path) {
-        Ok(c) => c,
-        Err(_) => return HashMap::new(),
-    };
-    let mut map = HashMap::new();
-    let mut section = String::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
-            continue;
-        }
-        if let Some(body) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            section = body.trim().to_string();
-        } else if let Some((key, value)) = trimmed.split_once('=') {
-            let entry = format!("{}.{}", section, key.trim());
-            map.insert(entry, value.trim().to_string());
-        }
-    }
-    map
-}
+/// Flat `section.key → value` INI parser, shared with the bot crate.
+#[path = "../config/ini.rs"]
+mod ini;
+
+use ini::parse_ini_text;
 
 // ---------------------------------------------------------------------------
 // Structs
@@ -285,7 +267,8 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let ini = parse_ini(&args.config);
+    // A missing config file means defaults (empty map, as before).
+    let ini = parse_ini_text(&std::fs::read_to_string(&args.config).unwrap_or_default());
 
     // Resolve db: CLI → config `database.url` → default
     let db = args

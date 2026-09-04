@@ -6,12 +6,11 @@ use super::{
     StreamReader, acquire_download_permit, acquire_upload_client, acquire_upload_permit_owned,
     apply_tags_in_blocking, build_caption, bytes_to_mb_f64, clean_filename, cleanup_audio_buffer,
     cleanup_thumbnail_buffer, collect_maintenance_signals, cover_download_failure_notice,
-    create_music_keyboard_for_target, delete_status_message_resilient, download_chunk_bytes,
-    download_cover_assets, edit_status_message_resilient, extract_file_id_from_response,
-    i64_to_u32_saturating, log_perf, raw_send_file, resolve_cover_policy, resolve_message,
-    sanitize_sensitive_text, send_reply_text, should_download_cover,
-    should_remove_song_cache_after_partial_failure, throughput_mbps, u64_to_i64_saturating,
-    update_peak,
+    create_music_keyboard_for_target, delete_status_message_resilient, download_cover_assets,
+    edit_status_message_resilient, extract_file_id_from_response, i64_to_u32_saturating, log_perf,
+    raw_send_file, resolve_cover_policy, resolve_message, sanitize_sensitive_text, send_reply_text,
+    should_download_cover, should_remove_song_cache_after_partial_failure, throughput_mbps,
+    u64_to_i64_saturating, update_peak,
 };
 use futures_util::{StreamExt, TryStreamExt};
 
@@ -559,7 +558,7 @@ async fn download_audio(
     };
 
     let downloaded = if audio_buffer.is_disk() {
-        let chunk_bytes = download_chunk_bytes(&state.config);
+        let chunk_bytes = state.config.download_chunk_bytes();
         let stream = stream.map_err(std::io::Error::other);
         let reader = tokio::io::BufReader::with_capacity(chunk_bytes, StreamReader::new(stream));
         let mut limited_reader =

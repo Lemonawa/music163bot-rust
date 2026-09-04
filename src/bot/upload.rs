@@ -1,10 +1,10 @@
 use super::{
     Arc, AudioBuffer, AudioFormat, Bot, BotError, BotState, Bytes, CACHE_PRUNE_INTERVAL_REQUESTS,
     ChatId, Config, Database, InflightClaim, InflightDownloads, InflightLeaderGuard,
-    InlineKeyboardButton, InlineKeyboardMarkup, MIN_DOWNLOAD_CHUNK_BYTES, MaintenanceCounters,
-    MaintenanceSignal, Message, MessageId, MusicApi, MusicLinkTarget, ParseMode, ReplyParameters,
-    ResponseResult, Result, ThumbnailBuffer, UploadClientState, extract_retry_after_seconds,
-    resolve_message, sanitize_sensitive_text,
+    InlineKeyboardButton, InlineKeyboardMarkup, MaintenanceCounters, MaintenanceSignal, Message,
+    MessageId, MusicApi, MusicLinkTarget, ParseMode, ReplyParameters, ResponseResult, Result,
+    ThumbnailBuffer, UploadClientState, extract_retry_after_seconds, resolve_message,
+    sanitize_sensitive_text,
 };
 
 pub(super) async fn apply_tags_in_blocking(
@@ -383,21 +383,11 @@ pub(super) async fn delete_status_message_resilient(
     }
 }
 
-pub(super) fn message_task_limit(max_concurrent_downloads: u32) -> usize {
-    (max_concurrent_downloads as usize)
-        .saturating_mul(4)
-        .clamp(8, 256)
-}
-
 pub(super) fn exceeds_batch_download_limit(
     track_count: usize,
     max_batch_download_tracks: u32,
 ) -> bool {
     track_count > max_batch_download_tracks.max(1) as usize
-}
-
-pub(super) fn upload_task_limit(max_concurrent_uploads: u32) -> usize {
-    (max_concurrent_uploads as usize).clamp(1, 64)
 }
 
 pub(super) fn should_refresh_upload_client(
@@ -513,13 +503,6 @@ pub(super) fn format_perf(label: &str, duration: std::time::Duration) -> String 
 
 pub(super) fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
     secs > 0
-}
-
-pub(super) fn download_chunk_bytes(config: &Config) -> usize {
-    config
-        .download_chunk_size_kb
-        .saturating_mul(1024)
-        .max(MIN_DOWNLOAD_CHUNK_BYTES)
 }
 
 pub(super) fn append_search_result_line(
