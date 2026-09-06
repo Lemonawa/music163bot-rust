@@ -1,7 +1,7 @@
 use super::{
     Arc, Bot, BotState, Message, ParseMode, ReplyParameters, ResponseResult,
     dispatch_parsed_music_target, parse_direct_music_target, parse_song_id_or_search_first_result,
-    process_music, require_command_args_or_reply, resolve_message,
+    process_music, require_command_args_or_reply, resolve_chat_language_for,
 };
 use crate::i18n;
 
@@ -10,13 +10,7 @@ pub(super) async fn handle_help_command(
     msg: &Message,
     state: &Arc<BotState>,
 ) -> ResponseResult<()> {
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
     let help_text = i18n::tr_with(&lang, "help_body", "bot_username", &state.bot_username);
 
     bot.send_message(msg.chat.id, help_text)
@@ -34,13 +28,7 @@ pub(super) async fn handle_music_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
     let Some(args) =
         require_command_args_or_reply(bot, msg, args, &i18n::tr(&lang, "music_need_id")).await?
     else {

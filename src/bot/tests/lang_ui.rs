@@ -91,6 +91,43 @@ fn temp_db_path(prefix: &str) -> String {
         .into_owned()
 }
 
+/// Minimal `BotState` for Chat Language tests: only the fields the language
+/// seam touches are meaningful; everything else gets inert defaults.
+async fn test_bot_state(prefix: &str) -> std::sync::Arc<super::BotState> {
+    let db = crate::database::Database::new(&temp_db_path(prefix))
+        .await
+        .unwrap();
+    let (maintenance_tx, _rx) = tokio::sync::mpsc::channel(1);
+    std::sync::Arc::new(super::BotState {
+        config: crate::config::Config::default(),
+        database: db,
+        music_api: std::sync::Arc::new(crate::music_api::MusicApi::new(
+            None,
+            "http://127.0.0.1:1".to_string(),
+        )),
+        inflight_downloads: std::sync::Arc::new(super::InflightDownloads::default()),
+        download_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        upload_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        message_task_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        maintenance_tx,
+        bot_username: "testbot".to_string(),
+        upload_client_state: std::sync::Arc::new(tokio::sync::Mutex::new(
+            super::UploadClientState {
+                bot: None,
+                raw_client: None,
+                upload_api_url: String::new(),
+                reuse_count: 0,
+            },
+        )),
+        maintenance_counters: super::MaintenanceCounters::new(),
+        upload_counters: super::UploadCounters::default(),
+        runtime_metrics: super::RuntimeMetrics::new(),
+        is_official_api: true,
+        clearallcache_confirms: std::sync::Arc::new(dashmap::DashMap::new()),
+        chat_languages: std::sync::Arc::new(dashmap::DashMap::new()),
+    })
+}
+
 fn test_message(chat_id: i64, chat_type: &str) -> crate::telegram::Message {
     crate::telegram::Message {
         id: crate::telegram::MessageId(1),
@@ -108,32 +145,27 @@ fn test_message(chat_id: i64, chat_type: &str) -> crate::telegram::Message {
 
 #[tokio::test]
 async fn resolve_message_uses_db_override_and_caches_it() {
-    let db = crate::database::Database::new(&temp_db_path("lang_msg"))
-        .await
-        .unwrap();
-    db.set_chat_language(777, "en").await.unwrap();
+    let state = test_bot_state("lang_msg").await;
+    state.database.set_chat_language(777, "en").await.unwrap();
 
     let msg = test_message(777, "private");
-    let cache = dashmap::DashMap::new();
-    let lang = super::resolve_message(&db, &cache, "zh", &msg).await;
+    let lang = super::resolve_chat_language_for(&state, &msg).await;
     assert_eq!(lang.code(), "en");
     assert_eq!(
-        cache.get(&777).map(|e| e.value().clone()),
+        state.chat_languages.get(&777).map(|e| e.value().clone()),
         Some("en".to_string())
     );
 
     // Second call hits the cache (still correct even if DB row disappears).
-    db.clear_chat_language(777).await.unwrap();
-    let lang = super::resolve_message(&db, &cache, "zh", &msg).await;
+    state.database.clear_chat_language(777).await.unwrap();
+    let lang = super::resolve_chat_language_for(&state, &msg).await;
     assert_eq!(lang.code(), "en");
 }
 
 #[tokio::test]
 async fn resolve_inline_prefers_override_then_detects_then_defaults() {
-    let db = crate::database::Database::new(&temp_db_path("lang_inline"))
-        .await
-        .unwrap();
-    db.set_chat_language(888, "en").await.unwrap();
+    let state = test_bot_state("lang_inline").await;
+    state.database.set_chat_language(888, "en").await.unwrap();
 
     let user = crate::telegram::User {
         id: 888,
@@ -141,15 +173,14 @@ async fn resolve_inline_prefers_override_then_detects_then_defaults() {
         username: None,
         language_code: Some("zh-CN".to_string()),
     };
-    let cache = dashmap::DashMap::new();
 
     // Override wins over auto-detection.
-    let lang = super::resolve_inline(&db, &cache, "zh", &user).await;
+    let lang = super::resolve_inline_language_for(&state, &user).await;
     assert_eq!(lang.code(), "en");
 
     // Without an override, the Telegram language_code applies.
-    db.clear_chat_language(888).await.unwrap();
-    cache.remove(&888);
-    let lang = super::resolve_inline(&db, &cache, "en", &user).await;
+    state.database.clear_chat_language(888).await.unwrap();
+    state.chat_languages.remove(&888);
+    let lang = super::resolve_inline_language_for(&state, &user).await;
     assert_eq!(lang.code(), "zh");
 }

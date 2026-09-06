@@ -36,7 +36,7 @@ async fn get_song_url_uses_eapi_channel_not_legacy_web_post() {
 
 /// Regression: the highest candidate must map to the eapi `hires` level so the
 /// bot can pull 24-bit Hi-Res FLAC when the account/song permits, rather than
-/// capping at 16-bit `lossless`. The previous candidate ceiling of 999_000 only
+/// capping at 16-bit `lossless`. The previous candidate ceiling of `999_000` only
 /// ever produced `lossless`.
 #[tokio::test]
 async fn hires_candidate_requests_hires_level_and_is_preferred() {

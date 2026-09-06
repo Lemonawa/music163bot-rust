@@ -63,8 +63,8 @@ use entry::{
 };
 use help_entry::{handle_help_command, handle_music_command};
 use lang_command::{
-    handle_lang_callback, handle_lang_command, register_bot_commands, resolve_inline,
-    resolve_message,
+    handle_lang_callback, handle_lang_command, register_bot_commands, resolve_chat_language_for,
+    resolve_inline_language_for,
 };
 
 #[cfg(test)]
@@ -91,11 +91,10 @@ use upload::{
     apply_tags_in_blocking, cached_music_link_target, classify_message_task, cleanup_audio_buffer,
     cleanup_thumbnail_buffer, clearallcache_confirmation_prompt, collect_maintenance_signals,
     create_music_keyboard_for_target, delete_status_message_resilient,
-    edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit, get_upload_bot,
-    is_clearallcache_confirm, is_official_telegram_api, join_futures, log_perf, maintenance_worker,
+    edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit,
+    is_clearallcache_confirm, is_official_telegram_api, log_perf, maintenance_worker,
     require_command_args_or_reply, rmcache_usage_prompt, send_reply_html, send_reply_message,
-    send_reply_text, should_log_command, should_refresh_upload_client,
-    should_set_upload_pool_idle_timeout, should_spawn_message_task,
+    send_reply_text, should_log_command, should_refresh_upload_client, should_spawn_message_task,
 };
 use wiring::{
     AudioFormat, BotState, CACHE_PRUNE_INTERVAL_REQUESTS, CacheSnapshot, InflightClaim,
@@ -127,9 +126,7 @@ use telegram_api::{
     redact_bot_token_in_error_message, select_local_upload_target,
 };
 #[cfg(test)]
-use upload::{
-    build_music_url, build_program_url, format_perf, is_command_text, is_spawnable_command_text,
-};
+use upload::{build_music_url, build_program_url, format_perf, is_command_text};
 #[cfg(test)]
 use wiring::{
     InflightEntry, format_perf_stage_line, set_inflight_wait_hook, upload_topology_label,

@@ -197,16 +197,9 @@ fn about_text_includes_build_commit_in_version_line() {
 }
 
 #[test]
-fn is_spawnable_command_text_requires_leading_slash() {
-    assert!(super::is_spawnable_command_text("/start"));
-    assert!(super::is_spawnable_command_text("/music 123"));
-    assert!(!super::is_spawnable_command_text("  /start"));
-    assert!(!super::is_spawnable_command_text("hello"));
-}
-
-#[test]
 fn is_command_text_requires_leading_slash() {
     assert!(super::is_command_text("/start"));
+    assert!(super::is_command_text("/music 123"));
     assert!(!super::is_command_text("  /start"));
     assert!(!super::is_command_text("hello"));
 }

@@ -8,8 +8,8 @@ use super::{
     cleanup_thumbnail_buffer, collect_maintenance_signals, cover_download_failure_notice,
     create_music_keyboard_for_target, delete_status_message_resilient, download_cover_assets,
     edit_status_message_resilient, extract_file_id_from_response, i64_to_u32_saturating, log_perf,
-    raw_send_file, resolve_message, sanitize_sensitive_text, send_reply_text, throughput_mbps,
-    u64_to_i64_saturating, update_peak,
+    raw_send_file, resolve_chat_language_for, sanitize_sensitive_text, send_reply_text,
+    throughput_mbps, u64_to_i64_saturating, update_peak,
 };
 use futures_util::{StreamExt, TryStreamExt};
 
@@ -50,13 +50,7 @@ pub(super) fn should_download_cover(policy: CoverPolicy) -> bool {
 }
 
 pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Result<()> {
-    let lang = resolve_message(
-        &p.state.database,
-        &p.state.chat_languages,
-        &p.state.config.default_language,
-        p.msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(p.state, p.msg).await;
     let audio_format = if p.song_url.url.contains(".flac") {
         AudioFormat::Flac
     } else {
@@ -385,7 +379,7 @@ async fn process_tags_and_acquire_client(
         }
     };
 
-    let (_upload_bot, raw_client, api_base_url) = match upload_client_result {
+    let (raw_client, api_base_url) = match upload_client_result {
         Ok(res) => res,
         Err(e) => {
             cleanup_audio_buffer(audio_buffer).await;

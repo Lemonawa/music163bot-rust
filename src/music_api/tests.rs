@@ -160,8 +160,8 @@ async fn handle_mock_music_api_connection(
         }
 
         let song_id = state.lock().expect("lock mock server state").song_id;
-        let limit =
-            parse_query_field_as_u64(&path, "limit").map_or(3, |value| value.max(1) as usize);
+        let limit = parse_query_field_as_u64(&path, "limit")
+            .map_or(3, |value| usize::try_from(value.max(1)).unwrap_or(3));
         mock_djradio_program_response_json(song_id, limit)
     } else {
         r#"{"code":404}"#.to_string()

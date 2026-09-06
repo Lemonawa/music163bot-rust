@@ -3,7 +3,7 @@ use super::{
     ChatId, Config, Database, InflightClaim, InflightDownloads, InflightLeaderGuard,
     InlineKeyboardButton, InlineKeyboardMarkup, MaintenanceCounters, MaintenanceSignal, Message,
     MessageId, MusicApi, MusicLinkTarget, ParseMode, ReplyParameters, ResponseResult, Result,
-    ThumbnailBuffer, UploadClientState, extract_retry_after_seconds, resolve_message,
+    ThumbnailBuffer, UploadClientState, extract_retry_after_seconds, resolve_chat_language_for,
     sanitize_sensitive_text,
 };
 
@@ -134,13 +134,7 @@ pub(super) async fn ensure_admin(
     if is_admin(msg, &state.config) {
         Ok(true)
     } else {
-        let lang = resolve_message(
-            &state.database,
-            &state.chat_languages,
-            &state.config.default_language,
-            msg,
-        )
-        .await;
+        let lang = resolve_chat_language_for(state, msg).await;
         send_reply_text(bot, msg, crate::i18n::tr(&lang, "cmd_only_admin")).await?;
         Ok(false)
     }
@@ -173,16 +167,12 @@ pub(super) fn contains_music_link_hint(text: &str) -> bool {
         .any(|hint| text.contains(hint))
 }
 
-pub(super) fn is_spawnable_command_text(text: &str) -> bool {
-    text.starts_with('/')
-}
-
 pub(super) fn is_command_text(text: &str) -> bool {
     text.starts_with('/')
 }
 
 pub(super) fn should_spawn_message_task(text: &str) -> bool {
-    is_spawnable_command_text(text) || contains_music_link_hint(text)
+    is_command_text(text) || contains_music_link_hint(text)
 }
 
 pub(super) fn should_log_command(command: &str) -> bool {
@@ -332,7 +322,8 @@ pub(super) fn should_refresh_upload_client(
     upload_state: &UploadClientState,
     reuse_limit: u32,
 ) -> bool {
-    upload_state.bot.is_none() || (reuse_limit != 0 && upload_state.reuse_count >= reuse_limit)
+    upload_state.raw_client.is_none()
+        || (reuse_limit != 0 && upload_state.reuse_count >= reuse_limit)
 }
 
 pub(super) fn collect_maintenance_signals(
@@ -363,17 +354,6 @@ pub(super) fn collect_maintenance_signals(
     }
 
     signals
-}
-
-pub(super) async fn join_futures<F1, F2, T1, T2, E>(
-    f1: F1,
-    f2: F2,
-) -> (std::result::Result<T1, E>, std::result::Result<T2, E>)
-where
-    F1: std::future::Future<Output = std::result::Result<T1, E>>,
-    F2: std::future::Future<Output = std::result::Result<T2, E>>,
-{
-    tokio::join!(f1, f2)
 }
 
 pub(super) async fn acquire_download_leader(
@@ -439,10 +419,6 @@ pub(super) fn format_perf(label: &str, duration: std::time::Duration) -> String 
     format!("[{label}] {}ms", duration.as_millis())
 }
 
-pub(super) fn should_set_upload_pool_idle_timeout(secs: u64) -> bool {
-    secs > 0
-}
-
 pub(super) fn append_search_result_line(
     results: &mut String,
     index: usize,
@@ -470,19 +446,8 @@ pub(super) async fn cleanup_thumbnail_buffer(buffer: Option<ThumbnailBuffer>) {
     }
 }
 
-pub(super) fn get_upload_bot(upload_state: &UploadClientState) -> Result<Bot> {
-    if let Some(bot) = upload_state.bot.clone() {
-        Ok(bot)
-    } else {
-        tracing::error!("Upload bot not initialized");
-        Err(BotError::Other(anyhow::anyhow!(
-            "upload bot not initialized"
-        )))
-    }
-}
-
 pub(super) struct UploadBotBundle {
-    pub(super) bot: Bot,
+    pub(super) bot: Option<Bot>,
     pub(super) raw_client: reqwest::Client,
     /// Full API base URL including bot token, e.g. "http://host:port/bot<TOKEN>/"
     pub(super) api_base_url: String,

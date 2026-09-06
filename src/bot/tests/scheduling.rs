@@ -147,12 +147,6 @@ fn maintenance_scheduler_emits_cache_prune_signal_on_interval() {
 }
 
 #[test]
-fn upload_pool_idle_timeout_disabled_when_zero() {
-    assert!(!super::should_set_upload_pool_idle_timeout(0));
-    assert!(super::should_set_upload_pool_idle_timeout(60));
-}
-
-#[test]
 fn download_chunk_bytes_uses_configured_kib() {
     let config = Config {
         download_chunk_size_kb: 512,
@@ -207,27 +201,27 @@ fn rate_limit_retry_delay_secs_ignores_non_rate_limit_errors() {
 
 #[test]
 fn upload_client_refresh_decision_works() {
-    let has_bot = UploadClientState {
-        bot: Some(Bot::new("token")),
-        raw_client: None,
+    let has_client = UploadClientState {
+        bot: None,
+        raw_client: Some(Bot::new("token").client().clone()),
         upload_api_url: String::new(),
         reuse_count: 0,
     };
-    let no_bot = UploadClientState {
+    let no_client = UploadClientState {
         bot: None,
         raw_client: None,
         upload_api_url: String::new(),
         reuse_count: 0,
     };
     let exhausted = UploadClientState {
-        bot: Some(Bot::new("token")),
-        raw_client: None,
+        bot: None,
+        raw_client: Some(Bot::new("token").client().clone()),
         upload_api_url: String::new(),
         reuse_count: 10,
     };
 
-    assert!(super::should_refresh_upload_client(&no_bot, 10));
-    assert!(!super::should_refresh_upload_client(&has_bot, 10));
+    assert!(super::should_refresh_upload_client(&no_client, 10));
+    assert!(!super::should_refresh_upload_client(&has_client, 10));
     assert!(super::should_refresh_upload_client(&exhausted, 10));
     assert!(!super::should_refresh_upload_client(&exhausted, 0));
 }

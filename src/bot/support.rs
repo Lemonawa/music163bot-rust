@@ -4,11 +4,12 @@ use super::{
     MaybeInaccessibleMessage, Message, ParseMode, RawDocumentParams, ReplyParameters,
     ResponseResult, StatusTextParams, acquire_upload_client, acquire_upload_permit,
     build_status_text, clean_filename, clearallcache_confirmation_prompt, ensure_admin,
-    format_artists, format_speed_line, format_uptime, handle_lang_callback, join_futures,
+    format_artists, format_speed_line, format_uptime, handle_lang_callback,
     parse_inline_query_keyword, parse_music_id, parse_song_id_or_search_first_result,
-    process_music, raw_send_document_bytes, require_command_args_or_reply, resolve_inline,
-    resolve_message, rmcache_usage_prompt, sample_resource_snapshot, sanitize_sensitive_text,
-    send_reply_html, send_reply_message, send_reply_text, u64_to_i64_saturating,
+    process_music, raw_send_document_bytes, require_command_args_or_reply,
+    resolve_chat_language_for, resolve_inline_language_for, rmcache_usage_prompt,
+    sample_resource_snapshot, sanitize_sensitive_text, send_reply_html, send_reply_message,
+    send_reply_text, u64_to_i64_saturating,
 };
 use crate::i18n::{self, ChatLanguage};
 
@@ -18,13 +19,7 @@ pub(super) async fn handle_lyric_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
     let Some(args) =
         require_command_args_or_reply(bot, msg, args, &i18n::tr(&lang, "music_need_id")).await?
     else {
@@ -39,12 +34,12 @@ pub(super) async fn handle_lyric_command(
 
     let status_msg = send_reply_message(bot, msg, i18n::tr(&lang, "lyric_searching")).await?;
 
-    match join_futures(
+    let (lyric_result, detail_result) = tokio::join!(
         state.music_api.get_song_lyric(music_id),
-        state.music_api.get_song_detail(music_id),
-    )
-    .await
-    {
+        state.music_api.get_song_detail(music_id)
+    );
+
+    match (lyric_result, detail_result) {
         (Ok(lyric), detail_result) => {
             handle_lyric_success(
                 bot,
@@ -109,13 +104,12 @@ async fn handle_lyric_success(
     let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
     let lyric_bytes = Bytes::from(lyric.into_bytes());
 
-    let (client_result, permit_result) = join_futures(
+    let (client_result, permit_result) = tokio::join!(
         acquire_upload_client(state),
-        acquire_upload_permit(&state.upload_semaphore),
-    )
-    .await;
+        acquire_upload_permit(&state.upload_semaphore)
+    );
 
-    let (_upload_bot, raw_client, api_base_url) = match client_result {
+    let (raw_client, api_base_url) = match client_result {
         Ok(bundle) => bundle,
         Err(e) => {
             tracing::warn!(
@@ -198,13 +192,7 @@ pub(super) async fn handle_status_command(
         return Ok(());
     }
 
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     let chat_id = msg.chat.id.0;
 
@@ -254,13 +242,7 @@ pub(super) async fn handle_rmcache_command(
         return Ok(());
     };
 
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
     let args = args.unwrap_or_default();
 
     if args.is_empty() {
@@ -312,13 +294,7 @@ pub(super) async fn handle_clearallcache_command(
         return Ok(());
     };
 
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
     send_reply_html(bot, msg, clearallcache_confirmation_prompt(&lang)).await?;
     let user_id = msg.from.as_ref().map_or(0, |u| u.id);
     prune_expired_confirmations(&state.clearallcache_confirms);
@@ -339,13 +315,7 @@ pub(super) async fn handle_clearallcache_confirm_command(
         return Ok(());
     };
 
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
 
     let should_allow = state
         .clearallcache_confirms
@@ -436,15 +406,9 @@ pub(super) async fn handle_callback(
 ) -> ResponseResult<()> {
     let callback_data = query.data.clone();
     let callback_lang = match query.message.as_ref() {
-        Some(MaybeInaccessibleMessage::Regular(msg)) => Some(
-            resolve_message(
-                &state.database,
-                &state.chat_languages,
-                &state.config.default_language,
-                msg,
-            )
-            .await,
-        ),
+        Some(MaybeInaccessibleMessage::Regular(msg)) => {
+            Some(resolve_chat_language_for(&state, msg).await)
+        }
         _ => None,
     };
     let tr = |key: &str| {
@@ -501,13 +465,7 @@ pub(super) async fn handle_inline_query(
 ) -> ResponseResult<()> {
     // Inline queries always come from a private "chat" with the bot: resolve
     // the language from the querent's user id (== private chat id).
-    let lang = resolve_inline(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        &query.from,
-    )
-    .await;
+    let lang = resolve_inline_language_for(&state, &query.from).await;
 
     // Support "search" prefix for consistency with Go version
     let (search_keyword, is_search_cmd) = parse_inline_query_keyword(&query.query);

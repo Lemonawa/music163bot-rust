@@ -5,7 +5,6 @@ use super::{
 use crate::database::Database;
 use crate::i18n::{self, ChatLanguage};
 use crate::telegram::{Chat, User};
-
 use dashmap::DashMap;
 
 /// Locales compiled into the binary (from `locales/*.yml`). Leaked on
@@ -20,20 +19,19 @@ pub(super) fn locales() -> Vec<&'static str> {
 /// Resolve the Chat Language for an incoming message: cached Language
 /// Override, else the persisted override from the database (re-cached),
 /// else auto-detection / Default Language per `i18n::resolve_chat_language`.
-pub(super) async fn resolve_message(
-    database: &Database,
-    chat_languages: &DashMap<i64, String>,
-    default_language: &str,
-    msg: &Message,
-) -> ChatLanguage {
+///
+/// The one interface the rest of the bot uses to answer "what language is
+/// this chat in" — callers pass the whole `BotState` and never its fields.
+pub(super) async fn resolve_chat_language_for(state: &BotState, msg: &Message) -> ChatLanguage {
     let is_private = msg.chat.type_ == "private";
     let sender_code = msg.from.as_ref().and_then(|u| u.language_code.as_deref());
-    let override_lang = cached_override(database, chat_languages, msg.chat.id.0).await;
+    let override_lang =
+        cached_override(&state.database, &state.chat_languages, msg.chat.id.0).await;
     i18n::resolve_chat_language(
         is_private,
         sender_code,
         override_lang.as_deref(),
-        default_language,
+        &state.config.default_language,
     )
     .0
 }
@@ -41,18 +39,13 @@ pub(super) async fn resolve_message(
 /// Resolve the Chat Language for an inline query. Inline queries behave like
 /// a private chat with the querent (their user id == the private chat id),
 /// so their Language Override and their Telegram `language_code` both apply.
-pub(super) async fn resolve_inline(
-    database: &Database,
-    chat_languages: &DashMap<i64, String>,
-    default_language: &str,
-    from: &User,
-) -> ChatLanguage {
-    let override_lang = cached_override(database, chat_languages, from.id).await;
+pub(super) async fn resolve_inline_language_for(state: &BotState, from: &User) -> ChatLanguage {
+    let override_lang = cached_override(&state.database, &state.chat_languages, from.id).await;
     i18n::resolve_chat_language(
         true,
         from.language_code.as_deref(),
         override_lang.as_deref(),
-        default_language,
+        &state.config.default_language,
     )
     .0
 }
@@ -78,22 +71,17 @@ async fn cached_override(
 
 /// Persist a Language Override: cache and database stay coherent here, in
 /// the one place that writes them.
-async fn set_override(
-    database: &Database,
-    chat_languages: &DashMap<i64, String>,
-    chat_id: i64,
-    locale: &str,
-) {
-    chat_languages.insert(chat_id, locale.to_string());
-    if let Err(e) = database.set_chat_language(chat_id, locale).await {
+async fn set_override(state: &BotState, chat_id: i64, locale: &str) {
+    state.chat_languages.insert(chat_id, locale.to_string());
+    if let Err(e) = state.database.set_chat_language(chat_id, locale).await {
         tracing::warn!("Failed to persist chat language for {chat_id}: {}", e);
     }
 }
 
 /// Clear a Language Override (Auto): cache and database stay coherent here.
-async fn clear_override(database: &Database, chat_languages: &DashMap<i64, String>, chat_id: i64) {
-    chat_languages.remove(&chat_id);
-    if let Err(e) = database.clear_chat_language(chat_id).await {
+async fn clear_override(state: &BotState, chat_id: i64) {
+    state.chat_languages.remove(&chat_id);
+    if let Err(e) = state.database.clear_chat_language(chat_id).await {
         tracing::warn!("Failed to clear chat language: {}", e);
     }
 }
@@ -218,13 +206,7 @@ pub(super) async fn handle_lang_command(
     state: &Arc<BotState>,
     args: Option<String>,
 ) -> ResponseResult<()> {
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
 
     match args {
         None => {
@@ -278,13 +260,7 @@ async fn apply_lang_argument(
 ) -> ResponseResult<()> {
     match i18n::parse_lang_argument(arg) {
         Ok(Some(locale)) => {
-            set_override(
-                &state.database,
-                &state.chat_languages,
-                msg.chat.id.0,
-                locale,
-            )
-            .await;
+            set_override(state, msg.chat.id.0, locale).await;
             send_reply_text(
                 bot,
                 msg,
@@ -293,7 +269,7 @@ async fn apply_lang_argument(
             .await?;
         }
         Ok(None) => {
-            clear_override(&state.database, &state.chat_languages, msg.chat.id.0).await;
+            clear_override(state, msg.chat.id.0).await;
             send_reply_text(bot, msg, i18n::tr(lang, "lang_auto")).await?;
         }
         Err(()) => {
@@ -326,16 +302,10 @@ pub(super) async fn handle_lang_callback(
 
     let user = query.from.id;
 
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        chat_msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, chat_msg).await;
 
     if action == "auto" {
-        clear_override(&state.database, &state.chat_languages, chat_msg.chat.id.0).await;
+        clear_override(state, chat_msg.chat.id.0).await;
         bot.answer_callback_query(query.id.clone())
             .text(i18n::tr(&lang, "lang_auto"))
             .await?;
@@ -366,13 +336,7 @@ pub(super) async fn handle_lang_callback(
         }
     }
 
-    set_override(
-        &state.database,
-        &state.chat_languages,
-        chat_msg.chat.id.0,
-        action,
-    )
-    .await;
+    set_override(state, chat_msg.chat.id.0, action).await;
     bot.answer_callback_query(query.id.clone())
         .text(i18n::tr_with(
             &ChatLanguage::new(action),

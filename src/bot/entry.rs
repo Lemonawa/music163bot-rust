@@ -489,13 +489,7 @@ pub(super) async fn handle_start_command(
         return process_music(bot, msg, state, music_id).await;
     }
 
-    let lang = super::resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = super::resolve_chat_language_for(state, msg).await;
     let welcome_text = i18n::tr_with(&lang, "start_welcome", "bot_username", &state.bot_username);
 
     bot.send_message(msg.chat.id, welcome_text)

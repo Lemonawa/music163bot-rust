@@ -190,26 +190,14 @@ async fn upload_target_uses_local_uri_when_enabled() {
 }
 
 #[test]
-fn get_upload_bot_returns_error_when_missing() {
+fn should_refresh_upload_client_when_client_missing() {
     let state = UploadClientState {
         bot: None,
         raw_client: None,
         upload_api_url: String::new(),
         reuse_count: 0,
     };
-    assert!(get_upload_bot(&state).is_err());
-}
-
-#[test]
-fn get_upload_bot_returns_bot_when_present() {
-    let bot = Bot::new("token");
-    let state = UploadClientState {
-        bot: Some(bot),
-        raw_client: None,
-        upload_api_url: String::new(),
-        reuse_count: 0,
-    };
-    assert!(get_upload_bot(&state).is_ok());
+    assert!(super::should_refresh_upload_client(&state, 0));
 }
 
 #[test]

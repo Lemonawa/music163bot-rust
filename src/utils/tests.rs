@@ -295,18 +295,6 @@ fn clean_filename_handles_unicode() {
 }
 
 #[test]
-fn is_timeout_error_detects_timeout_message() {
-    let err = std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timeout");
-    assert!(super::is_timeout_error(&err));
-}
-
-#[test]
-fn is_timeout_error_rejects_non_timeout() {
-    let err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-    assert!(!super::is_timeout_error(&err));
-}
-
-#[test]
 fn build_http_client_returns_client() {
     let client =
         super::build_http_client(reqwest::Client::builder()).expect("client should be built");

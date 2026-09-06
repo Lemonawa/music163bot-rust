@@ -410,18 +410,5 @@ pub fn update_peak(counter: &std::sync::atomic::AtomicU32, value: u32) -> u32 {
     current
 }
 
-/// Check if an error is a timeout error by walking the error chain
-pub fn is_timeout_error(error: &dyn std::error::Error) -> bool {
-    let mut current: Option<&dyn std::error::Error> = Some(error);
-    while let Some(err) = current {
-        let message = err.to_string();
-        if message.contains("timeout") || message.contains("deadline") {
-            return true;
-        }
-        current = err.source();
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests;

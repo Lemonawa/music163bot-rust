@@ -1,8 +1,8 @@
 use super::{
     Arc, AudioBuffer, Bot, BotError, BotState, Bytes, Config, RAW_UPLOAD_CHUNK_SIZE,
     RawUploadParams, ReaderStream, Result, ThumbnailBuffer, UploadBotBundle, UploadClientState,
-    build_http_client, extract_retry_after_seconds, get_upload_bot, sanitize_sensitive_text,
-    should_refresh_upload_client, should_set_upload_pool_idle_timeout,
+    build_http_client, extract_retry_after_seconds, sanitize_sensitive_text,
+    should_refresh_upload_client,
 };
 use std::fmt::Write as _;
 
@@ -336,12 +336,11 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
         .user_agent("Go-http-client/2.0")
         .default_headers(reqwest::header::HeaderMap::new());
 
-    if should_set_upload_pool_idle_timeout(config.upload_pool_idle_timeout_secs) {
+    if config.upload_pool_idle_timeout_secs > 0 {
         client_builder = client_builder.pool_idle_timeout(std::time::Duration::from_secs(
             config.upload_pool_idle_timeout_secs,
         ));
     }
-
     tracing::debug!(
         "Upload diag: client settings pool_max_idle_per_host={}, pool_idle_timeout_secs={}, timeout_secs={}, api_url={}",
         config.upload_pool_max_idle_per_host,
@@ -356,7 +355,7 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
     let raw_api_base = format!("{}bot{}/", api_url_str, config.bot_token);
 
     Ok(UploadBotBundle {
-        bot,
+        bot: Some(bot),
         raw_client: client,
         api_base_url: raw_api_base,
     })
@@ -364,7 +363,7 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
 
 pub(super) async fn acquire_upload_client(
     state: &Arc<BotState>,
-) -> Result<(Bot, reqwest::Client, String)> {
+) -> Result<(reqwest::Client, String)> {
     let reuse_limit = state.config.upload_client_reuse_requests;
 
     let (reason, reuse_count_before) = {
@@ -376,7 +375,7 @@ pub(super) async fn acquire_upload_client(
                 upload_state.reuse_count,
                 reuse_limit
             );
-            return checkout_upload_client(&mut upload_state);
+            return Ok(checkout_upload_client(&mut upload_state));
         }
 
         let reason = if upload_state.bot.is_none() {
@@ -399,7 +398,9 @@ pub(super) async fn acquire_upload_client(
 
     let mut upload_state = state.upload_client_state.lock().await;
     if should_refresh_upload_client(&upload_state, reuse_limit) {
-        upload_state.bot = Some(bundle.bot);
+        if let Some(bot) = bundle.bot {
+            upload_state.bot = Some(bot);
+        }
         upload_state.raw_client = Some(bundle.raw_client);
         upload_state.upload_api_url = bundle.api_base_url;
         upload_state.reuse_count = 0;
@@ -411,20 +412,19 @@ pub(super) async fn acquire_upload_client(
         tracing::debug!("Upload diag: client refreshed by another task");
     }
 
-    checkout_upload_client(&mut upload_state)
+    Ok(checkout_upload_client(&mut upload_state))
 }
 
 pub(super) fn checkout_upload_client(
     upload_state: &mut UploadClientState,
-) -> Result<(Bot, reqwest::Client, String)> {
+) -> (reqwest::Client, String) {
     let next_reuse_count = upload_state.reuse_count.saturating_add(1);
     tracing::debug!("Upload diag: reuse_count -> {}", next_reuse_count);
     upload_state.reuse_count = next_reuse_count;
 
-    let bot = get_upload_bot(upload_state)?;
     let raw_client = upload_state.raw_client.clone().unwrap_or_default();
     let api_url = upload_state.upload_api_url.clone();
-    Ok((bot, raw_client, api_url))
+    (raw_client, api_url)
 }
 
 pub(super) async fn run_upload_prewarm<T, F, Fut>(warmup: F) -> bool

@@ -2,7 +2,8 @@ use super::{
     Arc, Bot, BotState, Bytes, CoverMode, Message, MusicCollectionTarget,
     PERF_STAGE_COVER_DOWNLOAD, PerfTraceContext, ResponseResult, ThumbnailBuffer,
     exceeds_batch_download_limit, process_music, process_music_with_context,
-    rate_limit_retry_delay_secs, resolve_message, sanitize_sensitive_text, send_reply_text,
+    rate_limit_retry_delay_secs, resolve_chat_language_for, sanitize_sensitive_text,
+    send_reply_text,
 };
 use crate::i18n;
 
@@ -18,13 +19,7 @@ pub(super) async fn process_music_collection(
         return process_djradio_collection(bot, msg, state, radio_id).await;
     }
 
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
 
     let (collection_name, collection_id, song_ids_result) = match target {
         MusicCollectionTarget::Playlist(playlist_id) => (
@@ -177,13 +172,7 @@ pub(super) async fn process_djradio_collection(
     state: &Arc<BotState>,
     radio_id: u64,
 ) -> ResponseResult<()> {
-    let lang = resolve_message(
-        &state.database,
-        &state.chat_languages,
-        &state.config.default_language,
-        msg,
-    )
-    .await;
+    let lang = resolve_chat_language_for(state, msg).await;
     let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
     let fetch_limit = max_tracks.saturating_add(1);
     let (total_programs, program_tracks) = match state
