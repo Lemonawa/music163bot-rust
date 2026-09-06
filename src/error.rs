@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::telegram::TelegramError;
+use crate::utils::{format_error_chain, sanitize_sensitive_text};
 
 #[derive(Error, Debug)]
 pub enum BotError {
@@ -30,3 +31,19 @@ pub enum BotError {
 }
 
 pub type Result<T> = std::result::Result<T, BotError>;
+
+impl BotError {
+    /// The one way to turn any error into text safe to show or log: the full
+    /// error chain, redacted. Every site that previously spelled out
+    /// `sanitize_sensitive_text(&format_error_chain(&e))` — or forgot the
+    /// sanitize half — goes through here instead.
+    pub fn sanitized_chain(&self) -> String {
+        sanitize_sensitive_text(&format_error_chain(self))
+    }
+}
+
+/// Same as [`BotError::sanitized_chain`] for any error type (e.g. a
+/// `TelegramError` or `anyhow::Error` before it is wrapped).
+pub fn sanitized_error_chain(error: &dyn std::error::Error) -> String {
+    sanitize_sensitive_text(&format_error_chain(error))
+}

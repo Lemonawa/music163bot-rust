@@ -7,13 +7,29 @@ use tokio::task::JoinHandle;
 use crate::telegram::TelegramBot as Bot;
 
 #[test]
-fn redact_bot_token_in_error_message_masks_bot_path_segment() {
+fn sanitize_sensitive_text_masks_bot_path_segment() {
     let raw = "error sending request for url (http://127.0.0.1:8081/bot123456789:fake_test_token/sendAudio)";
 
-    let redacted = super::redact_bot_token_in_error_message(raw);
+    let redacted = crate::utils::sanitize_sensitive_text(raw);
 
     assert!(!redacted.contains("123456789:fake_test_token"));
     assert!(redacted.contains("/bot<redacted>/sendAudio"));
+}
+
+#[test]
+fn sanitized_error_chain_masks_bot_token_across_chain() {
+    use std::error::Error as _;
+
+    let inner: reqwest::Error = serde_json::from_str::<()>("{")
+        .expect_err("invalid json")
+        .into();
+    let wrapped = anyhow::Error::from(inner)
+        .context("failed http://x/bot123456789:fake_test_token/sendAudio");
+    let _keep_source: &dyn Error = wrapped.source().unwrap_or(&inner);
+
+    let redacted = crate::error::sanitized_error_chain(&wrapped);
+
+    assert!(!redacted.contains("123456789:fake_test_token"));
 }
 
 #[test]

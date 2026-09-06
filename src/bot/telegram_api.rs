@@ -230,10 +230,6 @@ pub(super) async fn raw_send_document_bytes(
     send_raw_upload_form(client, &url, form, "sendDocument").await
 }
 
-pub(super) fn redact_bot_token_in_error_message(message: &str) -> String {
-    sanitize_sensitive_text(message)
-}
-
 pub(super) fn parse_telegram_api_response(
     body: &str,
     status: reqwest::StatusCode,
