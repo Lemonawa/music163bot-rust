@@ -3,7 +3,7 @@ use std::time::Duration;
 use super::api::TelegramBot;
 use super::error::TelegramError;
 use super::types::Update;
-use crate::utils::sanitize_sensitive_text;
+use crate::error::sanitized_error_chain;
 
 /// Perform a single long-poll call to getUpdates.
 /// Returns the updates received, or an empty vec on error (after logging).
@@ -27,7 +27,7 @@ pub async fn poll_once(bot: &TelegramBot, offset: &mut i64) -> Vec<Update> {
 }
 
 fn format_poll_error_for_log(error: &TelegramError) -> String {
-    sanitize_sensitive_text(&error.to_string())
+    sanitized_error_chain(&error)
 }
 
 #[cfg(test)]

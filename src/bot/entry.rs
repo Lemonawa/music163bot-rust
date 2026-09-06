@@ -11,7 +11,7 @@ use super::{
     handle_music_url, handle_rmcache_command, handle_search_command, handle_status_command,
     is_clearallcache_confirm, is_official_telegram_api, lock_unpoisoned, maintenance_worker,
     process_music, register_bot_commands, run_upload_prewarm, sanitize_sensitive_text,
-    should_log_command, should_spawn_message_task,
+    sanitized_error_chain, should_log_command, should_spawn_message_task,
 };
 use crate::i18n;
 
@@ -292,7 +292,7 @@ async fn create_bot_client(config: &Config) -> Result<Bot> {
                         } else {
                             tracing::warn!(
                                 "Custom API connection failed: {}. Falling back to official API.",
-                                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                                sanitized_error_chain(&e)
                             );
                         }
                     }
@@ -308,7 +308,7 @@ async fn create_bot_client(config: &Config) -> Result<Bot> {
                 tracing::error!(
                     "Invalid custom API URL '{}': {}. Using official API.",
                     sanitize_sensitive_text(&config.bot_api),
-                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                    sanitized_error_chain(&e)
                 );
             }
         }
@@ -328,25 +328,16 @@ async fn create_bot_client(config: &Config) -> Result<Bot> {
 async fn dispatch_update(bot: Bot, update: Update, state: Arc<BotState>) {
     if let Some(msg) = update.message {
         if let Err(e) = handle_message(bot, msg, state).await {
-            tracing::error!(
-                "Error handling message: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::error!("Error handling message: {}", sanitized_error_chain(&e));
         }
     } else if let Some(query) = update.callback_query {
         if let Err(e) = handle_callback(bot, query, state).await {
-            tracing::error!(
-                "Error handling callback: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::error!("Error handling callback: {}", sanitized_error_chain(&e));
         }
     } else if let Some(query) = update.inline_query
         && let Err(e) = handle_inline_query(bot, query, state).await
     {
-        tracing::error!(
-            "Error handling inline query: {}",
-            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-        );
+        tracing::error!("Error handling inline query: {}", sanitized_error_chain(&e));
     }
 }
 
@@ -366,7 +357,7 @@ pub(super) async fn handle_message(
             Err(e) => {
                 tracing::error!(
                     "Message task semaphore closed: {}",
-                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                    sanitized_error_chain(&e)
                 );
                 return Ok(());
             }
@@ -382,18 +373,12 @@ pub(super) async fn handle_message(
             match classify_message_task(&text) {
                 Some(MessageTaskRoute::Command) => {
                     if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
-                        tracing::error!(
-                            "Error handling command: {}",
-                            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                        );
+                        tracing::error!("Error handling command: {}", sanitized_error_chain(&e));
                     }
                 }
                 Some(MessageTaskRoute::MusicLink) => {
                     if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
-                        tracing::error!(
-                            "Error handling music URL: {}",
-                            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-                        );
+                        tracing::error!("Error handling music URL: {}", sanitized_error_chain(&e));
                     }
                 }
                 None => {}

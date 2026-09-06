@@ -75,7 +75,7 @@ impl MusicApi {
         .unwrap_or_else(|e| {
             tracing::error!(
                 "Failed to build HTTP client: {}",
-                crate::utils::sanitize_sensitive_text(&e.to_string())
+                crate::error::sanitized_error_chain(&e)
             );
             build_fallback_client()
         });
@@ -88,7 +88,7 @@ impl MusicApi {
         .unwrap_or_else(|e| {
             tracing::error!(
                 "Failed to build share-link resolve client: {}",
-                crate::utils::sanitize_sensitive_text(&e.to_string())
+                crate::error::sanitized_error_chain(&e)
             );
             build_redirect_disabled_fallback_client()
         });

@@ -37,6 +37,7 @@ impl BotError {
     /// error chain, redacted. Every site that previously spelled out
     /// `sanitize_sensitive_text(&format_error_chain(&e))` — or forgot the
     /// sanitize half — goes through here instead.
+    #[must_use]
     pub fn sanitized_chain(&self) -> String {
         sanitize_sensitive_text(&format_error_chain(self))
     }
@@ -44,6 +45,7 @@ impl BotError {
 
 /// Same as [`BotError::sanitized_chain`] for any error type (e.g. a
 /// `TelegramError` or `anyhow::Error` before it is wrapped).
+#[must_use]
 pub fn sanitized_error_chain(error: &dyn std::error::Error) -> String {
     sanitize_sensitive_text(&format_error_chain(error))
 }

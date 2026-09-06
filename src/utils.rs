@@ -55,7 +55,7 @@ pub enum MusicCollectionTarget {
 /// Returns an error if the underlying `reqwest::ClientBuilder::build` fails.
 pub fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
     builder.build().map_err(|e| {
-        let sanitized = sanitize_sensitive_text(&e.to_string());
+        let sanitized = crate::error::sanitized_error_chain(&e);
         tracing::error!("Failed to build HTTP client: {}", sanitized);
         BotError::HttpClientBuild(sanitized)
     })

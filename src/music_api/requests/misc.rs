@@ -219,7 +219,7 @@ impl MusicApi {
                                     attempt,
                                     total_attempts,
                                     crate::utils::sanitize_sensitive_text(&pic_url),
-                                    crate::utils::sanitize_sensitive_text(&e.to_string())
+                                    crate::error::sanitized_error_chain(&e)
                                 );
                             }
                             Err(e)

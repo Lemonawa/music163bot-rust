@@ -110,7 +110,7 @@ async fn check_privilege(bot: &Bot, bot_admin: &[i64], chat: &Chat, user_id: i64
                 "getChatMember failed for chat {} user {}: {}",
                 chat.id.0,
                 user_id,
-                super::sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                crate::error::sanitized_error_chain(&e)
             );
             Privilege::CheckFailed
         }

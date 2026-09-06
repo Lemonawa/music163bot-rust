@@ -8,7 +8,7 @@ use super::{
     cleanup_thumbnail_buffer, collect_maintenance_signals, cover_download_failure_notice,
     create_music_keyboard_for_target, delete_status_message_resilient, download_cover_assets,
     edit_status_message_resilient, extract_file_id_from_response, i64_to_u32_saturating, log_perf,
-    raw_send_file, resolve_chat_language_for, sanitize_sensitive_text, send_reply_text,
+    raw_send_file, resolve_chat_language_for, sanitized_error_chain, send_reply_text,
     throughput_mbps, u64_to_i64_saturating, update_peak,
 };
 use futures_util::{StreamExt, TryStreamExt};
@@ -276,7 +276,7 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
             tracing::warn!(
                 "Failed to send cover fallback notice for music_id {}: {}",
                 p.song_id,
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
         }
     }
@@ -699,7 +699,7 @@ async fn execute_upload(p: &mut UploadFlowParams<'_>) -> Result<Option<String>> 
                 throughput_mbps(p.file_size, upload_duration),
                 in_flight_after,
                 peak_in_flight,
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             Err(e)
         }

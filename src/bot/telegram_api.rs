@@ -1,7 +1,7 @@
 use super::{
     Arc, AudioBuffer, Bot, BotError, BotState, Bytes, Config, RAW_UPLOAD_CHUNK_SIZE,
     RawUploadParams, ReaderStream, Result, ThumbnailBuffer, UploadBotBundle, UploadClientState,
-    build_http_client, extract_retry_after_seconds, sanitize_sensitive_text,
+    build_http_client, extract_retry_after_seconds, sanitize_sensitive_text, sanitized_error_chain,
     should_refresh_upload_client,
 };
 use std::fmt::Write as _;
@@ -15,7 +15,7 @@ pub(super) async fn send_raw_upload_form(
     let resp = client.post(url).multipart(form).send().await.map_err(|e| {
         BotError::Other(anyhow::anyhow!(
             "Raw upload request failed: {}",
-            redact_bot_token_in_error_message(&e.to_string())
+            sanitized_error_chain(&e)
         ))
     })?;
 
@@ -23,7 +23,7 @@ pub(super) async fn send_raw_upload_form(
     let body = resp.text().await.map_err(|e| {
         BotError::Other(anyhow::anyhow!(
             "Failed to read upload response: {}",
-            sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+            sanitized_error_chain(&e)
         ))
     })?;
     parse_telegram_api_response(&body, status, method)
@@ -299,14 +299,14 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
             tracing::warn!(
                 "Invalid upload API URL '{}': {}. Using default.",
                 sanitize_sensitive_text(&api_url_str),
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             match reqwest::Url::parse("https://api.telegram.org/") {
                 Ok(url) => url,
                 Err(err) => {
                     tracing::error!(
                         "Failed to parse fallback API URL: {}",
-                        sanitize_sensitive_text(&err.to_string())
+                        sanitized_error_chain(&err)
                     );
                     return Err(BotError::Other(anyhow::anyhow!(
                         "failed to parse fallback API URL"
@@ -436,7 +436,7 @@ where
         Err(e) => {
             tracing::warn!(
                 "Upload prewarm failed, continuing startup: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             false
         }

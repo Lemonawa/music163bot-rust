@@ -8,7 +8,7 @@ use super::{
     parse_inline_query_keyword, parse_music_id, parse_song_id_or_search_first_result,
     process_music, raw_send_document_bytes, require_command_args_or_reply,
     resolve_chat_language_for, resolve_inline_language_for, rmcache_usage_prompt,
-    sample_resource_snapshot, sanitize_sensitive_text, send_reply_html, send_reply_message,
+    sample_resource_snapshot, sanitized_error_chain, send_reply_html, send_reply_message,
     send_reply_text, u64_to_i64_saturating,
 };
 use crate::i18n::{self, ChatLanguage};
@@ -54,10 +54,7 @@ pub(super) async fn handle_lyric_command(
             .await?;
         }
         (Err(e), _) => {
-            tracing::warn!(
-                "Failed to fetch lyric: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::warn!("Failed to fetch lyric: {}", sanitized_error_chain(&e));
             bot.edit_message_text(msg.chat.id, status_msg.id, i18n::tr(&lang, "lyric_failed"))
                 .await?;
         }
@@ -75,7 +72,7 @@ async fn handle_lyric_success(
     status_msg: &Message,
     music_id: u64,
     lyric: String,
-    detail_result: Result<Arc<crate::music_api::SongDetail>, impl std::fmt::Display>,
+    detail_result: Result<Arc<crate::music_api::SongDetail>, crate::error::BotError>,
 ) -> ResponseResult<()> {
     if lyric.trim().is_empty() || lyric == "No lyrics available" {
         bot.edit_message_text(msg.chat.id, status_msg.id, i18n::tr(lang, "lyric_none"))
@@ -88,7 +85,7 @@ async fn handle_lyric_success(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch lyric song detail for {music_id}: {}",
-                sanitize_sensitive_text(&e.to_string())
+                sanitized_error_chain(&e)
             );
             bot.edit_message_text(
                 msg.chat.id,
@@ -114,7 +111,7 @@ async fn handle_lyric_success(
         Err(e) => {
             tracing::warn!(
                 "Failed to initialize lyric upload client: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             bot.edit_message_text(
                 msg.chat.id,
@@ -130,7 +127,7 @@ async fn handle_lyric_success(
         Err(e) => {
             tracing::warn!(
                 "Failed to acquire lyric upload permit: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             bot.edit_message_text(
                 msg.chat.id,
@@ -162,15 +159,12 @@ async fn handle_lyric_success(
             if let Err(e) = bot.delete_message(msg.chat.id, status_msg.id).await {
                 tracing::debug!(
                     "Failed to delete lyric status message: {}",
-                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                    sanitized_error_chain(&e)
                 );
             }
         }
         Err(e) => {
-            tracing::warn!(
-                "Failed to upload lyric file: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::warn!("Failed to upload lyric file: {}", sanitized_error_chain(&e));
             bot.edit_message_text(
                 msg.chat.id,
                 status_msg.id,
@@ -270,7 +264,7 @@ pub(super) async fn handle_rmcache_command(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to delete cached song {music_id}: {}",
-                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                        sanitized_error_chain(&e)
                     );
                     send_reply_text(bot, msg, i18n::tr(&lang, "rmcache_delete_failed")).await?;
                 }
@@ -356,10 +350,7 @@ pub(super) async fn handle_clearallcache_confirm_command(
             )
             .await?;
 
-            tracing::error!(
-                "Failed to clear all cache: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::error!("Failed to clear all cache: {}", sanitized_error_chain(&e));
         }
     }
 
@@ -433,7 +424,7 @@ pub(super) async fn handle_callback(
             Err(e) => {
                 tracing::error!(
                     "Error processing music from callback: {}",
-                    sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                    sanitized_error_chain(&e)
                 );
                 bot.answer_callback_query(query.id)
                     .text(tr("error_generic"))
@@ -528,10 +519,7 @@ pub(super) async fn handle_inline_query(
                 .await?;
         }
         Err(e) => {
-            tracing::error!(
-                "Inline search error: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::error!("Inline search error: {}", sanitized_error_chain(&e));
             let error_article = InlineQueryResultArticle::new(
                 "search_error",
                 i18n::tr(&lang, "inline_search_error_title"),

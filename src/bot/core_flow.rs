@@ -5,8 +5,8 @@ use super::{
     ResponseResult, acquire_download_leader, build_caption, build_perf_trace_context,
     cached_music_link_target, create_music_keyboard_for_target, delete_status_message_resilient,
     download_and_send_music, edit_status_message_resilient, extract_retry_after_seconds,
-    format_artists, format_error_chain, log_perf, resolve_chat_language_for,
-    sanitize_sensitive_text, send_reply_text, u64_to_i64_saturating,
+    format_artists, log_perf, resolve_chat_language_for, sanitized_error_chain, send_reply_text,
+    u64_to_i64_saturating,
 };
 use crate::i18n;
 
@@ -26,7 +26,7 @@ pub(super) async fn try_send_cached_song(
             tracing::warn!(
                 "Database error looking up music_id {}: {}",
                 music_id,
-                sanitize_sensitive_text(&format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             return Ok(false);
         }
@@ -46,7 +46,7 @@ pub(super) async fn try_send_cached_song(
             tracing::warn!(
                 "Failed to delete invalid cache for music_id {}: {}",
                 music_id,
-                sanitize_sensitive_text(&format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
         }
         return Ok(false);
@@ -102,7 +102,7 @@ pub(super) async fn try_send_cached_song(
                     tracing::warn!(
                         "Failed to delete stale file_id cache for music_id {}: {}",
                         music_id,
-                        sanitize_sensitive_text(&format_error_chain(&e))
+                        sanitized_error_chain(&e)
                     );
                 }
                 Ok(false)
@@ -124,7 +124,7 @@ pub(super) async fn process_program(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch program detail for {program_id}: {}",
-                sanitize_sensitive_text(&format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             let lang = resolve_chat_language_for(state, msg).await;
             send_reply_text(bot, msg, i18n::tr(&lang, "voice_detail_failed")).await?;
@@ -393,7 +393,7 @@ async fn fetch_detail_and_status(
     let status_msg = match status_result {
         Ok(m) => m,
         Err(e) => {
-            let sanitized = sanitize_sensitive_text(&format_error_chain(&e));
+            let sanitized = sanitized_error_chain(&e);
             if let Some(retry_delay_secs) = rate_limit_retry_delay_secs(&sanitized, 0) {
                 tracing::warn!(
                     "Status message rate limited for music_id {}. Waiting {}s before retry",
@@ -417,7 +417,7 @@ async fn fetch_detail_and_status(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch {media_label} detail/url for {music_id}: {}",
-                sanitize_sensitive_text(&format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             let failure_text = {
                 let lang = resolve_chat_language_for(state, msg).await;
@@ -530,7 +530,7 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
         match result {
             Ok(()) => break,
             Err(e) => {
-                let sanitized = sanitize_sensitive_text(&format_error_chain(&e));
+                let sanitized = sanitized_error_chain(&e);
                 if let Some(retry_delay_secs) =
                     rate_limit_retry_delay_secs(&sanitized, process_attempt)
                 {

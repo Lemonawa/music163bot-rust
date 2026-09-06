@@ -14,7 +14,7 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
 use crate::config::{Config, CoverMode};
 use crate::database::{Database, SongInfo};
-use crate::error::{BotError, Result};
+use crate::error::{BotError, Result, sanitized_error_chain};
 use crate::music_api::{MusicApi, ProgramMainTrack, format_artists};
 use crate::telegram::{
     CallbackQuery, ChatId, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery,
@@ -24,9 +24,9 @@ use crate::telegram::{
 };
 use crate::utils::{
     MusicCollectionTarget, build_http_client, bytes_to_mb_f64, clean_filename, ensure_dir,
-    extract_first_trusted_music_share_url, extract_retry_after_seconds, format_error_chain,
-    i64_to_u32_saturating, is_known_non_song_share_url, parse_music_collection_target,
-    parse_music_id, parse_music_program_id, sanitize_sensitive_text, throughput_mbps, u64_to_f64,
+    extract_first_trusted_music_share_url, extract_retry_after_seconds, i64_to_u32_saturating,
+    is_known_non_song_share_url, parse_music_collection_target, parse_music_id,
+    parse_music_program_id, sanitize_sensitive_text, throughput_mbps, u64_to_f64,
     u64_to_i64_saturating, update_peak,
 };
 
@@ -122,8 +122,7 @@ use support::{CLEARALLCACHE_CONFIRM_WINDOW, format_bitrate_kbps, prune_expired_c
 use target_resolution::ParsedMusicTarget;
 #[cfg(test)]
 use telegram_api::{
-    UploadFileTarget, maybe_local_file_uri, parse_telegram_api_response,
-    redact_bot_token_in_error_message, select_local_upload_target,
+    UploadFileTarget, maybe_local_file_uri, parse_telegram_api_response, select_local_upload_target,
 };
 #[cfg(test)]
 use upload::{build_music_url, build_program_url, format_perf, is_command_text};

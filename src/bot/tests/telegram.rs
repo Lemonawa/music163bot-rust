@@ -18,16 +18,11 @@ fn sanitize_sensitive_text_masks_bot_path_segment() {
 
 #[test]
 fn sanitized_error_chain_masks_bot_token_across_chain() {
-    use std::error::Error as _;
-
-    let inner: reqwest::Error = serde_json::from_str::<()>("{")
-        .expect_err("invalid json")
-        .into();
+    let inner = serde_json::from_str::<()>("{").expect_err("invalid json");
     let wrapped = anyhow::Error::from(inner)
         .context("failed http://x/bot123456789:fake_test_token/sendAudio");
-    let _keep_source: &dyn Error = wrapped.source().unwrap_or(&inner);
 
-    let redacted = crate::error::sanitized_error_chain(&wrapped);
+    let redacted = crate::error::sanitized_error_chain(wrapped.as_ref());
 
     assert!(!redacted.contains("123456789:fake_test_token"));
 }

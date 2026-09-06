@@ -2,7 +2,8 @@ use super::{
     Arc, Bot, BotState, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseResult,
     append_search_result_line, dispatch_parsed_music_target, extract_first_trusted_music_share_url,
     format_artists, is_known_non_song_share_url, parse_direct_music_target,
-    resolve_chat_language_for, sanitize_sensitive_text, send_reply_message, send_reply_text,
+    resolve_chat_language_for, sanitize_sensitive_text, sanitized_error_chain, send_reply_message,
+    send_reply_text,
 };
 use crate::i18n;
 
@@ -36,7 +37,7 @@ pub(super) async fn handle_music_url(
         Err(e) => {
             tracing::warn!(
                 "Failed to resolve share link: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             send_reply_text(bot, msg, i18n::tr(&lang, "music_id_extract_failed")).await?;
             return Ok(());
@@ -107,10 +108,7 @@ pub(super) async fn handle_search_command(
                 .await?;
         }
         Err(e) => {
-            tracing::warn!(
-                "Search failed: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::warn!("Search failed: {}", sanitized_error_chain(&e));
             bot.edit_message_text(msg.chat.id, search_msg.id, i18n::tr(&lang, "search_failed"))
                 .await?;
         }

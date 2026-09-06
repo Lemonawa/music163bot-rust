@@ -4,7 +4,7 @@ use super::{
     InlineKeyboardButton, InlineKeyboardMarkup, MaintenanceCounters, MaintenanceSignal, Message,
     MessageId, MusicApi, MusicLinkTarget, ParseMode, ReplyParameters, ResponseResult, Result,
     ThumbnailBuffer, UploadClientState, extract_retry_after_seconds, resolve_chat_language_for,
-    sanitize_sensitive_text,
+    sanitized_error_chain,
 };
 
 pub(super) async fn apply_tags_in_blocking(
@@ -267,7 +267,7 @@ pub(super) async fn edit_status_message_resilient(
         .edit_message_text(chat_id, message_id, text.clone())
         .await
     {
-        let sanitized = sanitize_sensitive_text(&crate::utils::format_error_chain(&e));
+        let sanitized = sanitized_error_chain(&e);
         if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
             let bot = bot.clone();
             tokio::spawn(async move {
@@ -276,7 +276,7 @@ pub(super) async fn edit_status_message_resilient(
                 if let Err(retry_err) = bot.edit_message_text(chat_id, message_id, text).await {
                     tracing::debug!(
                         "Status message edit retry failed: {}",
-                        sanitize_sensitive_text(&retry_err.to_string())
+                        sanitized_error_chain(&retry_err)
                     );
                 }
             });
@@ -292,7 +292,7 @@ pub(super) async fn delete_status_message_resilient(
     message_id: MessageId,
 ) {
     if let Err(e) = bot.delete_message(chat_id, message_id).await {
-        let sanitized = sanitize_sensitive_text(&crate::utils::format_error_chain(&e));
+        let sanitized = sanitized_error_chain(&e);
         if let Some(delay_secs) = extract_retry_after_seconds(&sanitized) {
             let bot = bot.clone();
             tokio::spawn(async move {
@@ -301,7 +301,7 @@ pub(super) async fn delete_status_message_resilient(
                 if let Err(retry_err) = bot.delete_message(chat_id, message_id).await {
                     tracing::debug!(
                         "Status message delete retry failed: {}",
-                        sanitize_sensitive_text(&retry_err.to_string())
+                        sanitized_error_chain(&retry_err)
                     );
                 }
             });

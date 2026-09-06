@@ -1,7 +1,7 @@
 use super::{
     Arc, Bot, BotState, Message, MusicCollectionTarget, ResponseResult,
     parse_music_collection_target, parse_music_id, parse_music_program_id, process_music,
-    process_music_collection, process_program, resolve_chat_language_for, sanitize_sensitive_text,
+    process_music_collection, process_program, resolve_chat_language_for, sanitized_error_chain,
     send_reply_text,
 };
 use crate::i18n;
@@ -58,11 +58,7 @@ pub(super) async fn search_first_song_id_or_reply(
             }
         }
         Err(e) => {
-            tracing::warn!(
-                "{}: {}",
-                log_context,
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
-            );
+            tracing::warn!("{}: {}", log_context, sanitized_error_chain(&e));
             send_reply_text(bot, msg, i18n::tr(&lang, "search_failed")).await?;
             Ok(None)
         }

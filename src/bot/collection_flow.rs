@@ -2,8 +2,7 @@ use super::{
     Arc, Bot, BotState, Bytes, CoverMode, Message, MusicCollectionTarget,
     PERF_STAGE_COVER_DOWNLOAD, PerfTraceContext, ResponseResult, ThumbnailBuffer,
     exceeds_batch_download_limit, process_music, process_music_with_context,
-    rate_limit_retry_delay_secs, resolve_chat_language_for, sanitize_sensitive_text,
-    send_reply_text,
+    rate_limit_retry_delay_secs, resolve_chat_language_for, sanitized_error_chain, send_reply_text,
 };
 use crate::i18n;
 
@@ -40,7 +39,7 @@ pub(super) async fn process_music_collection(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch {collection_name} songs: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             send_reply_text(
                 bot,
@@ -155,7 +154,7 @@ async fn download_songs_with_retry(
                         song_id,
                         collection_name,
                         collection_id,
-                        sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                        sanitized_error_chain(&e)
                     );
                     break;
                 }
@@ -184,7 +183,7 @@ pub(super) async fn process_djradio_collection(
         Err(e) => {
             tracing::warn!(
                 "Failed to fetch djradio program list for {radio_id}: {}",
-                sanitize_sensitive_text(&crate::utils::format_error_chain(&e))
+                sanitized_error_chain(&e)
             );
             send_reply_text(bot, msg, i18n::tr(&lang, "dj_fetch_failed")).await?;
             return Ok(());
