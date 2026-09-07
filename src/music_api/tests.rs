@@ -8,7 +8,7 @@ use tokio::time::Duration;
 
 #[cfg(test)]
 use super::resize_image_with_padding;
-use super::{Album, Artist, MusicApi, SongDetail, SongUrl};
+use super::{Album, Artist, MusicApi, SongDetail, SongUrl, SongUrlResponse};
 use super::{
     CachePruneStats, MUSIC_API_CACHE_MAX_ENTRIES, SONG_DETAIL_CACHE_TTL, SONG_LYRIC_CACHE_TTL,
     SONG_URL_CACHE_TTL, TimedCacheEntry, cache_entry_is_fresh, eapi_crypto, format_artists,

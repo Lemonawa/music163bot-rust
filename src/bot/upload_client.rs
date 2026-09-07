@@ -385,7 +385,7 @@ pub(super) async fn acquire_upload_client(
             return Ok(checkout_upload_client(&mut upload_state));
         }
 
-        let reason = if upload_state.bot.is_none() {
+        let reason = if upload_state.raw_client.is_none() {
             "uninitialized"
         } else {
             "reuse_limit"

@@ -1,6 +1,21 @@
 use super::*;
 
 #[tokio::test]
+async fn song_url_deserialization_survives_null_br_size_type() {
+    // Real-world eapi responses contain `null` fields when a song is
+    // unavailable at the requested level (seen on the VPS with batched
+    // probes). The response must parse, not fail.
+    let body = r#"{"code":200,"data":[{"id":9001,"url":null,"br":null,"size":null,"md5":null,"type":null}]}"#;
+    let parsed: SongUrlResponse = serde_json::from_str(body).expect("null fields must parse");
+    let entry = &parsed.data[0];
+    assert_eq!(entry.id, 9001);
+    assert!(!entry.has_download_url());
+    assert_eq!(entry.br, 0);
+    assert_eq!(entry.size, 0);
+    assert_eq!(entry.format, "");
+}
+
+#[tokio::test]
 async fn get_song_url_uses_eapi_channel_not_legacy_web_post() {
     let song_id = 9001;
     let server = MockMusicApiServer::start(

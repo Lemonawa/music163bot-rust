@@ -7,6 +7,16 @@ where
     Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
+/// eapi song-url entries come back with `null` fields when a song is
+/// unavailable at the requested level (seen in the wild with batched hires
+/// probes); treat null as 0 instead of failing the whole response.
+fn deserialize_u64_or_null<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<u64>::deserialize(deserializer)?.unwrap_or(0))
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SongDetailResponse {
     pub code: i32,
@@ -142,7 +152,9 @@ pub struct SongUrl {
     pub id: u64,
     #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub url: String,
+    #[serde(default, deserialize_with = "deserialize_u64_or_null")]
     pub br: u64,
+    #[serde(default, deserialize_with = "deserialize_u64_or_null")]
     pub size: u64,
     #[serde(default, deserialize_with = "deserialize_string_or_null")]
     pub md5: String,

@@ -37,6 +37,8 @@ pub(super) struct BotState {
 
 #[derive(Debug)]
 pub(super) struct UploadClientState {
+    /// Typed client handle kept for potential typed-API use; the raw upload
+    /// path only consumes `raw_client` + `upload_api_url`.
     pub bot: Option<Bot>,
     pub raw_client: Option<reqwest::Client>,
     pub upload_api_url: String,
