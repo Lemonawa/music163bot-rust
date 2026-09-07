@@ -406,9 +406,6 @@ pub(super) async fn maintenance_worker(
     }
 }
 
-pub(super) const PERF_STAGE_SELECT_URL: &str = "select_url";
-pub(super) const PERF_STAGE_PRE_UPLOAD_PATH: &str = "pre_upload_path";
-
 pub(super) fn log_perf(label: &str, duration: std::time::Duration) {
     tracing::debug!("[{label}] {}ms", duration.as_millis());
     tracing::debug!("PERF_RAW|stage={label}|elapsed_ms={}", duration.as_millis());

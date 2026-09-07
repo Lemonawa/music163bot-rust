@@ -86,9 +86,9 @@ use telegram_api::{
     raw_send_document_bytes, raw_send_file, run_upload_prewarm,
 };
 use upload::{
-    MessageTaskRoute, PERF_STAGE_PRE_UPLOAD_PATH, PERF_STAGE_SELECT_URL, RAW_UPLOAD_CHUNK_SIZE,
-    RawUploadParams, UploadBotBundle, acquire_download_leader, append_search_result_line,
-    apply_tags_in_blocking, cached_music_link_target, classify_message_task, cleanup_audio_buffer,
+    MessageTaskRoute, RAW_UPLOAD_CHUNK_SIZE, RawUploadParams, UploadBotBundle,
+    acquire_download_leader, append_search_result_line, apply_tags_in_blocking,
+    cached_music_link_target, classify_message_task, cleanup_audio_buffer,
     cleanup_thumbnail_buffer, clearallcache_confirmation_prompt, collect_maintenance_signals,
     create_music_keyboard_for_target, delete_status_message_resilient,
     edit_status_message_resilient, ensure_admin, exceeds_batch_download_limit,
@@ -101,10 +101,11 @@ use wiring::{
     InflightDownloads, InflightLeaderGuard, MAINTENANCE_QUEUE_CAPACITY, MaintenanceCounters,
     MaintenanceSignal, MusicLinkTarget, PERF_STAGE_CACHE_LOOKUP, PERF_STAGE_COVER_DOWNLOAD,
     PERF_STAGE_DB_SAVE, PERF_STAGE_DOWNLOAD_AUDIO, PERF_STAGE_E2E_TOTAL,
-    PERF_STAGE_SINGLEFLIGHT_WAIT, PERF_STAGE_TAG_PROCESS, PERF_STAGE_UPLOAD_CLIENT_ACQUIRE,
-    PERF_STAGE_UPLOAD_PERMIT_WAIT, PERF_STAGE_UPLOAD_SEND, PerfTraceContext, ResourceSnapshot,
-    RuntimeMetrics, STATUS_RESOURCE_CACHE, STATUS_RESOURCE_REFRESH_INTERVAL, SpeedSnapshot,
-    UploadClientState, UploadCounters, build_perf_trace_context, lock_unpoisoned,
+    PERF_STAGE_PRE_UPLOAD_PATH, PERF_STAGE_SELECT_URL, PERF_STAGE_SINGLEFLIGHT_WAIT,
+    PERF_STAGE_TAG_PROCESS, PERF_STAGE_UPLOAD_CLIENT_ACQUIRE, PERF_STAGE_UPLOAD_PERMIT_WAIT,
+    PERF_STAGE_UPLOAD_SEND, PerfTraceContext, ResourceSnapshot, RuntimeMetrics,
+    STATUS_RESOURCE_CACHE, STATUS_RESOURCE_REFRESH_INTERVAL, SpeedSnapshot, UploadClientState,
+    UploadCounters, build_perf_trace_context, lock_unpoisoned,
 };
 
 #[cfg(test)]
