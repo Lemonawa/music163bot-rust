@@ -14,7 +14,7 @@ use crate::error::BotError;
 /// requesting hires first and relying on the fallback chain yields the best
 /// available quality without extra hops when hires is honored.
 #[must_use]
-pub fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
+pub(super) fn url_bitrate_candidates(has_music_u: bool) -> &'static [u64] {
     if has_music_u {
         &[1_999_000, 999_000, 320_000, 128_000]
     } else {
@@ -56,6 +56,20 @@ impl MusicApi {
     /// # Errors
     /// Returns an error if song detail or download URL cannot be obtained.
     pub async fn get_song_detail_and_best_url(
+        &self,
+        song_id: u64,
+    ) -> Result<(Arc<SongDetail>, Arc<SongUrl>)> {
+        let bitrate_candidates = url_bitrate_candidates(self.music_u.is_some());
+        self.get_song_detail_and_best_url_with_candidates(song_id, bitrate_candidates)
+            .await
+    }
+
+    /// Candidate-order variant kept for tests that want to pin the ladder,
+    /// and the shared implementation of the public wrapper.
+    ///
+    /// # Errors
+    /// Returns an error if song detail or download URL cannot be obtained.
+    pub(crate) async fn get_song_detail_and_best_url_with_candidates(
         &self,
         song_id: u64,
         bitrate_candidates: &[u64],

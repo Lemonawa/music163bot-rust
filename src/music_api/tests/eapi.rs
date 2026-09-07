@@ -17,7 +17,7 @@ async fn get_song_url_uses_eapi_channel_not_legacy_web_post() {
     api.cache_song_detail(song_id, sample_song_detail(song_id));
 
     let (_, song_url) = api
-        .get_song_detail_and_best_url(song_id, &[320_000, 128_000])
+        .get_song_detail_and_best_url_with_candidates(song_id, &[320_000, 128_000])
         .await
         .expect("eapi song/url should succeed");
 
@@ -63,7 +63,10 @@ async fn hires_candidate_requests_hires_level_and_is_preferred() {
     api.cache_song_detail(song_id, sample_song_detail(song_id));
 
     let (_, song_url) = api
-        .get_song_detail_and_best_url(song_id, &[1_999_000, 999_000, 320_000, 128_000])
+        .get_song_detail_and_best_url_with_candidates(
+            song_id,
+            &[1_999_000, 999_000, 320_000, 128_000],
+        )
         .await
         .expect("hires song/url should succeed");
 
@@ -102,7 +105,10 @@ async fn hires_candidate_falls_back_to_lossless_when_unavailable() {
     api.cache_song_detail(song_id, sample_song_detail(song_id));
 
     let (_, song_url) = api
-        .get_song_detail_and_best_url(song_id, &[1_999_000, 999_000, 320_000, 128_000])
+        .get_song_detail_and_best_url_with_candidates(
+            song_id,
+            &[1_999_000, 999_000, 320_000, 128_000],
+        )
         .await
         .expect("lossless fallback should succeed");
 

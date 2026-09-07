@@ -392,16 +392,11 @@ async fn fetch_detail_and_status(
     ),
     FetchOutcome,
 > {
-    let bitrate_candidates =
-        crate::music_api::url_bitrate_candidates(state.music_api.music_u.is_some());
-
     let status_fut = bot
         .send_message(msg.chat.id, loading_text.clone())
         .reply_parameters(ReplyParameters::new(msg.id))
         .send();
-    let fetch_fut = state
-        .music_api
-        .get_song_detail_and_best_url(music_id, bitrate_candidates);
+    let fetch_fut = state.music_api.get_song_detail_and_best_url(music_id);
 
     let (status_result, detail_and_url_result) = tokio::join!(status_fut, fetch_fut);
     let status_msg = match status_result {

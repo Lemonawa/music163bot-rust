@@ -10,7 +10,7 @@ async fn get_song_detail_and_best_url_returns_cached_detail_and_cached_fallback_
     );
 
     let (detail, song_url) = api
-        .get_song_detail_and_best_url(song_id, &[320_000, 192_000, 128_000])
+        .get_song_detail_and_best_url_with_candidates(song_id, &[320_000, 192_000, 128_000])
         .await
         .expect("cached detail + cached fallback URL should return immediately");
 
@@ -39,7 +39,7 @@ async fn get_song_detail_and_best_url_falls_back_when_primary_returns_empty_url(
     api.cache_song_detail(song_id, sample_song_detail(song_id));
 
     let (_, song_url) = api
-        .get_song_detail_and_best_url(song_id, &[320_000, 192_000])
+        .get_song_detail_and_best_url_with_candidates(song_id, &[320_000, 192_000])
         .await
         .expect("fallback bitrate should succeed when primary URL is empty");
 
@@ -65,7 +65,7 @@ async fn get_song_detail_and_best_url_returns_last_error_when_all_fallbacks_fail
     api.cache_song_url(song_id, 320_000, sample_song_url(song_id, 320_000, ""));
 
     let error = api
-        .get_song_detail_and_best_url(song_id, &[320_000, 192_000, 128_000])
+        .get_song_detail_and_best_url_with_candidates(song_id, &[320_000, 192_000, 128_000])
         .await
         .expect_err("all fallback attempts should fail");
 
@@ -98,7 +98,7 @@ async fn get_song_detail_and_best_url_returns_error_when_primary_unavailable_and
     api.cache_song_detail(song_id, sample_song_detail(song_id));
 
     let result = api
-        .get_song_detail_and_best_url(song_id, &[320_000, 192_000])
+        .get_song_detail_and_best_url_with_candidates(song_id, &[320_000, 192_000])
         .await;
 
     assert!(
@@ -137,7 +137,7 @@ async fn get_song_detail_and_best_url_accepts_fallback_without_retrying_primary_
     api.cache_song_detail(song_id, sample_song_detail(song_id));
 
     let (_, song_url) = api
-        .get_song_detail_and_best_url(song_id, &[999_000, 320_000, 128_000])
+        .get_song_detail_and_best_url_with_candidates(song_id, &[999_000, 320_000, 128_000])
         .await
         .expect("should return fallback bitrate without retrying primary");
 

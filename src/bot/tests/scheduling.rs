@@ -60,22 +60,6 @@ fn critical_path_stage_labels_are_stable() {
 }
 
 #[test]
-fn url_bitrate_candidates_prefers_flac_with_music_u() {
-    assert_eq!(
-        crate::music_api::url_bitrate_candidates(true),
-        &[1_999_000, 999_000, 320_000, 128_000]
-    );
-}
-
-#[test]
-fn url_bitrate_candidates_uses_mp3_without_music_u() {
-    assert_eq!(
-        crate::music_api::url_bitrate_candidates(false),
-        &[320_000, 128_000]
-    );
-}
-
-#[test]
 fn spawn_gate_identifies_supported_messages() {
     assert!(super::should_spawn_message_task("/start"));
     assert!(

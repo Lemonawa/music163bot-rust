@@ -18,7 +18,6 @@ pub use self::models::{
     Album, Artist, LyricContent, LyricResponse, ProgramMainTrack, SearchResponse, SearchResult,
     SearchSong, ServedSize, SongDetail, SongDetailResponse, SongUrl, SongUrlResponse,
 };
-pub(crate) use self::requests::bitrate_selection::url_bitrate_candidates;
 
 #[cfg(test)]
 use self::media::resize_image_with_padding;
@@ -32,7 +31,10 @@ use self::models::{
 pub struct MusicApi {
     client: Client,
     resolve_client: Client,
-    pub music_u: Option<String>,
+    /// The `MUSIC_U` cookie backing this client, if logged in. Kept private:
+    /// callers that care about login state ask through methods
+    /// (`get_song_detail_and_best_url` picks the bitrate ladder internally).
+    music_u: Option<String>,
     base_url: String,
     eapi_cookie: String,
     music_u_cookie: Option<String>,
