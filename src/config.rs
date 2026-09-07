@@ -294,4 +294,4 @@ mod load;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use ini::parse_ini_text;
+pub use ini::parse_ini_text;

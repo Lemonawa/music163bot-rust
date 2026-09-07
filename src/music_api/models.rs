@@ -92,6 +92,16 @@ pub struct ProgramMainTrack {
     pub cover_url: Option<String>,
 }
 
+/// What the eapi song-url endpoint would currently serve for one song at a
+/// given level: bitrate, file size, and container. Ground truth for tools
+/// comparing against cached copies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedSize {
+    pub br: i64,
+    pub size: i64,
+    pub format: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SongDetail {
     pub id: u64,

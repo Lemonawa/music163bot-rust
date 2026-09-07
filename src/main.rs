@@ -8,26 +8,12 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-pub mod audio_buffer;
-pub mod bot;
-pub mod config;
-pub mod database;
-pub mod error;
-pub mod i18n;
-pub mod memory;
-pub mod music_api;
-pub mod telegram;
-pub mod utils;
-
 use anyhow::Result;
 use clap::Parser;
-use config::Config;
+use music163bot_rust::bot;
+use music163bot_rust::config::Config;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-// Compile-time embedded translations from locales/*.yml. Must live at the
-// crate root: rust-i18n's `t!` macro references `crate::_rust_i18n_t`.
-rust_i18n::i18n!("locales", fallback = "zh");
 
 const DEFAULT_LOG_LEVEL_SPEC: &str = "info";
 

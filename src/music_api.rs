@@ -16,7 +16,7 @@ mod requests;
 pub use self::media::{format_artists, resize_album_art_to_thumbnail};
 pub use self::models::{
     Album, Artist, LyricContent, LyricResponse, ProgramMainTrack, SearchResponse, SearchResult,
-    SearchSong, SongDetail, SongDetailResponse, SongUrl, SongUrlResponse,
+    SearchSong, ServedSize, SongDetail, SongDetailResponse, SongUrl, SongUrlResponse,
 };
 pub(crate) use self::requests::bitrate_selection::url_bitrate_candidates;
 

@@ -1,6 +1,5 @@
 //! Flat `section.key → value` INI text parser shared by the bot and the
-//! `refresh_hires` binary (included via `#[path]` there, so this file must
-//! stay dependency-free: `std` only).
+//! `refresh_hires` binary.
 
 use std::collections::HashMap;
 
@@ -10,7 +9,7 @@ use std::collections::HashMap;
 /// Keys outside any section keep their bare name. Later entries win on
 /// duplicate keys.
 #[must_use]
-pub(crate) fn parse_ini_text(content: &str) -> HashMap<String, String> {
+pub fn parse_ini_text(content: &str) -> HashMap<String, String> {
     let mut config_map = HashMap::new();
     let mut current_section = String::new();
 

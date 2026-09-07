@@ -132,7 +132,11 @@ use wiring::{
     InflightEntry, format_perf_stage_line, set_inflight_wait_hook, upload_topology_label,
 };
 
-pub(crate) async fn run(config: Config) -> Result<()> {
+/// Boot the bot: wiring, command registration, and the long-poll loop.
+///
+/// # Errors
+/// Returns an error if startup (config, database, Telegram API) fails.
+pub async fn run(config: Config) -> Result<()> {
     entry::run(config).await
 }
 

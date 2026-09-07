@@ -2,7 +2,7 @@ use rust_i18n::t;
 
 use crate::config::Config;
 
-// NOTE: `rust_i18n::i18n!` is invoked in `src/main.rs` at the crate root —
+// NOTE: `rust_i18n::i18n!` is invoked in `src/lib.rs` at the crate root —
 // the macro it generates (`crate::_rust_i18n_t`) only resolves from there.
 
 /// A resolved locale for one chat, ready to be passed to `t!(..., locale = ...)`.

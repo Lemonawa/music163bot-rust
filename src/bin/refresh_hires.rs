@@ -13,15 +13,17 @@
 //! For each cached song below `--max-cached-bitrate`, the tool asks the SAME
 //! endpoint the bot uses at request time: `/eapi/song/enhance/player/url/v1`
 //! with `level=hires` (the bot's top candidate, authenticated with the bot's
-//! `MUSIC_U` cookie). It batches plain-number ids per request. The response
-//! carries the `size` (bytes) of the best file the account can serve. The tool
-//! compares that served `size` against the cached `music_size`:
+//! `MUSIC_U` cookie) — via `MusicApi::get_served_sizes_batch`, the library
+//! method the bot's own song-url path shares. It batches plain-number ids per
+//! request. The response carries the `size` (bytes) of the best file the
+//! account can serve. The tool compares that served `size` against the cached
+//! `music_size`:
 //!   - served ≈ cached  → same file → leave it
 //!   - served > cached × `--min-ratio` → a genuinely larger file exists and
 //!     is downloadable → flag for refresh
 //!
 //! This is foolproof: it predicts exactly what the bot will re-download, because
-//! it uses the identical endpoint. Catalog tier labels (`sq/hr/...`) are NOT
+//! it uses the identical code path. Catalog tier labels (`sq/hr/...`) are NOT
 //! consulted — earlier versions that trusted them produced false positives
 //! (e.g. the catalog advertises `sq` at 1411000 bps = the CD-rate nominal
 //! rate, but the actual served file is the same compressed FLAC the bot already
@@ -48,42 +50,17 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use reqwest::Client;
-use serde::Deserialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::Semaphore;
-use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 
-// ---------------------------------------------------------------------------
-// eapi crypto — shared with the bot (src/music_api/eapi_crypto.rs).
-// ---------------------------------------------------------------------------
-
-/// NetEase eapi crypto primitives, shared with the bot crate.
-#[path = "../music_api/eapi_crypto.rs"]
-mod eapi_crypto;
-
-use eapi_crypto::{EAPI_USER_AGENT, eapi_cookie, eapi_decrypt, eapi_params};
+use music163bot_rust::music_api::{MusicApi, ServedSize};
 
 /// Minimum served/cached size ratio to consider a row genuinely upgradeable.
 /// 1.15 means the served file must be at least 15% larger (well above re-encode
 /// noise).  Genuine resolution jumps (16-bit → 24-bit) are typically 1.5×–3.5×.
 const MIN_UPGRADE_RATIO: f64 = 1.15;
-
-// ---------------------------------------------------------------------------
-// Config reading (shared with the bot: src/config/ini.rs)
-// ---------------------------------------------------------------------------
-
-/// Flat `section.key → value` INI parser, shared with the bot crate.
-#[path = "../config/ini.rs"]
-mod ini;
-
-use ini::parse_ini_text;
-
-// ---------------------------------------------------------------------------
-// Structs
-// ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 struct CachedSong {
@@ -95,43 +72,10 @@ struct CachedSong {
 }
 
 #[derive(Clone)]
-struct ServedSize {
-    br: i64,
-    size: i64,
-    format: String,
-}
-
-#[derive(Clone)]
 struct Upgrade {
     song: CachedSong,
     served: ServedSize,
     ratio: f64,
-}
-
-fn null_to_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
-}
-
-fn null_to_zero_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
-    Ok(Option::<i64>::deserialize(d)?.unwrap_or(0))
-}
-
-#[derive(Deserialize)]
-struct EapiSongUrl {
-    id: i64,
-    #[serde(default, deserialize_with = "null_to_zero_i64")]
-    br: i64,
-    #[serde(default, deserialize_with = "null_to_zero_i64")]
-    size: i64,
-    #[serde(rename = "type", default, deserialize_with = "null_to_empty")]
-    file_type: String,
-}
-
-#[derive(Deserialize)]
-struct EapiResponse {
-    code: i32,
-    #[serde(default)]
-    data: Vec<EapiSongUrl>,
 }
 
 #[derive(Parser)]
@@ -187,10 +131,6 @@ struct Args {
     min_ratio: f64,
 }
 
-// ---------------------------------------------------------------------------
-// main
-// ---------------------------------------------------------------------------
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -201,8 +141,9 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     // A missing config file means defaults (empty map, as before).
-    let ini = parse_ini_text(&std::fs::read_to_string(&args.config).unwrap_or_default());
-
+    let ini = music163bot_rust::config::parse_ini_text(
+        &std::fs::read_to_string(&args.config).unwrap_or_default(),
+    );
     // Resolve db: CLI → config `database.url` → default
     let db = args
         .db
@@ -224,9 +165,7 @@ async fn main() -> Result<()> {
              the tool cannot discover hires upgrades.",
         )?;
 
-    let cookie = eapi_cookie(Some(&music_u));
-
-    let client = build_http_client()?;
+    let api = MusicApi::new(Some(music_u), args.api.clone());
     let limiter = Arc::new(Semaphore::new(args.concurrency.max(1)));
 
     let pool = open_pool(&db).await?;
@@ -249,13 +188,7 @@ async fn main() -> Result<()> {
     let mut futures = FuturesUnordered::new();
     for chunk in songs.chunks(args.batch_size) {
         let ids: Vec<i64> = chunk.iter().map(|s| s.music_id).collect();
-        futures.push(probe_batch(
-            client.clone(),
-            &args.api,
-            ids,
-            cookie.clone(),
-            limiter.clone(),
-        ));
+        futures.push(probe_batch(&api, ids, limiter.clone()));
     }
 
     let mut served_by_id: HashMap<i64, ServedSize> = HashMap::new();
@@ -308,17 +241,8 @@ async fn main() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP / DB helpers
+// DB helpers
 // ---------------------------------------------------------------------------
-
-fn build_http_client() -> Result<Client> {
-    Ok(Client::builder()
-        .tcp_nodelay(true)
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(25))
-        .user_agent("Mozilla/5.0")
-        .build()?)
-}
 
 async fn open_pool(db: &str) -> Result<SqlitePool> {
     let mut options = if db.starts_with("sqlite:") {
@@ -368,181 +292,38 @@ async fn count_skipped(pool: &SqlitePool, max_bitrate: i64) -> Result<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Probe (eapi song-url, ground truth)
+// Probe
 // ---------------------------------------------------------------------------
 
-/// Probe one batch of ids via the real eapi song-url endpoint.
-/// Returns a map of `music_id → ServedSize` (the file the bot would actually
-/// download at level=hires). Retries transient failures with backoff; an
+/// Probe one batch of ids via `MusicApi::get_served_sizes_batch` (the bot's own
+/// eapi song-url path, no caching). Retries transient failures with backoff; an
 /// unrecoverable batch surfaces as `Err` (those ids go unclassified, i.e. left
 /// untouched — never wrongly deleted).
 async fn probe_batch(
-    client: Client,
-    api: &str,
+    api: &MusicApi,
     ids: Vec<i64>,
-    cookie: String,
     limiter: Arc<Semaphore>,
 ) -> Result<HashMap<i64, ServedSize>> {
     let _permit = limiter.acquire_owned().await?;
 
-    let path = "/api/song/enhance/player/url/v1";
-    let ids_str = format!(
-        "[{}]",
-        ids.iter()
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    );
-    let payload = serde_json::json!({
-        "ids": ids_str,
-        "level": "hires",
-        "encodeType": "mp3",
-        "header": "{}",
-    });
-    let payload_str = serde_json::to_string(&payload)?;
-    let body = eapi_params(path, &payload_str)?;
-
-    let url = format!("{api}/eapi/song/enhance/player/url/v1");
-
-    let mut last_err: Option<anyhow::Error> = None;
     let first_id = ids.first().copied().unwrap_or(0);
     let last_id = ids.last().copied().unwrap_or(0);
+    let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..4u8 {
         if attempt > 0 {
             // Backoff: ~1s, 2s, 4s before retries 1–3.
-            sleep(Duration::from_millis(900u64 << attempt)).await;
+            tokio::time::sleep(Duration::from_millis(900u64 << attempt)).await;
         }
-        let send_result = client
-            .post(&url)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("User-Agent", EAPI_USER_AGENT)
-            .header("Cookie", &cookie)
-            .body(body.clone())
-            .send()
-            .await;
-
-        let resp = match send_result {
-            Ok(r) => r,
+        match api.get_served_sizes_batch(&ids).await {
+            Ok(map) => return Ok(map),
             Err(e) => {
-                last_err = Some(e.into());
+                last_err = Some(anyhow::anyhow!(e.to_string()));
                 eprintln!(
-                    "  [net-err batch {first_id}..{last_id} attempt {}/4] {}",
+                    "  [probe batch {first_id}..{last_id} attempt {}/4] {e}",
                     attempt + 1,
-                    last_err.as_ref().unwrap()
                 );
-                continue; // network/connect/timeout → retry
             }
-        };
-        let status = resp.status();
-        if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            last_err = Some(anyhow::anyhow!("HTTP {status}"));
-            eprintln!(
-                "  [http-err batch {first_id}..{last_id} attempt {}/4] HTTP {status}",
-                attempt + 1,
-            );
-            continue; // 429/5xx → transient, retry
         }
-        let resp = match resp.error_for_status() {
-            Ok(r) => r,
-            Err(e) => {
-                last_err = Some(e.into());
-                eprintln!(
-                    "  [http-status batch {first_id}..{last_id} attempt {}/4] {}",
-                    attempt + 1,
-                    last_err.as_ref().unwrap()
-                );
-                continue; // 4xx → retry
-            }
-        };
-        let raw_bytes = resp.bytes().await?;
-        // Trim leading ASCII whitespace (the bot does this too).
-        let start = raw_bytes
-            .iter()
-            .position(|&b| !b.is_ascii_whitespace())
-            .unwrap_or(0);
-        let trimmed = &raw_bytes[start..];
-
-        let parsed: EapiResponse = if trimmed.first() == Some(&b'{') {
-            // Plaintext JSON response.
-            match serde_json::from_slice(trimmed) {
-                Ok(p) => p,
-                Err(e) => {
-                    last_err = Some(anyhow::anyhow!("parse eapi json: {e}"));
-                    eprintln!(
-                        "  [parse-json batch {first_id}..{last_id} attempt {}/4] {}",
-                        attempt + 1,
-                        last_err.as_ref().unwrap()
-                    );
-                    continue;
-                }
-            }
-        } else {
-            // Encrypted (hex) response — decrypt first.
-            let hex_str = match std::str::from_utf8(trimmed) {
-                Ok(s) => s.trim(),
-                Err(e) => {
-                    last_err = Some(anyhow::anyhow!("non-utf8 eapi response: {e}"));
-                    eprintln!(
-                        "  [parse-utf8 batch {first_id}..{last_id} attempt {}/4] {}",
-                        attempt + 1,
-                        last_err.as_ref().unwrap()
-                    );
-                    continue;
-                }
-            };
-            let decrypted = match eapi_decrypt(hex_str) {
-                Ok(d) => d,
-                Err(e) => {
-                    last_err = Some(e);
-                    eprintln!(
-                        "  [decrypt batch {first_id}..{last_id} attempt {}/4] {}",
-                        attempt + 1,
-                        last_err.as_ref().unwrap()
-                    );
-                    continue;
-                }
-            };
-            match serde_json::from_str(&decrypted) {
-                Ok(p) => p,
-                Err(e) => {
-                    last_err = Some(anyhow::anyhow!("parse decrypted eapi: {e}"));
-                    eprintln!(
-                        "  [parse-decrypted batch {first_id}..{last_id} attempt {}/4] {}",
-                        attempt + 1,
-                        last_err.as_ref().unwrap()
-                    );
-                    continue;
-                }
-            }
-        };
-
-        if parsed.code != 200 {
-            last_err = Some(anyhow::anyhow!("eapi code {}", parsed.code));
-            eprintln!(
-                "  [eapi-code batch {first_id}..{last_id} attempt {}/4] code={}",
-                attempt + 1,
-                parsed.code,
-            );
-            continue; // auth or transient server issue
-        }
-
-        let map: HashMap<i64, ServedSize> = parsed
-            .data
-            .into_iter()
-            .filter(|d| d.size > 0)
-            .map(|d| {
-                (
-                    d.id,
-                    ServedSize {
-                        br: d.br,
-                        size: d.size,
-                        format: d.file_type,
-                    },
-                )
-            })
-            .collect();
-
-        return Ok(map);
     }
     let err = last_err.unwrap_or_else(|| anyhow::anyhow!("probe_batch exhausted retries"));
     eprintln!("  [FAIL batch {first_id}..{last_id}] after 4 attempts: {err:#}",);
@@ -575,11 +356,7 @@ fn classify_by_size(
         if ratio > min_ratio {
             upgrades.push(Upgrade {
                 song: song.clone(),
-                served: ServedSize {
-                    br: s.br,
-                    size: s.size,
-                    format: s.format.clone(),
-                },
+                served: s.clone(),
                 ratio,
             });
         }
