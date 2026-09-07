@@ -236,14 +236,32 @@ pub(super) async fn process_music(
 /// and retry.
 #[must_use]
 pub(super) fn rate_limit_retry_delay_secs(
-    error: &impl std::fmt::Display,
+    error: &crate::error::BotError,
     attempt: u32,
 ) -> Option<u64> {
     if attempt > 0 {
         return None;
     }
 
-    extract_retry_after_seconds(&error.to_string()).map(|seconds| seconds.saturating_add(1))
+    error
+        .retry_after_secs()
+        .map(|seconds| seconds.saturating_add(1))
+}
+
+/// `TelegramError` twin of [`rate_limit_retry_delay_secs`] for handlers
+/// working in `ResponseResult` (the raw Telegram error type).
+#[must_use]
+pub(super) fn rate_limit_retry_delay_for(
+    error: &crate::telegram::TelegramError,
+    attempt: u32,
+) -> Option<u64> {
+    if attempt > 0 {
+        return None;
+    }
+
+    error
+        .retry_after_secs()
+        .map(|seconds| seconds.saturating_add(1))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -402,8 +420,7 @@ async fn fetch_detail_and_status(
     let status_msg = match status_result {
         Ok(m) => m,
         Err(e) => {
-            let sanitized = sanitized_error_chain(&e);
-            if let Some(retry_delay_secs) = rate_limit_retry_delay_secs(&sanitized, 0) {
+            if let Some(retry_delay_secs) = rate_limit_retry_delay_for(&e, 0) {
                 tracing::warn!(
                     "Status message rate limited for music_id {}. Waiting {}s before retry",
                     music_id,
@@ -416,6 +433,10 @@ async fn fetch_detail_and_status(
                     .await
                     .map_err(FetchOutcome::TelegramError)?
             } else {
+                tracing::warn!(
+                    "Failed to send status message for music_id {music_id}: {}",
+                    sanitized_error_chain(&e)
+                );
                 return Err(FetchOutcome::TelegramError(e));
             }
         }
@@ -539,9 +560,7 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
             Ok(()) => break,
             Err(e) => {
                 let sanitized = sanitized_error_chain(&e);
-                if let Some(retry_delay_secs) =
-                    rate_limit_retry_delay_secs(&sanitized, process_attempt)
-                {
+                if let Some(retry_delay_secs) = rate_limit_retry_delay_secs(&e, process_attempt) {
                     process_attempt = process_attempt.saturating_add(1);
                     tracing::warn!(
                         "Upload rate limited for music_id {}. Waiting {}s before retry",

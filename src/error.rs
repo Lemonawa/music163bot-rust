@@ -41,6 +41,46 @@ impl BotError {
     pub fn sanitized_chain(&self) -> String {
         sanitize_sensitive_text(&format_error_chain(self))
     }
+
+    /// The server's flood-wait hint (seconds) when this error chain contains
+    /// a rate-limited Telegram API response. Typed source for retry pacing —
+    /// replaces regex-scraping the rendered message.
+    #[must_use]
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        let mut current: Option<&dyn std::error::Error> = Some(self);
+        while let Some(err) = current {
+            if let Some(telegram_err) = err.downcast_ref::<TelegramError>()
+                && let Some(secs) = telegram_err.retry_after_secs()
+            {
+                return Some(secs);
+            }
+            // Raw-upload errors embed a "(retry after N)" hint in their text
+            // (the raw response parser folds it into the message).
+            if let Some(secs) = crate::utils::extract_retry_after_seconds(&err.to_string()) {
+                return Some(secs);
+            }
+            current = err.source();
+        }
+        None
+    }
+
+    /// True when any layer of this error chain is a Telegram rate limit.
+    #[must_use]
+    pub fn is_rate_limit(&self) -> bool {
+        let mut current: Option<&dyn std::error::Error> = Some(self);
+        while let Some(err) = current {
+            if let Some(telegram_err) = err.downcast_ref::<TelegramError>()
+                && telegram_err.is_rate_limit()
+            {
+                return true;
+            }
+            if crate::utils::extract_retry_after_seconds(&err.to_string()).is_some() {
+                return true;
+            }
+            current = err.source();
+        }
+        false
+    }
 }
 
 /// Same as [`BotError::sanitized_chain`] for any error type (e.g. a

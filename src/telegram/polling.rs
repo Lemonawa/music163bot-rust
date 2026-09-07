@@ -40,6 +40,7 @@ mod tests {
         let err = TelegramError::Api {
             error_code: 502,
             description: synthetic,
+            retry_after: None,
         };
 
         let logged = super::format_poll_error_for_log(&err);

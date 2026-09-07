@@ -1,4 +1,4 @@
-use super::core_flow::{process_music, process_music_with_context, rate_limit_retry_delay_secs};
+use super::core_flow::{process_music, process_music_with_context, rate_limit_retry_delay_for};
 use super::lang_command::resolve_chat_language_for;
 use super::music_ui::exceeds_batch_download_limit;
 use super::replies::send_reply_text;
@@ -142,7 +142,7 @@ async fn download_songs_with_retry(
             match process_music(bot, msg, state, song_id).await {
                 Ok(()) => break,
                 Err(e) => {
-                    if let Some(delay_secs) = rate_limit_retry_delay_secs(&e, attempt) {
+                    if let Some(delay_secs) = rate_limit_retry_delay_for(&e, attempt) {
                         attempt = attempt.saturating_add(1);
                         tracing::warn!(
                             "Rate limited while processing song {} from {} {}. Waiting {}s before retry",
@@ -252,7 +252,7 @@ pub(super) async fn process_djradio_collection(
             {
                 Ok(()) => break,
                 Err(e) => {
-                    if let Some(delay_secs) = rate_limit_retry_delay_secs(&e, attempt) {
+                    if let Some(delay_secs) = rate_limit_retry_delay_for(&e, attempt) {
                         attempt = attempt.saturating_add(1);
                         tracing::warn!(
                             "Rate limited while processing program {} from radio {}. Waiting {}s before retry",

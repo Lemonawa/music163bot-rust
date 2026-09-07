@@ -170,10 +170,20 @@ fn upload_limit_clamps_bounds() {
 
 #[test]
 fn rate_limit_retry_delay_secs_retries_first_rate_limit_once() {
-    let err = crate::error::BotError::Other(anyhow::anyhow!("Retry after 26s"));
+    // Typed 429 with a server-provided retry_after.
+    let typed = crate::error::BotError::Telegram(crate::telegram::TelegramError::Api {
+        error_code: 429,
+        description: "Too Many Requests: retry after 26".to_string(),
+        retry_after: Some(26),
+    });
+    assert_eq!(super::rate_limit_retry_delay_secs(&typed, 0), Some(27));
+    assert_eq!(super::rate_limit_retry_delay_secs(&typed, 1), None);
 
-    assert_eq!(super::rate_limit_retry_delay_secs(&err, 0), Some(27));
-    assert_eq!(super::rate_limit_retry_delay_secs(&err, 1), None);
+    // Raw-upload path folds "(retry after N)" into the message text.
+    let embedded = crate::error::BotError::Other(anyhow::anyhow!(
+        "Telegram API error: Too Many Requests (retry after 26) (HTTP 429)"
+    ));
+    assert_eq!(super::rate_limit_retry_delay_secs(&embedded, 0), Some(27));
 }
 
 #[test]
@@ -181,6 +191,35 @@ fn rate_limit_retry_delay_secs_ignores_non_rate_limit_errors() {
     let err = crate::error::BotError::Other(anyhow::anyhow!("ordinary upload failure"));
 
     assert_eq!(super::rate_limit_retry_delay_secs(&err, 0), None);
+}
+
+#[test]
+fn telegram_error_retry_helpers_read_typed_field() {
+    use crate::telegram::TelegramError;
+
+    let limited = TelegramError::Api {
+        error_code: 429,
+        description: "Too Many Requests".to_string(),
+        retry_after: Some(9),
+    };
+    assert!(limited.is_rate_limit());
+    assert_eq!(limited.retry_after_secs(), Some(9));
+
+    let no_hint = TelegramError::Api {
+        error_code: 429,
+        description: "Too Many Requests".to_string(),
+        retry_after: None,
+    };
+    assert!(no_hint.is_rate_limit());
+    assert_eq!(no_hint.retry_after_secs(), None);
+
+    let other = TelegramError::Api {
+        error_code: 400,
+        description: "Bad Request".to_string(),
+        retry_after: Some(5), // hint present but error is not 429
+    };
+    assert!(!other.is_rate_limit());
+    assert_eq!(other.retry_after_secs(), None);
 }
 
 #[test]

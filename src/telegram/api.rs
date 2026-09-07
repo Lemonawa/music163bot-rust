@@ -76,9 +76,11 @@ impl TelegramBot {
             ApiResponse::Err {
                 error_code,
                 description,
+                parameters,
             } => Err(TelegramError::Api {
                 error_code,
                 description,
+                retry_after: parameters.and_then(|p| p.retry_after),
             }),
         }
     }
@@ -300,7 +302,17 @@ enum ApiResponse<T> {
     Err {
         error_code: i32,
         description: String,
+        #[serde(default, rename = "parameters")]
+        parameters: Option<ApiErrorParameters>,
     },
+}
+
+/// Telegram's `parameters` object on API errors; carries `retry_after` for
+/// 429 responses (ignored on variants where it is absent).
+#[derive(Deserialize)]
+struct ApiErrorParameters {
+    #[serde(default)]
+    retry_after: Option<u64>,
 }
 
 // --- GetMe ---
@@ -504,6 +516,7 @@ impl SendAudioRequest<'_> {
                 Err(TelegramError::Api {
                     error_code: 0,
                     description: "Use raw_send_file for file uploads".to_string(),
+                    retry_after: None,
                 })
             }
         }
