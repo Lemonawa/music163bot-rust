@@ -1,11 +1,17 @@
-use super::{
-    Arc, Bot, BotState, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseResult,
-    append_search_result_line, dispatch_parsed_music_target, extract_first_trusted_music_share_url,
-    format_artists, is_known_non_song_share_url, parse_direct_music_target,
-    resolve_chat_language_for, sanitize_sensitive_text, sanitized_error_chain, send_reply_message,
-    send_reply_text,
-};
+use super::lang_command::resolve_chat_language_for;
+use super::music_ui::append_search_result_line;
+use super::replies::{send_reply_message, send_reply_text};
+use super::target_resolution::{dispatch_parsed_music_target, parse_direct_music_target};
+use super::wiring::BotState;
+use crate::error::sanitized_error_chain;
 use crate::i18n;
+use crate::music_api::format_artists;
+use crate::telegram::TelegramBot as Bot;
+use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseResult};
+use crate::utils::{
+    extract_first_trusted_music_share_url, is_known_non_song_share_url, sanitize_sensitive_text,
+};
+use std::sync::Arc;
 
 pub(super) async fn handle_music_url(
     bot: &Bot,

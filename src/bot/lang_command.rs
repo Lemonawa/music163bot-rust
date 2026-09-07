@@ -1,11 +1,15 @@
-use super::{
-    Arc, Bot, BotState, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-    MaybeInaccessibleMessage, Message, ReplyParameters, ResponseResult, send_reply_text,
-};
+use super::replies::send_reply_text;
+use super::wiring::BotState;
 use crate::database::Database;
 use crate::i18n::{self, ChatLanguage};
+use crate::telegram::TelegramBot as Bot;
+use crate::telegram::{
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MaybeInaccessibleMessage, Message,
+    ReplyParameters, ResponseResult,
+};
 use crate::telegram::{Chat, User};
 use dashmap::DashMap;
+use std::sync::Arc;
 
 /// Locales compiled into the binary (from `locales/*.yml`). Leaked on
 /// purpose: the locale set is static for the process lifetime.

@@ -1,10 +1,21 @@
-use super::{
-    Arc, AudioBuffer, Bot, BotError, BotState, Bytes, Config, RAW_UPLOAD_CHUNK_SIZE,
-    RawUploadParams, ReaderStream, Result, ThumbnailBuffer, UploadBotBundle, UploadClientState,
-    build_http_client, extract_retry_after_seconds, sanitize_sensitive_text, sanitized_error_chain,
-    should_refresh_upload_client,
-};
+//! Raw Telegram uploads: multipart sending through a dedicated client,
+//! response parsing, and the upload-client lifecycle (build, reuse, refresh,
+//! prewarm). This is the only module that speaks raw `reqwest` to Telegram.
+
+use crate::config::Config;
+use crate::error::{BotError, Result, sanitized_error_chain};
+use crate::utils::{build_http_client, extract_retry_after_seconds, sanitize_sensitive_text};
+
 use std::fmt::Write as _;
+use std::sync::Arc;
+
+use super::tagging::{
+    RAW_UPLOAD_CHUNK_SIZE, RawUploadParams, UploadBotBundle, should_refresh_upload_client,
+};
+use super::wiring::{BotState, UploadClientState};
+use crate::audio_buffer::{AudioBuffer, ThumbnailBuffer};
+use crate::telegram::TelegramBot as Bot;
+use tokio_util::io::ReaderStream;
 
 pub(super) async fn send_raw_upload_form(
     client: &reqwest::Client,
@@ -35,7 +46,7 @@ pub(super) struct RawSendFileArgs<'a> {
     pub(super) config: &'a Config,
     pub(super) is_official_api: bool,
     pub(super) audio_buffer: &'a AudioBuffer,
-    pub(super) audio_bytes: Option<&'a Bytes>,
+    pub(super) audio_bytes: Option<&'a bytes::Bytes>,
     pub(super) file_size: u64,
     pub(super) params: &'a RawUploadParams<'a>,
 }
@@ -204,7 +215,7 @@ pub(super) async fn raw_send_document_bytes(
     client: &reqwest::Client,
     api_base_url: &str,
     filename: &str,
-    content: Bytes,
+    content: bytes::Bytes,
     params: &RawDocumentParams<'_>,
 ) -> Result<serde_json::Value> {
     let len = content.len() as u64;
@@ -270,7 +281,7 @@ pub(super) fn extract_file_id_from_response(json: &serde_json::Value) -> Option<
     result
         .get("audio")
         .and_then(|a| a.get("file_id"))
-        .and_then(|v| v.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(String::from)
 }
 
@@ -441,35 +452,4 @@ where
             false
         }
     }
-}
-
-pub(super) async fn acquire_download_permit(
-    semaphore: &tokio::sync::Semaphore,
-) -> Result<tokio::sync::SemaphorePermit<'_>> {
-    acquire_semaphore_permit(semaphore, "download").await
-}
-
-pub(super) async fn acquire_semaphore_permit<'a>(
-    semaphore: &'a tokio::sync::Semaphore,
-    label: &str,
-) -> Result<tokio::sync::SemaphorePermit<'a>> {
-    semaphore.acquire().await.map_err(|e| {
-        tracing::error!("{} semaphore closed: {}", label, e);
-        BotError::Other(anyhow::anyhow!("{label} semaphore closed"))
-    })
-}
-
-pub(super) async fn acquire_upload_permit(
-    semaphore: &tokio::sync::Semaphore,
-) -> Result<tokio::sync::SemaphorePermit<'_>> {
-    acquire_semaphore_permit(semaphore, "upload").await
-}
-
-pub(super) async fn acquire_upload_permit_owned(
-    semaphore: Arc<tokio::sync::Semaphore>,
-) -> Result<tokio::sync::OwnedSemaphorePermit> {
-    semaphore.acquire_owned().await.map_err(|e| {
-        tracing::error!("Upload semaphore closed: {}", e);
-        BotError::Other(anyhow::anyhow!("upload semaphore closed"))
-    })
 }

@@ -1,10 +1,15 @@
-use super::{
-    Arc, Bot, BotState, Message, MusicCollectionTarget, ResponseResult,
-    parse_music_collection_target, parse_music_id, parse_music_program_id, process_music,
-    process_music_collection, process_program, resolve_chat_language_for, sanitized_error_chain,
-    send_reply_text,
-};
+use super::collection_flow::process_music_collection;
+use super::core_flow::{process_music, process_program};
+use super::lang_command::resolve_chat_language_for;
+use super::replies::send_reply_text;
+use super::wiring::BotState;
+use crate::error::sanitized_error_chain;
 use crate::i18n;
+use crate::telegram::TelegramBot as Bot;
+use crate::telegram::{Message, ResponseResult};
+use crate::utils::MusicCollectionTarget;
+use crate::utils::{parse_music_collection_target, parse_music_id, parse_music_program_id};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ParsedMusicTarget {

@@ -203,7 +203,7 @@ async fn acquire_download_permit_returns_error_when_closed() {
 
 #[test]
 fn is_admin_rejects_message_with_no_sender_even_if_admin_list_contains_zero() {
-    use crate::bot::upload::is_admin;
+    use crate::bot::admin::is_admin;
     use crate::config::Config;
     use crate::telegram::{Chat, ChatId, Message, MessageId};
 

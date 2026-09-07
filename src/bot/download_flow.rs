@@ -1,17 +1,39 @@
-use super::{
-    Arc, AudioBuffer, AudioFormat, Bot, BotState, Context, CoverMode, Message, MusicLinkTarget,
-    Ordering, PERF_STAGE_DB_SAVE, PERF_STAGE_DOWNLOAD_AUDIO, PERF_STAGE_PRE_UPLOAD_PATH,
-    PERF_STAGE_TAG_PROCESS, PERF_STAGE_UPLOAD_CLIENT_ACQUIRE, PERF_STAGE_UPLOAD_PERMIT_WAIT,
-    PERF_STAGE_UPLOAD_SEND, PerfTraceContext, RawSendFileArgs, RawUploadParams, Result, SongInfo,
-    StreamReader, acquire_download_permit, acquire_upload_client, acquire_upload_permit_owned,
-    apply_tags_in_blocking, build_caption, bytes_to_mb_f64, clean_filename, cleanup_audio_buffer,
-    cleanup_thumbnail_buffer, collect_maintenance_signals, cover_download_failure_notice,
-    create_music_keyboard_for_target, delete_status_message_resilient, download_cover_assets,
-    edit_status_message_resilient, extract_file_id_from_response, i64_to_u32_saturating, log_perf,
-    raw_send_file, sanitized_error_chain, send_reply_text, throughput_mbps, u64_to_i64_saturating,
+use super::collection_flow::{cover_download_failure_notice, download_cover_assets};
+use super::maintenance::collect_maintenance_signals;
+use super::music_ui::create_music_keyboard_for_target;
+use super::permits::{acquire_download_permit, acquire_upload_permit_owned};
+use super::replies::{
+    delete_status_message_resilient, edit_status_message_resilient, send_reply_text,
+};
+use super::support::build_caption;
+use super::tagging::{
+    RawUploadParams, apply_tags_in_blocking, cleanup_audio_buffer, cleanup_thumbnail_buffer,
+    log_perf,
+};
+use super::upload_client::{
+    RawSendFileArgs, acquire_upload_client, extract_file_id_from_response, raw_send_file,
+};
+use super::wiring::{
+    AudioFormat, BotState, MusicLinkTarget, PERF_STAGE_DB_SAVE, PERF_STAGE_DOWNLOAD_AUDIO,
+    PERF_STAGE_PRE_UPLOAD_PATH, PERF_STAGE_TAG_PROCESS, PERF_STAGE_UPLOAD_CLIENT_ACQUIRE,
+    PERF_STAGE_UPLOAD_PERMIT_WAIT, PERF_STAGE_UPLOAD_SEND, PerfTraceContext,
+};
+use crate::audio_buffer::AudioBuffer;
+use crate::config::CoverMode;
+use crate::database::SongInfo;
+use crate::error::Result;
+use crate::error::sanitized_error_chain;
+use crate::telegram::Message;
+use crate::telegram::TelegramBot as Bot;
+use crate::utils::{
+    bytes_to_mb_f64, clean_filename, i64_to_u32_saturating, throughput_mbps, u64_to_i64_saturating,
     update_peak,
 };
+use anyhow::Context;
 use futures_util::{StreamExt, TryStreamExt};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tokio_util::io::StreamReader;
 
 /// Everything one download needs from its caller, carried unchanged through
 /// every stage of the flow. Constructed once per attempt; the Chat Language
@@ -154,7 +176,7 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
 
 struct TagAndUploadParams<'a> {
     audio_buffer: AudioBuffer,
-    thumbnail_buffer: &'a mut Option<crate::bot::ThumbnailBuffer>,
+    thumbnail_buffer: &'a mut Option<crate::audio_buffer::ThumbnailBuffer>,
     audio_format: AudioFormat,
     song_detail: Arc<crate::music_api::SongDetail>,
     cover_artwork_data: Option<bytes::Bytes>,
@@ -290,7 +312,7 @@ struct UploadFlowParams<'a> {
     raw_client: &'a reqwest::Client,
     api_base_url: &'a str,
     audio_buffer: &'a mut AudioBuffer,
-    thumbnail_buffer: Option<&'a crate::bot::ThumbnailBuffer>,
+    thumbnail_buffer: Option<&'a crate::audio_buffer::ThumbnailBuffer>,
     caption: &'a str,
     reply_markup_json: Option<String>,
     song_info: &'a SongInfo,
@@ -330,7 +352,7 @@ fn validate_downloaded_audio(lang: &crate::i18n::ChatLanguage, downloaded: u64) 
 
 struct TagAndAcquireParams<'a> {
     audio_buffer: AudioBuffer,
-    thumbnail_buffer: &'a mut Option<crate::bot::ThumbnailBuffer>,
+    thumbnail_buffer: &'a mut Option<crate::audio_buffer::ThumbnailBuffer>,
     audio_format: AudioFormat,
     song_detail: Arc<crate::music_api::SongDetail>,
     cover_artwork_data: Option<bytes::Bytes>,

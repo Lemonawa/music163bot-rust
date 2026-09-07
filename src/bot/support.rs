@@ -1,17 +1,32 @@
-use super::{
-    Arc, Bot, BotState, Bytes, CallbackQuery, ChatId, InlineQuery, InlineQueryResult,
-    InlineQueryResultArticle, InputMessageContent, InputMessageContentText,
-    MaybeInaccessibleMessage, Message, ParseMode, RawDocumentParams, ReplyParameters,
-    ResponseResult, StatusTextParams, acquire_upload_client, acquire_upload_permit,
-    build_status_text, clean_filename, clearallcache_confirmation_prompt, ensure_admin,
-    format_artists, format_speed_line, format_uptime, handle_lang_callback,
-    parse_inline_query_keyword, parse_music_id, parse_song_id_or_search_first_result,
-    process_music, raw_send_document_bytes, require_command_args_or_reply,
-    resolve_chat_language_for, resolve_inline_language_for, rmcache_usage_prompt,
-    sample_resource_snapshot, sanitized_error_chain, send_reply_html, send_reply_message,
-    send_reply_text, u64_to_i64_saturating,
+use super::admin::{authorize_admin_command, ensure_admin};
+use super::core_flow::process_music;
+use super::entry::{
+    StatusTextParams, build_status_text, format_speed_line, format_uptime,
+    parse_inline_query_keyword, sample_resource_snapshot,
 };
+use super::lang_command::{
+    handle_lang_callback, resolve_chat_language_for, resolve_inline_language_for,
+};
+use super::music_ui::{clearallcache_confirmation_prompt, rmcache_usage_prompt};
+use super::permits::acquire_upload_permit;
+use super::replies::{
+    require_command_args_or_reply, send_reply_html, send_reply_message, send_reply_text,
+};
+use super::target_resolution::parse_song_id_or_search_first_result;
+use super::upload_client::{RawDocumentParams, acquire_upload_client, raw_send_document_bytes};
+use super::wiring::BotState;
+use crate::error::sanitized_error_chain;
 use crate::i18n::{self, ChatLanguage};
+use crate::music_api::format_artists;
+use crate::telegram::TelegramBot as Bot;
+use crate::telegram::{
+    CallbackQuery, ChatId, InlineQuery, InlineQueryResult, InlineQueryResultArticle,
+    InputMessageContent, InputMessageContentText, MaybeInaccessibleMessage, Message, ParseMode,
+    ReplyParameters, ResponseResult,
+};
+use crate::utils::{clean_filename, parse_music_id, u64_to_i64_saturating};
+use bytes::Bytes;
+use std::sync::Arc;
 
 pub(super) async fn handle_lyric_command(
     bot: &Bot,
@@ -72,7 +87,7 @@ async fn handle_lyric_success(
     status_msg: &Message,
     music_id: u64,
     lyric: String,
-    detail_result: Result<Arc<crate::music_api::SongDetail>, crate::error::BotError>,
+    detail_result: std::result::Result<Arc<crate::music_api::SongDetail>, crate::error::BotError>,
 ) -> ResponseResult<()> {
     if lyric.trim().is_empty() || lyric == "No lyrics available" {
         bot.edit_message_text(msg.chat.id, status_msg.id, i18n::tr(lang, "lyric_none"))
@@ -355,39 +370,6 @@ pub(super) async fn handle_clearallcache_confirm_command(
     }
 
     Ok(())
-}
-
-pub(super) async fn ensure_admin_user_id(
-    bot: &Bot,
-    msg: &Message,
-    state: &Arc<BotState>,
-) -> ResponseResult<Option<i64>> {
-    let user_id = msg.from.as_ref().map_or(0, |u| u.id);
-    if ensure_admin(bot, msg, state).await? {
-        Ok(Some(user_id))
-    } else {
-        Ok(None)
-    }
-}
-
-pub(super) async fn authorize_admin_command(
-    bot: &Bot,
-    msg: &Message,
-    state: &Arc<BotState>,
-    command_name: &str,
-) -> ResponseResult<Option<i64>> {
-    let Some(user_id) = ensure_admin_user_id(bot, msg, state).await? else {
-        return Ok(None);
-    };
-
-    tracing::info!(
-        "{} command from user_id: {}, configured admins: {:?}",
-        command_name,
-        user_id,
-        state.config.bot_admin
-    );
-
-    Ok(Some(user_id))
 }
 
 pub(super) async fn handle_callback(

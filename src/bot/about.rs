@@ -1,7 +1,9 @@
-use super::{
-    Arc, Bot, BotState, Message, ReplyParameters, ResponseResult, resolve_chat_language_for,
-};
+use super::lang_command::resolve_chat_language_for;
+use super::wiring::BotState;
 use crate::i18n;
+use crate::telegram::TelegramBot as Bot;
+use crate::telegram::{Message, ReplyParameters, ResponseResult};
+use std::sync::Arc;
 
 pub(super) const BUILD_GIT_COMMIT: &str = match option_env!("BUILD_GIT_COMMIT") {
     Some(value) => value,

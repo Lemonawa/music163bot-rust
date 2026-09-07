@@ -1,19 +1,39 @@
-use super::{
-    Arc, Bot, BotState, CacheSnapshot, Config, DashMap, Database, InflightDownloads, Instant,
-    MAINTENANCE_QUEUE_CAPACITY, MaintenanceCounters, Message, MessageTaskRoute, MusicApi, Mutex,
-    ParseMode, ProcessRefreshKind, ProcessesToUpdate, ReplyParameters, ResourceSnapshot,
-    ResponseResult, Result, RuntimeMetrics, STATUS_RESOURCE_CACHE,
-    STATUS_RESOURCE_REFRESH_INTERVAL, SpeedSnapshot, System, Update, UploadClientState,
-    UploadCounters, VecDeque, acquire_upload_client, build_http_client, classify_message_task,
-    ensure_dir, get_current_pid, handle_about_command, handle_callback,
-    handle_clearallcache_command, handle_clearallcache_confirm_command, handle_help_command,
-    handle_inline_query, handle_lang_command, handle_lyric_command, handle_music_command,
-    handle_music_url, handle_rmcache_command, handle_search_command, handle_status_command,
-    is_clearallcache_confirm, is_official_telegram_api, lock_unpoisoned, maintenance_worker,
-    process_music, register_bot_commands, run_upload_prewarm, sanitize_sensitive_text,
-    sanitized_error_chain, should_log_command, should_spawn_message_task,
+use std::time::Instant;
+
+use super::about::handle_about_command;
+use super::commands::{handle_music_url, handle_search_command};
+use super::core_flow::process_music;
+use super::help_entry::{handle_help_command, handle_music_command};
+use super::intake::{
+    MessageTaskRoute, classify_message_task, is_clearallcache_confirm, is_official_telegram_api,
+    should_log_command, should_spawn_message_task,
 };
+use super::lang_command::{handle_lang_command, register_bot_commands};
+use super::maintenance::maintenance_worker;
+use super::support::{
+    handle_callback, handle_clearallcache_command, handle_clearallcache_confirm_command,
+    handle_inline_query, handle_lyric_command, handle_rmcache_command, handle_status_command,
+};
+use super::upload_client::{acquire_upload_client, run_upload_prewarm};
+use super::wiring::{
+    BotState, CacheSnapshot, InflightDownloads, MAINTENANCE_QUEUE_CAPACITY, MaintenanceCounters,
+    ResourceSnapshot, RuntimeMetrics, STATUS_RESOURCE_CACHE, STATUS_RESOURCE_REFRESH_INTERVAL,
+    SpeedSnapshot, UploadClientState, UploadCounters, lock_unpoisoned,
+};
+use crate::config::Config;
+use crate::database::Database;
+use crate::error::Result;
+use crate::error::sanitized_error_chain;
 use crate::i18n;
+use crate::music_api::MusicApi;
+use crate::telegram::TelegramBot as Bot;
+use crate::telegram::{Message, ParseMode, ReplyParameters, ResponseResult, Update};
+use crate::utils::{build_http_client, ensure_dir, sanitize_sensitive_text};
+use dashmap::DashMap;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
+use tokio::sync::Mutex;
 
 pub(super) fn percentile_95(samples: &VecDeque<f64>) -> f64 {
     let mut values: Vec<f64> = samples.iter().copied().collect();
@@ -474,7 +494,7 @@ pub(super) async fn handle_start_command(
         return process_music(bot, msg, state, music_id).await;
     }
 
-    let lang = super::resolve_chat_language_for(state, msg).await;
+    let lang = super::lang_command::resolve_chat_language_for(state, msg).await;
     let welcome_text = i18n::tr_with(&lang, "start_welcome", "bot_username", &state.bot_username);
 
     bot.send_message(msg.chat.id, welcome_text)

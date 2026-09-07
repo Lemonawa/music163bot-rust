@@ -1,9 +1,14 @@
-use super::{
-    Arc, Bot, BotState, Message, ParseMode, ReplyParameters, ResponseResult,
+use super::core_flow::process_music;
+use super::lang_command::resolve_chat_language_for;
+use super::replies::require_command_args_or_reply;
+use super::target_resolution::{
     dispatch_parsed_music_target, parse_direct_music_target, parse_song_id_or_search_first_result,
-    process_music, require_command_args_or_reply, resolve_chat_language_for,
 };
+use super::wiring::BotState;
 use crate::i18n;
+use crate::telegram::TelegramBot as Bot;
+use crate::telegram::{Message, ParseMode, ReplyParameters, ResponseResult};
+use std::sync::Arc;
 
 pub(super) async fn handle_help_command(
     bot: &Bot,
