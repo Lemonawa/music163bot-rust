@@ -15,3 +15,7 @@ _Avoid_: language preference (too vague — sounds like per-user)
 **Default Language**:
 The config-level fallback used when no override exists and auto-detection does not apply (e.g. group chats).
 _Avoid_: base language, source language
+
+**Served Size**:
+What the eapi song-url endpoint would currently hand down for one song at a given level (bitrate, byte size, format) — ground truth, as opposed to catalog tier labels. Exposed via `MusicApi::get_served_sizes_batch`.
+_Avoid_: available quality, catalog bitrate
