@@ -111,7 +111,7 @@ use wiring::{
 use about::{BUILD_GIT_COMMIT, build_about_text};
 #[cfg(test)]
 use download_flow::{
-    CoverPolicy, PostUploadDbAction, classify_post_upload_db_result, max_download_size_bytes,
+    PostUploadDbAction, classify_post_upload_db_result, max_download_size_bytes,
     resolve_cover_policy, should_download_cover,
 };
 #[cfg(test)]

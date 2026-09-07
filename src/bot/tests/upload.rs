@@ -7,30 +7,6 @@ fn cover_policy_embeds_for_thumbnail_mode() {
 }
 
 #[test]
-fn cover_policy_requires_download_when_embed_or_thumbnail() {
-    let embed_only = super::CoverPolicy {
-        download_original: false,
-        download_thumbnail: false,
-        embed_cover: true,
-    };
-    assert!(should_download_cover(embed_only));
-
-    let thumbnail_only = super::CoverPolicy {
-        download_original: false,
-        download_thumbnail: true,
-        embed_cover: false,
-    };
-    assert!(should_download_cover(thumbnail_only));
-
-    let none = super::CoverPolicy {
-        download_original: false,
-        download_thumbnail: false,
-        embed_cover: false,
-    };
-    assert!(!should_download_cover(none));
-}
-
-#[test]
 fn cover_download_failure_notice_mentions_retry_budget_and_fallback() {
     let notice = super::cover_download_failure_notice(&crate::i18n::default_lang_zh());
     assert!(notice.contains('5'));

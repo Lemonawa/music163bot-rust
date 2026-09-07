@@ -256,39 +256,10 @@ fn percentile_95_empty_returns_zero() {
     assert!(super::percentile_95(&samples).abs() < f64::EPSILON);
 }
 
-// --- should_download_cover tests ---
-
-#[test]
-fn should_download_cover_true_when_embed_cover_set() {
-    let policy = super::CoverPolicy {
-        download_original: false,
-        download_thumbnail: false,
-        embed_cover: true,
-    };
-    assert!(super::should_download_cover(policy));
-}
-
-#[test]
-fn should_download_cover_true_when_download_thumbnail_set() {
-    let policy = super::CoverPolicy {
-        download_original: false,
-        download_thumbnail: true,
-        embed_cover: false,
-    };
-    assert!(super::should_download_cover(policy));
-}
-
-#[test]
-fn should_download_cover_false_when_nothing_set() {
-    let policy = super::CoverPolicy {
-        download_original: false,
-        download_thumbnail: false,
-        embed_cover: false,
-    };
-    assert!(!super::should_download_cover(policy));
-}
-
 // --- resolve_cover_policy covers all modes ---
+// CoverMode has only Thumbnail (default), Original, Both — every variant
+// enables embedding, so resolve_cover_policy always sets embed_cover=true
+// and should_download_cover is true for all three.
 
 #[test]
 fn resolve_cover_policy_thumbnail_mode() {
@@ -296,6 +267,7 @@ fn resolve_cover_policy_thumbnail_mode() {
     assert!(!policy.download_original);
     assert!(policy.download_thumbnail);
     assert!(policy.embed_cover);
+    assert!(super::should_download_cover(policy));
 }
 
 #[test]
@@ -304,6 +276,7 @@ fn resolve_cover_policy_original_mode() {
     assert!(policy.download_original);
     assert!(!policy.download_thumbnail);
     assert!(policy.embed_cover);
+    assert!(super::should_download_cover(policy));
 }
 
 #[test]
@@ -312,27 +285,7 @@ fn resolve_cover_policy_both_mode() {
     assert!(policy.download_original);
     assert!(policy.download_thumbnail);
     assert!(policy.embed_cover);
-}
-
-// Note: CoverMode has only Thumbnail (default), Original, Both - no None variant.
-// resolve_cover_policy always sets embed_cover=true because every variant
-// enables either download_original or download_thumbnail.
-
-#[test]
-fn should_download_cover_returns_false_when_only_download_original_without_embed() {
-    // This state cannot arise from resolve_cover_policy (which always sets
-    // embed_cover = download_original || download_thumbnail), but we test
-    // the function's own contract: only embed_cover and download_thumbnail
-    // are checked, not download_original.
-    let policy = super::CoverPolicy {
-        download_original: true,
-        download_thumbnail: false,
-        embed_cover: false,
-    };
-    assert!(
-        !super::should_download_cover(policy),
-        "download_original alone should not trigger a download — only embed_cover and download_thumbnail are checked"
-    );
+    assert!(super::should_download_cover(policy));
 }
 
 // --- is_clearallcache_confirm edge cases ---
