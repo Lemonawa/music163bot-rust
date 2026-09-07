@@ -55,7 +55,7 @@ use commands::{handle_music_url, handle_search_command};
 use core_flow::{
     process_music, process_music_with_context, process_program, rate_limit_retry_delay_secs,
 };
-use download_flow::{DownloadAndSendParams, download_and_send_music};
+use download_flow::{DownloadAndSendParams, DownloadCtx, download_and_send_music};
 use entry::{
     StatusTextParams, build_status_text, format_speed_line, format_uptime,
     parse_inline_query_keyword, percentile_95, sample_current_process_memory_mb,

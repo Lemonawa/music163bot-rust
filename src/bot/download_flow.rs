@@ -8,20 +8,29 @@ use super::{
     cleanup_thumbnail_buffer, collect_maintenance_signals, cover_download_failure_notice,
     create_music_keyboard_for_target, delete_status_message_resilient, download_cover_assets,
     edit_status_message_resilient, extract_file_id_from_response, i64_to_u32_saturating, log_perf,
-    raw_send_file, resolve_chat_language_for, sanitized_error_chain, send_reply_text,
-    throughput_mbps, u64_to_i64_saturating, update_peak,
+    raw_send_file, sanitized_error_chain, send_reply_text, throughput_mbps, u64_to_i64_saturating,
+    update_peak,
 };
 use futures_util::{StreamExt, TryStreamExt};
 
-pub(super) struct DownloadAndSendParams<'a> {
+/// Everything one download needs from its caller, carried unchanged through
+/// every stage of the flow. Constructed once per attempt; the Chat Language
+/// is resolved here and never re-resolved downstream.
+pub(super) struct DownloadCtx<'a> {
     pub(super) bot: &'a Bot,
     pub(super) msg: &'a Message,
     pub(super) state: &'a Arc<BotState>,
+    pub(super) lang: crate::i18n::ChatLanguage,
+    pub(super) status_msg: &'a Message,
+    pub(super) perf_ctx: &'a PerfTraceContext,
+}
+
+/// The song being delivered, independent of the conversation context.
+pub(super) struct DownloadAndSendParams<'a> {
+    pub(super) ctx: DownloadCtx<'a>,
     pub(super) song_detail: Arc<crate::music_api::SongDetail>,
     pub(super) song_url: &'a crate::music_api::SongUrl,
-    pub(super) status_msg: &'a Message,
     pub(super) pre_upload_path_start: std::time::Instant,
-    pub(super) perf_ctx: &'a PerfTraceContext,
     pub(super) artists: &'a str,
     pub(super) link_target: MusicLinkTarget,
 }
@@ -50,7 +59,7 @@ pub(super) fn should_download_cover(policy: CoverPolicy) -> bool {
 }
 
 pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Result<()> {
-    let lang = resolve_chat_language_for(p.state, p.msg).await;
+    let ctx = &p.ctx;
     let audio_format = if p.song_url.url.contains(".flac") {
         AudioFormat::Flac
     } else {
@@ -65,7 +74,7 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         file_ext
     ));
 
-    let cover_mode = p.state.config.cover_mode;
+    let cover_mode = ctx.state.config.cover_mode;
     let cover_policy = resolve_cover_policy(cover_mode);
     let download_thumbnail = cover_policy.download_thumbnail;
     let download_cover = should_download_cover(cover_policy);
@@ -79,9 +88,9 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         .map_or_else(|| "Unknown Album".to_string(), |al| al.name.clone());
     let duration_ms = p.song_detail.dt;
 
-    let cover_perf_ctx = p.perf_ctx.clone();
+    let cover_perf_ctx = ctx.perf_ctx.clone();
     let artwork_future = download_cover_assets(
-        p.state,
+        ctx.state,
         p.song_detail.as_ref(),
         song_id,
         cover_mode,
@@ -90,7 +99,7 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         &cover_perf_ctx,
     );
 
-    let audio_future = download_audio(p.state, &p.song_url.url, &filename, p.perf_ctx);
+    let audio_future = download_audio(ctx.state, &p.song_url.url, &filename, ctx.perf_ctx);
 
     let (downloaded_result, (cover_artwork_data, mut thumbnail_buffer, cover_retry_exhausted)) =
         tokio::join!(audio_future, artwork_future);
@@ -111,46 +120,39 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         );
     }
 
-    if let Some(err_msg) = validate_downloaded_audio(&lang, downloaded) {
+    if let Some(err_msg) = validate_downloaded_audio(&ctx.lang, downloaded) {
         cleanup_audio_buffer(audio_buffer).await;
         cleanup_thumbnail_buffer(thumbnail_buffer).await;
-        edit_status_message_resilient(p.bot, p.msg.chat.id, p.status_msg.id, err_msg).await;
+        edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, err_msg).await;
         return Ok(());
     }
 
-    process_tag_and_upload(TagAndUploadParams {
-        bot: p.bot,
-        msg: p.msg,
-        state: p.state,
-        lang: &lang,
-        audio_buffer,
-        thumbnail_buffer: &mut thumbnail_buffer,
-        audio_format,
-        song_detail: Arc::clone(&p.song_detail),
-        cover_artwork_data,
-        embed_cover: cover_policy.embed_cover,
-        song_id,
-        song_name: &song_name,
-        artists: p.artists,
-        song_album: &song_album,
-        file_ext,
-        duration_ms,
-        api_bitrate: p.song_url.br,
-        link_target: p.link_target,
-        pre_upload_path_start: p.pre_upload_path_start,
-        perf_ctx: p.perf_ctx,
-        status_msg: p.status_msg,
-        should_remove_song_cache,
-        cover_retry_exhausted,
-    })
+    process_tag_and_upload(
+        ctx,
+        TagAndUploadParams {
+            audio_buffer,
+            thumbnail_buffer: &mut thumbnail_buffer,
+            audio_format,
+            song_detail: Arc::clone(&p.song_detail),
+            cover_artwork_data,
+            embed_cover: cover_policy.embed_cover,
+            song_id,
+            song_name: &song_name,
+            artists: p.artists,
+            song_album: &song_album,
+            file_ext,
+            duration_ms,
+            api_bitrate: p.song_url.br,
+            link_target: p.link_target,
+            pre_upload_path_start: p.pre_upload_path_start,
+            should_remove_song_cache,
+            cover_retry_exhausted,
+        },
+    )
     .await
 }
 
 struct TagAndUploadParams<'a> {
-    bot: &'a Bot,
-    msg: &'a Message,
-    state: &'a Arc<BotState>,
-    lang: &'a crate::i18n::ChatLanguage,
     audio_buffer: AudioBuffer,
     thumbnail_buffer: &'a mut Option<crate::bot::ThumbnailBuffer>,
     audio_format: AudioFormat,
@@ -166,26 +168,25 @@ struct TagAndUploadParams<'a> {
     api_bitrate: u64,
     link_target: MusicLinkTarget,
     pre_upload_path_start: std::time::Instant,
-    perf_ctx: &'a PerfTraceContext,
-    status_msg: &'a Message,
     should_remove_song_cache: bool,
     cover_retry_exhausted: bool,
 }
 
 #[allow(clippy::too_many_lines)]
-async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
-    let (mut audio_buffer, raw_client, api_base_url) =
-        process_tags_and_acquire_client(TagAndAcquireParams {
-            state: p.state,
+async fn process_tag_and_upload(ctx: &DownloadCtx<'_>, p: TagAndUploadParams<'_>) -> Result<()> {
+    let (mut audio_buffer, raw_client, api_base_url) = process_tags_and_acquire_client(
+        ctx.state,
+        ctx.perf_ctx,
+        TagAndAcquireParams {
             audio_buffer: p.audio_buffer,
             thumbnail_buffer: p.thumbnail_buffer,
             audio_format: p.audio_format,
             song_detail: p.song_detail,
             cover_artwork_data: p.cover_artwork_data,
             embed_cover: p.embed_cover,
-            perf_ctx: p.perf_ctx,
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     let file_size = audio_buffer.size().await;
     if file_size == 0 {
@@ -204,24 +205,24 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
         duration_ms: p.duration_ms,
         api_bitrate: p.api_bitrate,
         link_target: p.link_target,
-        msg: p.msg,
+        msg: ctx.msg,
     });
 
     let caption = {
         build_caption(
-            p.lang,
+            &ctx.lang,
             &song_info.song_name,
             &song_info.song_artists,
             &song_info.song_album,
             &song_info.file_ext,
             song_info.music_size,
             song_info.bit_rate,
-            &p.state.bot_username,
+            &ctx.state.bot_username,
         )
     };
 
     let reply_markup_json = serde_json::to_string(&create_music_keyboard_for_target(
-        p.lang,
+        &ctx.lang,
         p.link_target,
         p.song_id,
         &song_info.song_name,
@@ -231,23 +232,23 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
 
     let pre_upload_path_duration = p.pre_upload_path_start.elapsed();
     log_perf(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
-    p.perf_ctx
+    ctx.perf_ctx
         .log_stage(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
 
-    let file_id = acquire_permit_and_upload(UploadFlowParams {
-        state: p.state,
-        msg: p.msg,
-        raw_client: &raw_client,
-        api_base_url: &api_base_url,
-        audio_buffer: &mut audio_buffer,
-        thumbnail_buffer: p.thumbnail_buffer.as_ref(),
-        caption: &caption,
-        reply_markup_json,
-        song_info: &song_info,
-        audio_format: p.audio_format,
-        file_size,
-        perf_ctx: p.perf_ctx,
-    })
+    let file_id = acquire_permit_and_upload(
+        ctx,
+        &mut UploadFlowParams {
+            raw_client: &raw_client,
+            api_base_url: &api_base_url,
+            audio_buffer: &mut audio_buffer,
+            thumbnail_buffer: p.thumbnail_buffer.as_ref(),
+            caption: &caption,
+            reply_markup_json,
+            song_info: &song_info,
+            audio_format: p.audio_format,
+            file_size,
+        },
+    )
     .await;
 
     match file_id {
@@ -262,17 +263,17 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
     cleanup_audio_buffer(audio_buffer).await;
     cleanup_thumbnail_buffer(p.thumbnail_buffer.take()).await;
     save_song_and_notify(
-        p.state,
+        ctx.state,
         &song_info,
         p.song_id,
         p.should_remove_song_cache,
-        p.perf_ctx,
+        ctx.perf_ctx,
     )
     .await?;
 
     if p.cover_retry_exhausted {
-        let notice = cover_download_failure_notice(p.lang);
-        if let Err(e) = send_reply_text(p.bot, p.msg, notice).await {
+        let notice = cover_download_failure_notice(&ctx.lang);
+        if let Err(e) = send_reply_text(ctx.bot, ctx.msg, notice).await {
             tracing::warn!(
                 "Failed to send cover fallback notice for music_id {}: {}",
                 p.song_id,
@@ -281,13 +282,11 @@ async fn process_tag_and_upload(p: TagAndUploadParams<'_>) -> Result<()> {
         }
     }
 
-    delete_status_message_resilient(p.bot, p.msg.chat.id, p.status_msg.id).await;
+    delete_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id).await;
     Ok(())
 }
 
 struct UploadFlowParams<'a> {
-    state: &'a Arc<BotState>,
-    msg: &'a Message,
     raw_client: &'a reqwest::Client,
     api_base_url: &'a str,
     audio_buffer: &'a mut AudioBuffer,
@@ -297,18 +296,21 @@ struct UploadFlowParams<'a> {
     song_info: &'a SongInfo,
     audio_format: AudioFormat,
     file_size: u64,
-    perf_ctx: &'a PerfTraceContext,
 }
 
-async fn acquire_permit_and_upload(mut p: UploadFlowParams<'_>) -> Result<Option<String>> {
+async fn acquire_permit_and_upload(
+    ctx: &DownloadCtx<'_>,
+    p: &mut UploadFlowParams<'_>,
+) -> Result<Option<String>> {
     let upload_permit_wait_start = std::time::Instant::now();
-    let _upload_permit = acquire_upload_permit_owned(Arc::clone(&p.state.upload_semaphore)).await?;
-    p.perf_ctx.log_stage(
+    let _upload_permit =
+        acquire_upload_permit_owned(Arc::clone(&ctx.state.upload_semaphore)).await?;
+    ctx.perf_ctx.log_stage(
         PERF_STAGE_UPLOAD_PERMIT_WAIT,
         upload_permit_wait_start.elapsed(),
     );
 
-    execute_upload(&mut p).await
+    execute_upload(ctx, p).await
 }
 
 fn validate_downloaded_audio(lang: &crate::i18n::ChatLanguage, downloaded: u64) -> Option<String> {
@@ -327,21 +329,21 @@ fn validate_downloaded_audio(lang: &crate::i18n::ChatLanguage, downloaded: u64) 
 }
 
 struct TagAndAcquireParams<'a> {
-    state: &'a Arc<BotState>,
     audio_buffer: AudioBuffer,
     thumbnail_buffer: &'a mut Option<crate::bot::ThumbnailBuffer>,
     audio_format: AudioFormat,
     song_detail: Arc<crate::music_api::SongDetail>,
     cover_artwork_data: Option<bytes::Bytes>,
     embed_cover: bool,
-    perf_ctx: &'a PerfTraceContext,
 }
 
 async fn process_tags_and_acquire_client(
+    state: &Arc<BotState>,
+    perf_ctx: &PerfTraceContext,
     p: TagAndAcquireParams<'_>,
 ) -> Result<(AudioBuffer, reqwest::Client, String)> {
     tracing::debug!("Processing tags for {} format", p.audio_format);
-    let tag_perf_ctx = p.perf_ctx.clone();
+    let tag_perf_ctx = perf_ctx.clone();
     let tag_future = async {
         let tags_start = std::time::Instant::now();
         let result = apply_tags_in_blocking(
@@ -358,10 +360,10 @@ async fn process_tags_and_acquire_client(
         result
     };
 
-    let upload_client_perf_ctx = p.perf_ctx.clone();
+    let upload_client_perf_ctx = perf_ctx.clone();
     let upload_client_future = async {
         let upload_client_start = std::time::Instant::now();
-        let result = acquire_upload_client(p.state).await;
+        let result = acquire_upload_client(state).await;
         upload_client_perf_ctx.log_stage(
             PERF_STAGE_UPLOAD_CLIENT_ACQUIRE,
             upload_client_start.elapsed(),
@@ -621,7 +623,10 @@ async fn download_audio(
     Ok((audio_buffer, downloaded))
 }
 
-async fn execute_upload(p: &mut UploadFlowParams<'_>) -> Result<Option<String>> {
+async fn execute_upload(
+    ctx: &DownloadCtx<'_>,
+    p: &mut UploadFlowParams<'_>,
+) -> Result<Option<String>> {
     let is_flac = p.audio_format == AudioFormat::Flac;
 
     tracing::debug!(
@@ -633,19 +638,19 @@ async fn execute_upload(p: &mut UploadFlowParams<'_>) -> Result<Option<String>> 
 
     let audio_bytes = p.audio_buffer.take_memory_bytes_for_upload();
 
-    let in_flight = p
+    let in_flight = ctx
         .state
         .upload_counters
         .in_flight
         .fetch_add(1, Ordering::Relaxed)
         + 1;
-    let peak_in_flight = update_peak(&p.state.upload_counters.peak_in_flight, in_flight);
+    let peak_in_flight = update_peak(&ctx.state.upload_counters.peak_in_flight, in_flight);
     let upload_start = std::time::Instant::now();
     let duration_u32 = i64_to_u32_saturating(p.song_info.duration);
     let params = RawUploadParams {
-        chat_id: p.msg.chat.id.0,
+        chat_id: ctx.msg.chat.id.0,
         caption: p.caption,
-        reply_to_message_id: p.msg.id.0,
+        reply_to_message_id: ctx.msg.id.0,
         reply_markup_json: p.reply_markup_json.take(),
         title: Some(&p.song_info.song_name),
         performer: Some(&p.song_info.song_artists),
@@ -656,8 +661,8 @@ async fn execute_upload(p: &mut UploadFlowParams<'_>) -> Result<Option<String>> 
     let upload_result = raw_send_file(&RawSendFileArgs {
         client: p.raw_client,
         api_base_url: p.api_base_url,
-        config: &p.state.config,
-        is_official_api: p.state.is_official_api,
+        config: &ctx.state.config,
+        is_official_api: ctx.state.is_official_api,
         audio_buffer: p.audio_buffer,
         audio_bytes: audio_bytes.as_ref(),
         file_size: p.file_size,
@@ -666,20 +671,20 @@ async fn execute_upload(p: &mut UploadFlowParams<'_>) -> Result<Option<String>> 
     .await;
 
     let upload_duration = upload_start.elapsed();
-    let in_flight_after = p
+    let in_flight_after = ctx
         .state
         .upload_counters
         .in_flight
         .fetch_sub(1, Ordering::Relaxed)
         - 1;
     log_perf("upload_audio", upload_duration);
-    p.perf_ctx
+    ctx.perf_ctx
         .log_stage(PERF_STAGE_UPLOAD_SEND, upload_duration);
 
     match upload_result {
         Ok(ref resp_json) => {
             let upload_mbps = throughput_mbps(p.file_size, upload_duration);
-            p.state
+            ctx.state
                 .runtime_metrics
                 .record_upload_speed(p.file_size, upload_duration);
             tracing::info!(

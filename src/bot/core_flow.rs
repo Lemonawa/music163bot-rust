@@ -1,6 +1,6 @@
 use super::{
-    Arc, Bot, BotState, DownloadAndSendParams, FileId, InputFile, Message, MusicLinkTarget,
-    PERF_STAGE_CACHE_LOOKUP, PERF_STAGE_E2E_TOTAL, PERF_STAGE_SELECT_URL,
+    Arc, Bot, BotState, DownloadAndSendParams, DownloadCtx, FileId, InputFile, Message,
+    MusicLinkTarget, PERF_STAGE_CACHE_LOOKUP, PERF_STAGE_E2E_TOTAL, PERF_STAGE_SELECT_URL,
     PERF_STAGE_SINGLEFLIGHT_WAIT, PerfTraceContext, ProgramMainTrack, ReplyParameters,
     ResponseResult, acquire_download_leader, build_caption, build_perf_trace_context,
     cached_music_link_target, create_music_keyboard_for_target, delete_status_message_resilient,
@@ -339,13 +339,16 @@ pub(super) async fn process_music_with_context(
 
     download_with_retry(
         DownloadRetryContext {
-            bot,
-            msg,
-            state,
+            download: DownloadCtx {
+                bot,
+                msg,
+                state,
+                lang,
+                status_msg: &status_msg,
+                perf_ctx: &perf_ctx,
+            },
             song_detail: &song_detail,
             song_url: &song_url,
-            status_msg: &status_msg,
-            perf_ctx: &perf_ctx,
             artists: &artists,
             link_target,
             music_id,
@@ -490,13 +493,9 @@ async fn acquire_singleflight_leader(
 }
 
 struct DownloadRetryContext<'a> {
-    bot: &'a Bot,
-    msg: &'a Message,
-    state: &'a Arc<BotState>,
+    download: DownloadCtx<'a>,
     song_detail: &'a Arc<crate::music_api::SongDetail>,
     song_url: &'a Arc<crate::music_api::SongUrl>,
-    status_msg: &'a Message,
-    perf_ctx: &'a PerfTraceContext,
     artists: &'a str,
     link_target: MusicLinkTarget,
     music_id: u64,
@@ -510,14 +509,17 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
     loop {
         let pre_upload_path_start = std::time::Instant::now();
         let download_params = DownloadAndSendParams {
-            bot: ctx.bot,
-            msg: ctx.msg,
-            state: ctx.state,
+            ctx: DownloadCtx {
+                bot: ctx.download.bot,
+                msg: ctx.download.msg,
+                state: ctx.download.state,
+                lang: ctx.download.lang.clone(),
+                status_msg: ctx.download.status_msg,
+                perf_ctx: ctx.download.perf_ctx,
+            },
             song_detail: Arc::clone(ctx.song_detail),
             song_url: ctx.song_url,
-            status_msg: ctx.status_msg,
             pre_upload_path_start,
-            perf_ctx: ctx.perf_ctx,
             artists: ctx.artists,
             link_target: ctx.link_target,
         };
@@ -540,36 +542,51 @@ async fn download_with_retry<F: std::future::Future<Output = ()>>(
                         ctx.music_id,
                         retry_delay_secs
                     );
-                    edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
-                        let lang = resolve_chat_language_for(ctx.state, ctx.msg).await;
-                        i18n::tr_with(&lang, "rate_limited", "secs", &retry_delay_secs)
-                    })
+                    edit_status_message_resilient(
+                        ctx.download.bot,
+                        ctx.download.msg.chat.id,
+                        ctx.download.status_msg.id,
+                        i18n::tr_with(
+                            &ctx.download.lang,
+                            "rate_limited",
+                            "secs",
+                            &retry_delay_secs,
+                        ),
+                    )
                     .await;
                     tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
-                    edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
-                        let lang = resolve_chat_language_for(ctx.state, ctx.msg).await;
+                    edit_status_message_resilient(
+                        ctx.download.bot,
+                        ctx.download.msg.chat.id,
+                        ctx.download.status_msg.id,
                         i18n::tr_many_strings(
-                            &lang,
+                            &ctx.download.lang,
                             "downloading",
                             &[
                                 ("name", ctx.song_detail.name.clone()),
                                 ("artists", (*ctx.artists).to_string()),
                             ],
-                        )
-                    })
+                        ),
+                    )
                     .await;
                     continue;
                 }
 
                 tracing::warn!("Failed to process music {}: {}", ctx.music_id, sanitized);
                 if extract_retry_after_seconds(&sanitized).is_some() {
-                    delete_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id)
-                        .await;
+                    delete_status_message_resilient(
+                        ctx.download.bot,
+                        ctx.download.msg.chat.id,
+                        ctx.download.status_msg.id,
+                    )
+                    .await;
                 } else {
-                    edit_status_message_resilient(ctx.bot, ctx.msg.chat.id, ctx.status_msg.id, {
-                        let lang = resolve_chat_language_for(ctx.state, ctx.msg).await;
-                        i18n::tr(&lang, "error_generic")
-                    })
+                    edit_status_message_resilient(
+                        ctx.download.bot,
+                        ctx.download.msg.chat.id,
+                        ctx.download.status_msg.id,
+                        i18n::tr(&ctx.download.lang, "error_generic"),
+                    )
                     .await;
                 }
                 break;
