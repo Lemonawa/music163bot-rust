@@ -116,6 +116,7 @@ jobs:
 
           # Copy auxiliary files
           [ -f config.ini.example ] && cp config.ini.example dist/
+          [ -f CHANGELOG.md ] && cp CHANGELOG.md dist/
           [ -f LICENSE ] && cp LICENSE dist/
           [ -f README.md ] && cp README.md dist/
 
@@ -149,6 +150,7 @@ jobs:
 
           # Copy auxiliary files
           if (Test-Path "config.ini.example") { Copy-Item "config.ini.example" "dist/" }
+          if (Test-Path "CHANGELOG.md") { Copy-Item "CHANGELOG.md" "dist/" }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" "dist/" }
           if (Test-Path "README.md") { Copy-Item "README.md" "dist/" }
 
