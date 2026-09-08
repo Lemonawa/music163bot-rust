@@ -16,6 +16,11 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::utils::build_http_client;
 
+/// Per-request timeout for Music API HTTP calls. Formerly the
+/// `downloadtimeout`/`download.timeout` config key, which nothing but this
+/// client ever read; fixed here at its long-standing default.
+const DOWNLOAD_REQUEST_TIMEOUT_SECS: u64 = 60;
+
 fn enforce_cache_capacity<K, V>(cache: &DashMap<K, TimedCacheEntry<V>>, max_entries: usize)
 where
     K: std::hash::Hash + Eq + Clone,
@@ -53,9 +58,9 @@ impl MusicApi {
         Self::new_with_options(
             config.music_u.clone(),
             config.music_api.clone(),
-            config.download_pool_max_idle_per_host,
-            config.download_connect_timeout_secs,
-            config.download_timeout,
+            config.transfer.download_pool_max_idle_per_host,
+            config.transfer.download_connect_timeout_secs,
+            DOWNLOAD_REQUEST_TIMEOUT_SECS,
         )
     }
 

@@ -78,7 +78,10 @@ fn spawn_gate_identifies_supported_messages() {
 fn spawn_gate_calculates_reasonable_limit() {
     let limit = |downloads: u32| {
         Config {
-            max_concurrent_downloads: downloads,
+            transfer: TransferSettings {
+                max_concurrent_downloads: downloads,
+                ..Default::default()
+            },
             ..Config::default()
         }
         .message_task_limit()
@@ -99,8 +102,10 @@ fn batch_download_limit_rejects_only_when_over_limit() {
 fn maintenance_scheduler_emits_expected_signals() {
     let counters = super::MaintenanceCounters::new();
     let config = crate::config::Config {
-        db_analyze_interval_requests: 2,
-        memory_release_interval_requests: 3,
+        maintenance: MaintenanceSettings {
+            db_analyze_interval_requests: 2,
+            memory_release_interval_requests: 3,
+        },
         ..crate::config::Config::default()
     };
 
@@ -117,8 +122,10 @@ fn maintenance_scheduler_emits_expected_signals() {
 fn maintenance_scheduler_emits_cache_prune_signal_on_interval() {
     let counters = super::MaintenanceCounters::new();
     let config = crate::config::Config {
-        db_analyze_interval_requests: 0,
-        memory_release_interval_requests: 0,
+        maintenance: MaintenanceSettings {
+            db_analyze_interval_requests: 0,
+            memory_release_interval_requests: 0,
+        },
         ..crate::config::Config::default()
     };
 
@@ -133,7 +140,10 @@ fn maintenance_scheduler_emits_cache_prune_signal_on_interval() {
 #[test]
 fn download_chunk_bytes_uses_configured_kib() {
     let config = Config {
-        download_chunk_size_kb: 512,
+        transfer: TransferSettings {
+            download_chunk_size_kb: 512,
+            ..Default::default()
+        },
         ..Config::default()
     };
 
@@ -143,7 +153,10 @@ fn download_chunk_bytes_uses_configured_kib() {
 #[test]
 fn download_chunk_bytes_clamps_zero_to_minimum() {
     let config = Config {
-        download_chunk_size_kb: 0,
+        transfer: TransferSettings {
+            download_chunk_size_kb: 0,
+            ..Default::default()
+        },
         ..Config::default()
     };
 
@@ -157,7 +170,10 @@ fn download_chunk_bytes_clamps_zero_to_minimum() {
 fn upload_limit_clamps_bounds() {
     let limit = |uploads: u32| {
         Config {
-            upload_max_concurrent: uploads,
+            transfer: TransferSettings {
+                upload_max_concurrent: uploads,
+                ..Default::default()
+            },
             ..Config::default()
         }
         .upload_task_limit()
@@ -267,4 +283,6 @@ async fn upload_prewarm_runs_warmup_path() {
 
     assert!(ok);
 }
+
 use super::*;
+use crate::config::{MaintenanceSettings, TransferSettings};

@@ -200,7 +200,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         .unwrap_or_else(|| "Music163bot".to_string());
     tracing::info!("Bot @{} started successfully!", bot_username);
 
-    let max_concurrent_downloads = config.max_concurrent_downloads;
+    let max_concurrent_downloads = config.transfer.max_concurrent_downloads;
     let message_limit = config.message_task_limit();
     let upload_limit = config.upload_task_limit();
     let is_official_api = is_official_telegram_api(bot.api_url());

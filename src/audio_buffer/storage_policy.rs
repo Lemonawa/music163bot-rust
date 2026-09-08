@@ -100,7 +100,7 @@ impl AudioBuffer {
 
     /// Determine if memory mode should be used based on configuration and system state.
     fn should_use_memory(config: &Config, content_length: u64) -> bool {
-        match config.storage_mode {
+        match config.storage.storage_mode {
             StorageMode::Disk => false,
             StorageMode::Memory => {
                 if content_length == 0 {
@@ -111,17 +111,17 @@ impl AudioBuffer {
                 }
 
                 let file_size_mb = content_length / (1024 * 1024);
-                if file_size_mb > config.memory_max_file_mb {
+                if file_size_mb > config.storage.memory_max_file_mb {
                     tracing::debug!(
                         "Memory mode: file size {}MB exceeds max {}MB, using disk",
                         file_size_mb,
-                        config.memory_max_file_mb
+                        config.storage.memory_max_file_mb
                     );
                     return false;
                 }
 
                 let available_mb = Self::get_available_memory_mb();
-                let required_mb = file_size_mb + config.memory_buffer_mb;
+                let required_mb = file_size_mb + config.storage.memory_buffer_mb;
 
                 if available_mb >= required_mb {
                     true
@@ -144,33 +144,33 @@ impl AudioBuffer {
 
                 let file_size_mb = content_length / (1024 * 1024);
 
-                if file_size_mb > config.memory_threshold_mb {
+                if file_size_mb > config.storage.memory_threshold_mb {
                     tracing::debug!(
                         "Hybrid mode: file size {}MB exceeds threshold {}MB, using disk",
                         file_size_mb,
-                        config.memory_threshold_mb
+                        config.storage.memory_threshold_mb
                     );
                     return false;
                 }
 
-                if file_size_mb > config.memory_max_file_mb {
+                if file_size_mb > config.storage.memory_max_file_mb {
                     tracing::debug!(
                         "Hybrid mode: file size {}MB exceeds max {}MB, using disk",
                         file_size_mb,
-                        config.memory_max_file_mb
+                        config.storage.memory_max_file_mb
                     );
                     return false;
                 }
 
                 let available_mb = Self::get_available_memory_mb();
-                let required_mb = file_size_mb + config.memory_buffer_mb;
+                let required_mb = file_size_mb + config.storage.memory_buffer_mb;
 
                 if available_mb >= required_mb {
                     tracing::debug!(
                         "Hybrid mode: using memory (file={}MB, available={}MB, buffer={}MB)",
                         file_size_mb,
                         available_mb,
-                        config.memory_buffer_mb
+                        config.storage.memory_buffer_mb
                     );
                     true
                 } else {

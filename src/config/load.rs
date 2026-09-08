@@ -79,11 +79,14 @@ impl Config {
         if let Some(v) = config_map.get("autoretry") {
             apply_bool_field(v, &mut config.flags.behavior.auto_retry, "autoretry");
         }
-        if let Some(v) = config_map.get("maxretrytimes") {
-            config.max_retry_times = parse_field(v, config.max_retry_times, "maxretrytimes");
-        }
-        if let Some(v) = config_map.get("downloadtimeout") {
-            config.download_timeout = parse_field(v, config.download_timeout, "downloadtimeout");
+        // Legacy keys with no remaining consumer: "maxretrytimes" and
+        // "downloadtimeout" used to feed Config fields that nothing read
+        // after the retry/timeout reworks. Accept and ignore them (with a
+        // note) so old config files keep working.
+        for legacy in ["maxretrytimes", "downloadtimeout"] {
+            if let Some(v) = config_map.get(legacy) {
+                tracing::debug!("Ignoring legacy config key '{legacy}' (no effect): {v}");
+            }
         }
         if let Some(v) = config_map.get("checkmd5") {
             apply_bool_field(v, &mut config.flags.behavior.check_md5, "checkmd5");
@@ -93,64 +96,73 @@ impl Config {
     fn load_download_fields(config: &mut Config, config_map: &HashMap<String, String>) {
         if let Some(mode) = config_map.get("download.storage_mode") {
             match mode.parse::<StorageMode>() {
-                Ok(m) => config.storage_mode = m,
+                Ok(m) => config.storage.storage_mode = m,
                 Err(e) => tracing::warn!("Invalid storage_mode '{}': {}, using default", mode, e),
             }
         }
         if let Some(v) = config_map.get("download.memory_threshold") {
-            config.memory_threshold_mb =
-                parse_field(v, config.memory_threshold_mb, "download.memory_threshold");
+            config.storage.memory_threshold_mb = parse_field(
+                v,
+                config.storage.memory_threshold_mb,
+                "download.memory_threshold",
+            );
         }
         if let Some(v) = config_map.get("download.memory_buffer") {
-            config.memory_buffer_mb =
-                parse_field(v, config.memory_buffer_mb, "download.memory_buffer");
+            config.storage.memory_buffer_mb =
+                parse_field(v, config.storage.memory_buffer_mb, "download.memory_buffer");
         }
         if let Some(v) = config_map.get("download.memory_max_file_mb") {
-            config.memory_max_file_mb =
-                parse_field(v, config.memory_max_file_mb, "download.memory_max_file_mb");
+            config.storage.memory_max_file_mb = parse_field(
+                v,
+                config.storage.memory_max_file_mb,
+                "download.memory_max_file_mb",
+            );
         }
         if let Some(v) = config_map.get("download.max_disk_download_mb") {
-            config.max_disk_download_mb = parse_field(
+            config.storage.max_disk_download_mb = parse_field(
                 v,
-                config.max_disk_download_mb,
+                config.storage.max_disk_download_mb,
                 "download.max_disk_download_mb",
             );
         }
         if let Some(v) = config_map.get("download.max_concurrent") {
-            config.max_concurrent_downloads = parse_field(
+            config.transfer.max_concurrent_downloads = parse_field(
                 v,
-                config.max_concurrent_downloads,
+                config.transfer.max_concurrent_downloads,
                 "download.max_concurrent",
             );
         }
         if let Some(v) = config_map.get("download.max_batch_tracks") {
-            config.max_batch_download_tracks = parse_field(
+            config.transfer.max_batch_download_tracks = parse_field(
                 v,
-                config.max_batch_download_tracks,
+                config.transfer.max_batch_download_tracks,
                 "download.max_batch_tracks",
             );
         }
         if let Some(v) = config_map.get("download.pool_max_idle_per_host") {
-            config.download_pool_max_idle_per_host = parse_field(
+            config.transfer.download_pool_max_idle_per_host = parse_field(
                 v,
-                config.download_pool_max_idle_per_host,
+                config.transfer.download_pool_max_idle_per_host,
                 "download.pool_max_idle_per_host",
             );
         }
         if let Some(v) = config_map.get("download.connect_timeout_secs") {
-            config.download_connect_timeout_secs = parse_field(
+            config.transfer.download_connect_timeout_secs = parse_field(
                 v,
-                config.download_connect_timeout_secs,
+                config.transfer.download_connect_timeout_secs,
                 "download.connect_timeout_secs",
             );
         }
         if let Some(v) = config_map.get("download.chunk_size_kb") {
-            config.download_chunk_size_kb =
-                parse_field(v, config.download_chunk_size_kb, "download.chunk_size_kb");
+            config.transfer.download_chunk_size_kb = parse_field(
+                v,
+                config.transfer.download_chunk_size_kb,
+                "download.chunk_size_kb",
+            );
         }
         if let Some(mode) = config_map.get("download.cover_mode") {
             match mode.parse::<CoverMode>() {
-                Ok(m) => config.cover_mode = m,
+                Ok(m) => config.transfer.cover_mode = m,
                 Err(e) => tracing::warn!("Invalid cover_mode '{}': {}, using default", mode, e),
             }
         }
@@ -158,33 +170,39 @@ impl Config {
 
     fn load_upload_fields(config: &mut Config, config_map: &HashMap<String, String>) {
         if let Some(v) = config_map.get("upload.client_reuse_requests") {
-            config.upload_client_reuse_requests = parse_field(
+            config.transfer.upload_client_reuse_requests = parse_field(
                 v,
-                config.upload_client_reuse_requests,
+                config.transfer.upload_client_reuse_requests,
                 "upload.client_reuse_requests",
             );
         }
         if let Some(v) = config_map.get("upload.max_concurrent") {
-            config.upload_max_concurrent =
-                parse_field(v, config.upload_max_concurrent, "upload.max_concurrent");
+            config.transfer.upload_max_concurrent = parse_field(
+                v,
+                config.transfer.upload_max_concurrent,
+                "upload.max_concurrent",
+            );
         }
         if let Some(v) = config_map.get("upload.pool_max_idle_per_host") {
-            config.upload_pool_max_idle_per_host = parse_field(
+            config.transfer.upload_pool_max_idle_per_host = parse_field(
                 v,
-                config.upload_pool_max_idle_per_host,
+                config.transfer.upload_pool_max_idle_per_host,
                 "upload.pool_max_idle_per_host",
             );
         }
         if let Some(v) = config_map.get("upload.pool_idle_timeout_secs") {
-            config.upload_pool_idle_timeout_secs = parse_field(
+            config.transfer.upload_pool_idle_timeout_secs = parse_field(
                 v,
-                config.upload_pool_idle_timeout_secs,
+                config.transfer.upload_pool_idle_timeout_secs,
                 "upload.pool_idle_timeout_secs",
             );
         }
         if let Some(v) = config_map.get("upload.timeout_secs") {
-            config.upload_timeout_secs =
-                parse_field(v, config.upload_timeout_secs, "upload.timeout_secs");
+            config.transfer.upload_timeout_secs = parse_field(
+                v,
+                config.transfer.upload_timeout_secs,
+                "upload.timeout_secs",
+            );
         }
         if let Some(v) = config_map.get("upload.local_file_uri") {
             apply_bool_field(
@@ -197,16 +215,16 @@ impl Config {
 
     fn load_maintenance_fields(config: &mut Config, config_map: &HashMap<String, String>) {
         if let Some(v) = config_map.get("maintenance.memory_release_interval_requests") {
-            config.memory_release_interval_requests = parse_field(
+            config.maintenance.memory_release_interval_requests = parse_field(
                 v,
-                config.memory_release_interval_requests,
+                config.maintenance.memory_release_interval_requests,
                 "maintenance.memory_release_interval_requests",
             );
         }
         if let Some(v) = config_map.get("maintenance.db_analyze_interval_requests") {
-            config.db_analyze_interval_requests = parse_field(
+            config.maintenance.db_analyze_interval_requests = parse_field(
                 v,
-                config.db_analyze_interval_requests,
+                config.maintenance.db_analyze_interval_requests,
                 "maintenance.db_analyze_interval_requests",
             );
         }

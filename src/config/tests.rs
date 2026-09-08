@@ -18,33 +18,33 @@ fn load_temp_config(prefix: &str, content: &str) -> Config {
 #[test]
 fn download_pool_defaults_are_tunable() {
     let config = Config::default();
-    assert!(config.download_pool_max_idle_per_host > 0);
-    assert!(config.download_connect_timeout_secs > 0);
+    assert!(config.transfer.download_pool_max_idle_per_host > 0);
+    assert!(config.transfer.download_connect_timeout_secs > 0);
 }
 
 #[test]
 fn download_chunk_size_has_default() {
     let config = Config::default();
-    assert!(config.download_chunk_size_kb >= 64);
+    assert!(config.transfer.download_chunk_size_kb >= 64);
 }
 
 #[test]
 fn max_batch_download_tracks_has_default() {
     let config = Config::default();
-    assert_eq!(config.max_batch_download_tracks, 20);
+    assert_eq!(config.transfer.max_batch_download_tracks, 20);
 }
 
 #[test]
 fn memory_max_file_has_default() {
     let config = Config::default();
-    assert_eq!(config.memory_max_file_mb, 100);
+    assert_eq!(config.storage.memory_max_file_mb, 100);
 }
 
 #[test]
 fn max_disk_download_has_default() {
     let config = Config::default();
     assert!(
-        config.max_disk_download_mb >= 100,
+        config.storage.max_disk_download_mb >= 100,
         "default disk download cap should be at least 100 MB"
     );
 }
@@ -56,7 +56,7 @@ fn max_disk_download_parses() {
 
     let loaded = load_temp_config("disk_cap", content);
 
-    assert_eq!(loaded.max_disk_download_mb, 512);
+    assert_eq!(loaded.storage.max_disk_download_mb, 512);
 }
 
 #[test]
@@ -91,24 +91,24 @@ fn default_language_ignores_unsupported_locale() {
 #[test]
 fn upload_defaults_use_reuse_settings() {
     let config = Config::default();
-    assert_eq!(config.upload_client_reuse_requests, 0);
-    assert_eq!(config.upload_max_concurrent, 1);
-    assert_eq!(config.upload_pool_max_idle_per_host, 1);
-    assert_eq!(config.upload_pool_idle_timeout_secs, 300);
-    assert_eq!(config.upload_timeout_secs, 300);
+    assert_eq!(config.transfer.upload_client_reuse_requests, 0);
+    assert_eq!(config.transfer.upload_max_concurrent, 1);
+    assert_eq!(config.transfer.upload_pool_max_idle_per_host, 1);
+    assert_eq!(config.transfer.upload_pool_idle_timeout_secs, 300);
+    assert_eq!(config.transfer.upload_timeout_secs, 300);
 }
 
 #[test]
 fn maintenance_interval_defaults_exist() {
     let config = Config::default();
-    assert!(config.memory_release_interval_requests >= 1);
-    assert!(config.db_analyze_interval_requests >= 1);
+    assert!(config.maintenance.memory_release_interval_requests >= 1);
+    assert!(config.maintenance.db_analyze_interval_requests >= 1);
 }
 
 #[test]
 fn default_cover_mode_is_thumbnail() {
     let config = Config::default();
-    assert_eq!(config.cover_mode, CoverMode::Thumbnail);
+    assert_eq!(config.transfer.cover_mode, CoverMode::Thumbnail);
 }
 
 #[test]
@@ -121,14 +121,17 @@ maintenance.db_analyze_interval_requests=bad\n";
 
     let loaded = load_temp_config("config", content);
 
-    assert_eq!(loaded.memory_max_file_mb, default_config.memory_max_file_mb);
     assert_eq!(
-        loaded.memory_release_interval_requests,
-        default_config.memory_release_interval_requests
+        loaded.storage.memory_max_file_mb,
+        default_config.storage.memory_max_file_mb
     );
     assert_eq!(
-        loaded.db_analyze_interval_requests,
-        default_config.db_analyze_interval_requests
+        loaded.maintenance.memory_release_interval_requests,
+        default_config.maintenance.memory_release_interval_requests
+    );
+    assert_eq!(
+        loaded.maintenance.db_analyze_interval_requests,
+        default_config.maintenance.db_analyze_interval_requests
     );
 }
 
@@ -140,8 +143,8 @@ upload.pool_idle_timeout_secs=120\n";
 
     let loaded = load_temp_config("upload_pool", content);
 
-    assert_eq!(loaded.upload_pool_max_idle_per_host, 2);
-    assert_eq!(loaded.upload_pool_idle_timeout_secs, 120);
+    assert_eq!(loaded.transfer.upload_pool_max_idle_per_host, 2);
+    assert_eq!(loaded.transfer.upload_pool_idle_timeout_secs, 120);
 }
 
 #[test]
@@ -151,7 +154,7 @@ download.max_batch_tracks=42\n";
 
     let loaded = load_temp_config("batch_limit", content);
 
-    assert_eq!(loaded.max_batch_download_tracks, 42);
+    assert_eq!(loaded.transfer.max_batch_download_tracks, 42);
 }
 
 #[test]
@@ -161,7 +164,7 @@ upload.max_concurrent=6\n";
 
     let loaded = load_temp_config("upload_limit", content);
 
-    assert_eq!(loaded.upload_max_concurrent, 6);
+    assert_eq!(loaded.transfer.upload_max_concurrent, 6);
 }
 
 #[test]
@@ -171,7 +174,7 @@ upload.client_reuse_requests=0\n";
 
     let loaded = load_temp_config("upload_reuse", content);
 
-    assert_eq!(loaded.upload_client_reuse_requests, 0);
+    assert_eq!(loaded.transfer.upload_client_reuse_requests, 0);
 }
 
 #[test]
@@ -183,8 +186,8 @@ upload.pool_max_idle_per_host=not-a-number\n";
     let loaded = load_temp_config("upload_pool_bad", content);
 
     assert_eq!(
-        loaded.upload_pool_max_idle_per_host,
-        default_config.upload_pool_max_idle_per_host
+        loaded.transfer.upload_pool_max_idle_per_host,
+        default_config.transfer.upload_pool_max_idle_per_host
     );
 }
 
@@ -336,7 +339,7 @@ max_concurrent=7\n";
 
     let loaded = load_temp_config("max_concurrent_download", content);
 
-    assert_eq!(loaded.max_concurrent_downloads, 7);
+    assert_eq!(loaded.transfer.max_concurrent_downloads, 7);
 }
 
 #[test]
@@ -406,8 +409,11 @@ fn ini_text_last_entry_wins_on_duplicates() {
 #[test]
 fn task_limits_derive_from_concurrency() {
     let config = Config {
-        max_concurrent_downloads: 3,
-        upload_max_concurrent: 4,
+        transfer: crate::config::TransferSettings {
+            max_concurrent_downloads: 3,
+            upload_max_concurrent: 4,
+            ..Default::default()
+        },
         ..Config::default()
     };
     assert_eq!(config.message_task_limit(), 12);

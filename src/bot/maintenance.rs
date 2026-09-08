@@ -17,12 +17,12 @@ pub(super) fn collect_maintenance_signals(
     for (counter, interval, signal) in [
         (
             &counters.db_analyze,
-            config.db_analyze_interval_requests,
+            config.maintenance.db_analyze_interval_requests,
             MaintenanceSignal::AnalyzeDb,
         ),
         (
             &counters.memory_release,
-            config.memory_release_interval_requests,
+            config.maintenance.memory_release_interval_requests,
             MaintenanceSignal::ReleaseMemory,
         ),
         (

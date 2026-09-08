@@ -68,8 +68,11 @@ pub(super) async fn process_music_collection(
         return Ok(());
     }
 
-    let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
-    if exceeds_batch_download_limit(song_ids.len(), state.config.max_batch_download_tracks) {
+    let max_tracks = state.config.transfer.max_batch_download_tracks.max(1) as usize;
+    if exceeds_batch_download_limit(
+        song_ids.len(),
+        state.config.transfer.max_batch_download_tracks,
+    ) {
         let track_count = song_ids.len();
         send_reply_text(
             bot,
@@ -179,7 +182,7 @@ pub(super) async fn process_djradio_collection(
     radio_id: u64,
 ) -> ResponseResult<()> {
     let lang = resolve_chat_language_for(state, msg).await;
-    let max_tracks = state.config.max_batch_download_tracks.max(1) as usize;
+    let max_tracks = state.config.transfer.max_batch_download_tracks.max(1) as usize;
     let fetch_limit = max_tracks.saturating_add(1);
     let (total_programs, program_tracks) = match state
         .music_api
@@ -202,7 +205,10 @@ pub(super) async fn process_djradio_collection(
         return Ok(());
     }
 
-    if exceeds_batch_download_limit(total_programs, state.config.max_batch_download_tracks) {
+    if exceeds_batch_download_limit(
+        total_programs,
+        state.config.transfer.max_batch_download_tracks,
+    ) {
         send_reply_text(
             bot,
             msg,

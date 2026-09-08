@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{Config, StorageMode};
+use crate::config::{Config, StorageMode, StorageSettings};
 use crate::music_api::SongDetail;
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
@@ -192,9 +192,12 @@ async fn audio_buffer_is_disk() {
     disk_buffer.cleanup().await.expect("cleanup disk buffer");
 
     let config = Config {
-        storage_mode: StorageMode::Memory,
-        memory_buffer_mb: 0,
-        memory_max_file_mb: u64::MAX,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Memory,
+            memory_buffer_mb: 0,
+            memory_max_file_mb: u64::MAX,
+            ..Default::default()
+        },
         ..Config::default()
     };
 
@@ -219,10 +222,13 @@ async fn audio_buffer_hybrid_uses_disk_when_threshold_exceeded() {
     );
     let cache_dir = std::env::temp_dir();
     let config = Config {
-        storage_mode: StorageMode::Hybrid,
-        memory_threshold_mb: 1,
-        memory_max_file_mb: u64::MAX,
-        memory_buffer_mb: 0,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Hybrid,
+            memory_threshold_mb: 1,
+            memory_max_file_mb: u64::MAX,
+            memory_buffer_mb: 0,
+            ..Default::default()
+        },
         ..Config::default()
     };
 
@@ -250,10 +256,13 @@ async fn audio_buffer_hybrid_uses_disk_when_content_length_unknown() {
     );
     let cache_dir = std::env::temp_dir();
     let config = Config {
-        storage_mode: StorageMode::Hybrid,
-        memory_threshold_mb: 1024,
-        memory_max_file_mb: u64::MAX,
-        memory_buffer_mb: 0,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Hybrid,
+            memory_threshold_mb: 1024,
+            memory_max_file_mb: u64::MAX,
+            memory_buffer_mb: 0,
+            ..Default::default()
+        },
         ..Config::default()
     };
 
@@ -277,9 +286,12 @@ async fn audio_buffer_memory_uses_disk_when_content_length_unknown() {
     );
     let cache_dir = std::env::temp_dir();
     let config = Config {
-        storage_mode: StorageMode::Memory,
-        memory_max_file_mb: u64::MAX,
-        memory_buffer_mb: 0,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Memory,
+            memory_max_file_mb: u64::MAX,
+            memory_buffer_mb: 0,
+            ..Default::default()
+        },
         ..Config::default()
     };
 
@@ -347,7 +359,10 @@ async fn thumbnail_buffer_uses_disk_for_large_thumbnail() {
     );
     let cache_dir = std::env::temp_dir();
     let config = Config {
-        storage_mode: StorageMode::Hybrid,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Hybrid,
+            ..Default::default()
+        },
         ..Config::default()
     };
     let data = bytes::Bytes::from(vec![7u8; 6 * 1024 * 1024]);
@@ -373,9 +388,12 @@ async fn audio_buffer_public_facade_methods_remain_usable() {
     let cache_dir = std::env::temp_dir();
 
     let memory_config = Config {
-        storage_mode: StorageMode::Memory,
-        memory_buffer_mb: 0,
-        memory_max_file_mb: u64::MAX,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Memory,
+            memory_buffer_mb: 0,
+            memory_max_file_mb: u64::MAX,
+            ..Default::default()
+        },
         ..Config::default()
     };
 
@@ -673,7 +691,10 @@ async fn disk_written_bytes_tracks_sequential_writes() {
 #[tokio::test]
 async fn disk_buffers_with_same_display_name_get_unique_paths() {
     let config = Config {
-        storage_mode: StorageMode::Disk,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Disk,
+            ..Default::default()
+        },
         ..Config::default()
     };
     let cache_dir = std::env::temp_dir();
@@ -811,7 +832,10 @@ async fn thumbnail_disk_buffer_dropped_without_cleanup_removes_file() {
     let expected_path = cache_dir.join(&temp_name);
 
     let config = Config {
-        storage_mode: StorageMode::Disk,
+        storage: StorageSettings {
+            storage_mode: StorageMode::Disk,
+            ..Default::default()
+        },
         ..Config::default()
     };
 

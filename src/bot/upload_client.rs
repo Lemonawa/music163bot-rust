@@ -336,23 +336,25 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
 
     let mut client_builder = reqwest::Client::builder()
         .use_rustls_tls()
-        .timeout(std::time::Duration::from_secs(config.upload_timeout_secs))
-        .pool_max_idle_per_host(config.upload_pool_max_idle_per_host)
+        .timeout(std::time::Duration::from_secs(
+            config.transfer.upload_timeout_secs,
+        ))
+        .pool_max_idle_per_host(config.transfer.upload_pool_max_idle_per_host)
         .tcp_nodelay(true)
         .no_gzip()
         .user_agent("Go-http-client/2.0")
         .default_headers(reqwest::header::HeaderMap::new());
 
-    if config.upload_pool_idle_timeout_secs > 0 {
+    if config.transfer.upload_pool_idle_timeout_secs > 0 {
         client_builder = client_builder.pool_idle_timeout(std::time::Duration::from_secs(
-            config.upload_pool_idle_timeout_secs,
+            config.transfer.upload_pool_idle_timeout_secs,
         ));
     }
     tracing::debug!(
         "Upload diag: client settings pool_max_idle_per_host={}, pool_idle_timeout_secs={}, timeout_secs={}, api_url={}",
-        config.upload_pool_max_idle_per_host,
-        config.upload_pool_idle_timeout_secs,
-        config.upload_timeout_secs,
+        config.transfer.upload_pool_max_idle_per_host,
+        config.transfer.upload_pool_idle_timeout_secs,
+        config.transfer.upload_timeout_secs,
         sanitize_sensitive_text(api_url.as_str())
     );
 
@@ -371,7 +373,7 @@ pub(super) fn build_upload_bot(config: &Config) -> Result<UploadBotBundle> {
 pub(super) async fn acquire_upload_client(
     state: &Arc<BotState>,
 ) -> Result<(reqwest::Client, String)> {
-    let reuse_limit = state.config.upload_client_reuse_requests;
+    let reuse_limit = state.config.transfer.upload_client_reuse_requests;
 
     let (reason, reuse_count_before) = {
         let mut upload_state = state.upload_client_state.lock().await;

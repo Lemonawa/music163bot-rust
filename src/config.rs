@@ -182,9 +182,24 @@ pub struct Config {
     pub cache_dir: String,
     #[serde(flatten)]
     pub flags: ConfigFlags,
-    pub max_retry_times: u32,
-    pub download_timeout: u64,
 
+    /// Storage policy for temporary files, consulted by AudioBuffer and
+    /// ThumbnailBuffer only.
+    #[serde(flatten)]
+    pub storage: StorageSettings,
+
+    /// Concurrency and HTTP tuning for the download/upload pipeline.
+    #[serde(flatten)]
+    pub transfer: TransferSettings,
+
+    /// Background maintenance cadence, in handled requests.
+    #[serde(flatten)]
+    pub maintenance: MaintenanceSettings,
+}
+
+/// Where temporary audio/thumbnail files live while a request is in flight.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageSettings {
     /// Storage mode for temporary files: disk, memory, or hybrid
     pub storage_mode: StorageMode,
     /// Memory threshold in MB for hybrid mode (files larger than this use disk)
@@ -195,6 +210,23 @@ pub struct Config {
     pub memory_max_file_mb: u64,
     /// Maximum total download size in MB allowed when streaming to disk (hard cap to prevent runaway downloads)
     pub max_disk_download_mb: u64,
+}
+
+impl Default for StorageSettings {
+    fn default() -> Self {
+        Self {
+            storage_mode: StorageMode::Disk,
+            memory_threshold_mb: 100,
+            memory_buffer_mb: 100,
+            memory_max_file_mb: 100,
+            max_disk_download_mb: 2000,
+        }
+    }
+}
+
+/// Concurrency and HTTP tuning for the download/upload pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferSettings {
     /// Maximum concurrent downloads (lower = less memory, higher = more throughput)
     pub max_concurrent_downloads: u32,
     /// Maximum tracks allowed for a single playlist/album download request
@@ -217,10 +249,42 @@ pub struct Config {
     pub upload_pool_idle_timeout_secs: u64,
     /// Upload timeout (seconds)
     pub upload_timeout_secs: u64,
+}
+
+impl Default for TransferSettings {
+    fn default() -> Self {
+        Self {
+            max_concurrent_downloads: 4,
+            max_batch_download_tracks: 20,
+            download_pool_max_idle_per_host: 2,
+            download_connect_timeout_secs: 10,
+            download_chunk_size_kb: 256,
+            cover_mode: CoverMode::Thumbnail,
+            upload_client_reuse_requests: 0,
+            upload_max_concurrent: 1,
+            upload_pool_max_idle_per_host: 1,
+            upload_pool_idle_timeout_secs: 300,
+            upload_timeout_secs: 300,
+        }
+    }
+}
+
+/// Background maintenance cadence, in handled requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceSettings {
     /// Memory release interval in handled requests
     pub memory_release_interval_requests: u32,
     /// Database analyze interval in handled requests
     pub db_analyze_interval_requests: u32,
+}
+
+impl Default for MaintenanceSettings {
+    fn default() -> Self {
+        Self {
+            memory_release_interval_requests: 10,
+            db_analyze_interval_requests: 20,
+        }
+    }
 }
 
 impl Default for Config {
@@ -236,26 +300,9 @@ impl Default for Config {
             default_language: "zh".to_string(),
             cache_dir: "./downloads".to_string(),
             flags: ConfigFlags::default(),
-            max_retry_times: 3,
-            download_timeout: 60,
-            storage_mode: StorageMode::Disk,
-            memory_threshold_mb: 100,
-            memory_buffer_mb: 100,
-            memory_max_file_mb: 100,
-            max_disk_download_mb: 2000,
-            max_concurrent_downloads: 4,
-            max_batch_download_tracks: 20,
-            download_pool_max_idle_per_host: 2,
-            download_connect_timeout_secs: 10,
-            download_chunk_size_kb: 256,
-            cover_mode: CoverMode::Thumbnail,
-            upload_client_reuse_requests: 0,
-            upload_max_concurrent: 1,
-            upload_pool_max_idle_per_host: 1,
-            upload_pool_idle_timeout_secs: 300,
-            upload_timeout_secs: 300,
-            memory_release_interval_requests: 10,
-            db_analyze_interval_requests: 20,
+            storage: StorageSettings::default(),
+            transfer: TransferSettings::default(),
+            maintenance: MaintenanceSettings::default(),
         }
     }
 }
@@ -268,7 +315,7 @@ impl Config {
     /// Message-task semaphore size derived from download concurrency.
     #[must_use]
     pub fn message_task_limit(&self) -> usize {
-        (self.max_concurrent_downloads as usize)
+        (self.transfer.max_concurrent_downloads as usize)
             .saturating_mul(4)
             .clamp(8, 256)
     }
@@ -276,13 +323,14 @@ impl Config {
     /// Upload-task semaphore size derived from upload concurrency.
     #[must_use]
     pub fn upload_task_limit(&self) -> usize {
-        (self.upload_max_concurrent as usize).clamp(1, 64)
+        (self.transfer.upload_max_concurrent as usize).clamp(1, 64)
     }
 
     /// Download chunk size in bytes, floored at [`MIN_DOWNLOAD_CHUNK_BYTES`].
     #[must_use]
     pub fn download_chunk_bytes(&self) -> usize {
-        self.download_chunk_size_kb
+        self.transfer
+            .download_chunk_size_kb
             .saturating_mul(1024)
             .max(MIN_DOWNLOAD_CHUNK_BYTES)
     }

@@ -18,7 +18,7 @@ impl ThumbnailBuffer {
         cache_dir: &str,
         filename: &str,
     ) -> Result<Self> {
-        let use_memory = match config.storage_mode {
+        let use_memory = match config.storage.storage_mode {
             StorageMode::Disk => false,
             StorageMode::Memory | StorageMode::Hybrid => {
                 let size_mb = data.len() as u64 / (1024 * 1024);

@@ -96,7 +96,7 @@ pub(super) async fn download_and_send_music(p: &DownloadAndSendParams<'_>) -> Re
         file_ext
     ));
 
-    let cover_mode = ctx.state.config.cover_mode;
+    let cover_mode = ctx.state.config.transfer.cover_mode;
     let cover_policy = resolve_cover_policy(cover_mode);
     let download_thumbnail = cover_policy.download_thumbnail;
     let download_cover = should_download_cover(cover_policy);
@@ -583,9 +583,9 @@ async fn download_audio(
 
     let mut stream = response.bytes_stream();
     let max_download_size = if audio_buffer.is_memory() {
-        max_download_size_bytes(state.config.memory_max_file_mb)
+        max_download_size_bytes(state.config.storage.memory_max_file_mb)
     } else {
-        max_download_size_bytes(state.config.max_disk_download_mb)
+        max_download_size_bytes(state.config.storage.max_disk_download_mb)
     };
 
     let downloaded = if audio_buffer.is_disk() {
