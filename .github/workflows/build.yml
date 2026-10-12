@@ -71,7 +71,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
           targets: ${{ matrix.platform.target }}
@@ -170,7 +170,7 @@ jobs:
 
       - name: Upload artifacts (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.platform.os_name }}
           path: ${{ steps.package-unix.outputs.archive }}
@@ -178,7 +178,7 @@ jobs:
 
       - name: Upload artifacts (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.platform.os_name }}
           path: ${{ steps.package-windows.outputs.archive }}
@@ -186,7 +186,7 @@ jobs:
 
       - name: Upload refresh_hires tool (Unix)
         if: runner.os != 'Windows' && steps.package-unix.outputs.tool_archive != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: refresh_hires-${{ matrix.platform.os_name }}
           path: ${{ steps.package-unix.outputs.tool_archive }}
@@ -194,7 +194,7 @@ jobs:
 
       - name: Upload refresh_hires tool (Windows)
         if: runner.os == 'Windows' && steps.package-windows.outputs.tool_archive != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: refresh_hires-${{ matrix.platform.os_name }}
           path: ${{ steps.package-windows.outputs.tool_archive }}
@@ -215,13 +215,13 @@ jobs:
           persist-credentials: false
 
       - name: Download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           merge-multiple: false
 
       - name: Create Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: artifacts/**/*
           draft: false
