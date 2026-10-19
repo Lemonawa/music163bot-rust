@@ -12,12 +12,12 @@ use super::permits::acquire_upload_permit;
 use super::replies::{
     require_command_args_or_reply, send_reply_html, send_reply_message, send_reply_text,
 };
-use super::target_resolution::parse_song_id_or_search_first_result;
+use super::target_resolution::resolve_song_or_search_first_result;
 use super::upload_client::{RawDocumentParams, acquire_upload_client, raw_send_document_bytes};
 use super::wiring::BotState;
 use crate::error::sanitized_error_chain;
 use crate::i18n::{self, ChatLanguage};
-use crate::music_api::format_artists;
+use crate::music_api::{SearchSong, SongDetail, format_artists};
 use crate::telegram::TelegramBot as Bot;
 use crate::telegram::{
     CallbackQuery, ChatId, InlineQuery, InlineQueryResult, InlineQueryResultArticle,
@@ -41,11 +41,12 @@ pub(super) async fn handle_lyric_command(
         return Ok(());
     };
 
-    let Some(music_id) =
-        parse_song_id_or_search_first_result(bot, msg, state, &args, "Lyric search failed").await?
+    let Some(resolved) =
+        resolve_song_or_search_first_result(bot, msg, state, &args, "Lyric search failed").await?
     else {
         return Ok(());
     };
+    let music_id = resolved.id;
 
     let status_msg = send_reply_message(bot, msg, i18n::tr(&lang, "lyric_searching")).await?;
 
@@ -63,6 +64,7 @@ pub(super) async fn handle_lyric_command(
                 &lang,
                 &status_msg,
                 music_id,
+                resolved.search_song.as_ref(),
                 lyric,
                 detail_result,
             )
@@ -86,6 +88,7 @@ async fn handle_lyric_success(
     lang: &ChatLanguage,
     status_msg: &Message,
     music_id: u64,
+    search_song: Option<&SearchSong>,
     lyric: String,
     detail_result: std::result::Result<Arc<crate::music_api::SongDetail>, crate::error::BotError>,
 ) -> ResponseResult<()> {
@@ -112,8 +115,7 @@ async fn handle_lyric_success(
         }
     };
 
-    let artists = format_artists(song_detail.ar.as_deref().unwrap_or(&[]));
-    let lrc_filename = clean_filename(&format!("{} - {}.lrc", artists, song_detail.name));
+    let lrc_filename = build_lyric_filename(search_song, &song_detail);
     let lyric_bytes = Bytes::from(lyric.into_bytes());
 
     let (client_result, permit_result) = tokio::join!(
@@ -190,6 +192,23 @@ async fn handle_lyric_success(
     }
 
     Ok(())
+}
+
+pub(super) fn build_lyric_filename(
+    search_song: Option<&SearchSong>,
+    song_detail: &SongDetail,
+) -> String {
+    let (title, artists) = search_song.map_or_else(
+        || {
+            (
+                song_detail.name.as_str(),
+                format_artists(song_detail.ar.as_deref().unwrap_or(&[])),
+            )
+        },
+        |song| (song.name.as_str(), format_artists(&song.artists)),
+    );
+
+    clean_filename(&format!("{artists} - {title}.lrc"))
 }
 
 pub(super) async fn handle_status_command(

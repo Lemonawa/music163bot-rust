@@ -38,7 +38,8 @@ use super::music_ui::{
 use super::permits::{acquire_download_leader, acquire_download_permit};
 #[cfg(test)]
 use super::support::{
-    CLEARALLCACHE_CONFIRM_WINDOW, build_caption, format_bitrate_kbps, prune_expired_confirmations,
+    CLEARALLCACHE_CONFIRM_WINDOW, build_caption, build_lyric_filename, format_bitrate_kbps,
+    prune_expired_confirmations,
 };
 #[cfg(test)]
 use super::tagging::{apply_tags_in_blocking, format_perf, should_refresh_upload_client};
@@ -141,6 +142,7 @@ fn critical_path_stage_labels() -> [&'static str; 2] {
 mod command_ui;
 mod concurrency;
 mod lang_ui;
+mod lyrics;
 mod scheduling;
 mod telegram;
 mod upload;

@@ -5,6 +5,7 @@ use super::replies::send_reply_text;
 use super::wiring::BotState;
 use crate::error::sanitized_error_chain;
 use crate::i18n;
+use crate::music_api::SearchSong;
 use crate::telegram::TelegramBot as Bot;
 use crate::telegram::{Message, ResponseResult};
 use crate::utils::MusicCollectionTarget;
@@ -16,6 +17,12 @@ pub(super) enum ParsedMusicTarget {
     Song(u64),
     Program(u64),
     Collection(MusicCollectionTarget),
+}
+
+#[derive(Debug)]
+pub(super) struct ResolvedSong {
+    pub(super) id: u64,
+    pub(super) search_song: Option<SearchSong>,
 }
 
 pub(super) fn parse_direct_music_target(text: &str) -> Option<ParsedMusicTarget> {
@@ -45,18 +52,18 @@ pub(super) async fn dispatch_parsed_music_target(
     }
 }
 
-pub(super) async fn search_first_song_id_or_reply(
+async fn search_first_song_or_reply(
     bot: &Bot,
     msg: &Message,
     state: &Arc<BotState>,
     keyword: &str,
     log_context: &str,
-) -> ResponseResult<Option<u64>> {
+) -> ResponseResult<Option<SearchSong>> {
     let lang = resolve_chat_language_for(state, msg).await;
     match state.music_api.search_songs(keyword, 1).await {
         Ok(songs) => {
-            if let Some(song) = songs.first() {
-                Ok(Some(song.id))
+            if let Some(song) = songs.into_iter().next() {
+                Ok(Some(song))
             } else {
                 send_reply_text(bot, msg, i18n::tr(&lang, "search_no_results")).await?;
                 Ok(None)
@@ -70,6 +77,30 @@ pub(super) async fn search_first_song_id_or_reply(
     }
 }
 
+pub(super) async fn resolve_song_or_search_first_result(
+    bot: &Bot,
+    msg: &Message,
+    state: &Arc<BotState>,
+    text: &str,
+    log_context: &str,
+) -> ResponseResult<Option<ResolvedSong>> {
+    if let Some(id) = parse_music_id(text) {
+        Ok(Some(ResolvedSong {
+            id,
+            search_song: None,
+        }))
+    } else {
+        Ok(
+            search_first_song_or_reply(bot, msg, state, text, log_context)
+                .await?
+                .map(|search_song| ResolvedSong {
+                    id: search_song.id,
+                    search_song: Some(search_song),
+                }),
+        )
+    }
+}
+
 pub(super) async fn parse_song_id_or_search_first_result(
     bot: &Bot,
     msg: &Message,
@@ -77,9 +108,7 @@ pub(super) async fn parse_song_id_or_search_first_result(
     text: &str,
     log_context: &str,
 ) -> ResponseResult<Option<u64>> {
-    if let Some(music_id) = parse_music_id(text) {
-        Ok(Some(music_id))
-    } else {
-        search_first_song_id_or_reply(bot, msg, state, text, log_context).await
-    }
+    resolve_song_or_search_first_result(bot, msg, state, text, log_context)
+        .await
+        .map(|resolved| resolved.map(|song| song.id))
 }
