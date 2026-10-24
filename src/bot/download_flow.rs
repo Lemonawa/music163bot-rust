@@ -581,6 +581,52 @@ pub(super) fn max_download_size_bytes(mb: u64) -> u64 {
     mb.saturating_mul(1024).saturating_mul(1024)
 }
 
+/// Copy a one-way download into a local file without flushing partial buffers
+/// on read stalls. Flush the remainder after a complete, size-checked response.
+/// Unlike a request/response proxy, the reader cannot depend on this file's
+/// buffered writes, so a stalled reader needs no flush.
+async fn write_audio_stream_to_disk<R>(
+    reader: R,
+    file: &mut tokio::fs::File,
+    chunk_bytes: usize,
+    max_download_size: u64,
+) -> anyhow::Result<u64>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+    let mut reader = reader.take(max_download_size.saturating_add(1));
+    let mut writer = tokio::io::BufWriter::with_capacity(chunk_bytes, file);
+    let mut downloaded = 0u64;
+    loop {
+        let chunk = reader
+            .fill_buf()
+            .await
+            .context("Failed to read audio download")?;
+        if chunk.is_empty() {
+            break;
+        }
+        downloaded += chunk.len() as u64;
+        if downloaded > max_download_size {
+            anyhow::bail!("Download exceeds maximum allowed size ({max_download_size} bytes)");
+        }
+        writer
+            .write_all(chunk)
+            .await
+            .context("Failed to write audio download to disk")?;
+        let consumed = chunk.len();
+        reader.consume(consumed);
+        // Buffered reads and writes can both be immediately ready.
+        tokio::task::consume_budget().await;
+    }
+    writer
+        .flush()
+        .await
+        .context("Failed to flush disk writer")?;
+    Ok(downloaded)
+}
+
 async fn download_audio(
     state: &Arc<BotState>,
     url: &str,
@@ -619,26 +665,12 @@ async fn download_audio(
         let chunk_bytes = state.config.download_chunk_bytes();
         let stream = stream.map_err(std::io::Error::other);
         let reader = tokio::io::BufReader::with_capacity(chunk_bytes, StreamReader::new(stream));
-        let mut limited_reader =
-            tokio::io::AsyncReadExt::take(reader, max_download_size.saturating_add(1));
         let file = audio_buffer
             .disk_file_mut()
             .ok_or_else(|| anyhow::anyhow!("Disk buffer missing file handle"))?;
-        let mut writer = tokio::io::BufWriter::with_capacity(chunk_bytes, file);
-        let downloaded = tokio::io::copy_buf(&mut limited_reader, &mut writer)
+        write_audio_stream_to_disk(reader, file, chunk_bytes, max_download_size)
             .await
-            .context("Failed to stream download to disk")?;
-
-        if downloaded > max_download_size {
-            return Err(anyhow::anyhow!(
-                "Download exceeds maximum allowed size ({max_download_size} bytes)"
-            ));
-        }
-
-        tokio::io::AsyncWriteExt::flush(&mut writer)
-            .await
-            .context("Failed to flush disk writer")?;
-        downloaded
+            .context("Failed to stream download to disk")?
     } else {
         let mut downloaded = 0u64;
         while let Some(chunk) = stream.next().await {
@@ -765,6 +797,155 @@ mod tests {
         lang_ui::{test_bot_state, test_message},
         telegram::MockTelegramPollingServer,
     };
+
+    async fn disk_buffer() -> AudioBuffer {
+        AudioBuffer::new_disk(
+            format!("download_{}.mp3", uuid::Uuid::new_v4()),
+            std::env::temp_dir().to_str().unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    fn stalled_audio_reader() -> (
+        impl tokio::io::AsyncBufRead + Unpin,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let first = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"abcdefgh"))
+        });
+        let last = futures_util::stream::once(async move {
+            waiting_tx.send(()).unwrap();
+            resume_rx.await.unwrap();
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"ijkl"))
+        });
+        (
+            StreamReader::new(first.chain(last).boxed()),
+            waiting_rx,
+            resume_tx,
+        )
+    }
+
+    #[tokio::test]
+    async fn disk_download_keeps_buffered_bytes_during_read_stall_and_flushes_at_eof() {
+        let mut buffer = disk_buffer().await;
+        let path = buffer.path().unwrap().to_path_buf();
+        let (reader, waiting, resume) = stalled_audio_reader();
+        let copy = write_audio_stream_to_disk(reader, buffer.disk_file_mut().unwrap(), 16, 12);
+        tokio::pin!(copy);
+        tokio::select! {
+            result = &mut copy => panic!("copy completed before the reader resumed: {result:?}"),
+            result = waiting => result.unwrap(),
+        }
+        assert_eq!(tokio::fs::metadata(&path).await.unwrap().len(), 0);
+        resume.send(()).unwrap();
+        assert_eq!(copy.await.unwrap(), 12);
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"abcdefghijkl");
+    }
+
+    #[tokio::test]
+    async fn disk_download_preserves_bytes_across_buffers_at_exact_size_limit() {
+        let data: Vec<u8> = (0..65_537).map(|i| i as u8).collect();
+        let mut buffer = disk_buffer().await;
+        let reader = tokio::io::BufReader::with_capacity(73, std::io::Cursor::new(&data));
+        let copied = write_audio_stream_to_disk(
+            reader,
+            buffer.disk_file_mut().unwrap(),
+            257,
+            data.len() as u64,
+        )
+        .await
+        .unwrap();
+        assert_eq!(copied, data.len() as u64);
+        assert_eq!(tokio::fs::read(buffer.path().unwrap()).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn oversized_disk_download_fails_and_removes_partial_file() {
+        let mut buffer = disk_buffer().await;
+        let path = buffer.path().unwrap().to_path_buf();
+        let reader = tokio::io::BufReader::with_capacity(4, &b"too much audio"[..]);
+        let error = write_audio_stream_to_disk(reader, buffer.disk_file_mut().unwrap(), 4, 8)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("maximum allowed size (8 bytes)"));
+        assert!(tokio::fs::metadata(&path).await.unwrap().len() <= 8);
+        drop(buffer);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn disk_download_read_failure_is_reported_and_partial_file_is_removed() {
+        let mut buffer = disk_buffer().await;
+        let path = buffer.path().unwrap().to_path_buf();
+        let reader = StreamReader::new(futures_util::stream::iter([
+            Ok(bytes::Bytes::from_static(b"partial audio")),
+            Err(std::io::Error::other("interrupted response")),
+        ]));
+        let error = write_audio_stream_to_disk(reader, buffer.disk_file_mut().unwrap(), 4, 100)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("interrupted response"));
+        drop(buffer);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn disk_download_reports_file_io_errors_including_final_flush() {
+        let buffer = disk_buffer().await;
+        for capacity in [4, 16] {
+            let mut file = tokio::fs::File::open(buffer.path().unwrap()).await.unwrap();
+            let error = write_audio_stream_to_disk(&b"audio data"[..], &mut file, capacity, 100)
+                .await
+                .unwrap_err();
+            // Tokio can report an asynchronous write failure at the next flush.
+            assert!(error.downcast_ref::<std::io::Error>().is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn disk_download_yields_while_both_buffers_are_ready() {
+        let mut buffer = disk_buffer().await;
+        let chunks_read = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = Arc::clone(&chunks_read);
+        let stream = futures_util::stream::iter((0..1000).map(move |_| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"data"))
+        }));
+        let reader = StreamReader::new(stream);
+        tokio::select! {
+            biased;
+            result = write_audio_stream_to_disk(reader, buffer.disk_file_mut().unwrap(), 4096, 4000) => {
+                panic!("copy did not yield before completion: {result:?}");
+            }
+            _ = std::future::ready(()) => {}
+        }
+        let count = chunks_read.load(Ordering::Relaxed);
+        assert!(
+            count > 0 && count < 1000,
+            "copied {count} chunks before yielding"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_stalled_disk_download_removes_partial_file() {
+        let mut buffer = disk_buffer().await;
+        let path = buffer.path().unwrap().to_path_buf();
+        let (reader, waiting, _resume) = stalled_audio_reader();
+        {
+            let copy = write_audio_stream_to_disk(reader, buffer.disk_file_mut().unwrap(), 4, 100);
+            tokio::pin!(copy);
+            tokio::select! {
+                result = &mut copy => panic!("copy completed before cancellation: {result:?}"),
+                result = waiting => result.unwrap(),
+            }
+        }
+        drop(buffer);
+        assert!(!path.exists());
+    }
 
     #[tokio::test]
     async fn rate_limited_upload_replays_prepared_audio_and_keyboard_in_memory_and_disk_modes() {
