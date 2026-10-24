@@ -9,9 +9,14 @@ on:
 permissions:
   contents: read
 
+# Release builds consume the caches populated by CI on main.
+cache-mode: read
+
+# Keep each release run, including runs for different tags.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   build:
@@ -77,7 +82,7 @@ jobs:
           targets: ${{ matrix.platform.target }}
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: rust-${{ runner.os }}-${{ matrix.platform.target }}
           save-if: ${{ false }}
@@ -207,6 +212,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
+    cache-mode: none
 
     steps:
       - name: Checkout code
