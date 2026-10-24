@@ -3,18 +3,18 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Instant as StdInstant;
 
 use anyhow::{Context, Result};
-use sysinfo::System;
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
 use tokio::fs::File;
 use uuid::Uuid;
 
-use super::AudioBuffer;
+use super::{AudioBuffer, MemoryReservation};
 use crate::config::{Config, StorageMode};
 
 /// Cached System instance with last-refresh timestamp for throttling.
-static SYSTEM: LazyLock<Mutex<(System, StdInstant)>> = LazyLock::new(|| {
+static SYSTEM: LazyLock<Mutex<(System, StdInstant, u64)>> = LazyLock::new(|| {
     let mut sys = System::new();
-    sys.refresh_memory();
-    Mutex::new((sys, StdInstant::now()))
+    let available = sample_available_memory(&mut sys);
+    Mutex::new((sys, StdInstant::now(), available))
 });
 
 /// Minimum interval between memory refreshes (500ms).
@@ -31,7 +31,16 @@ impl AudioBuffer {
         filename: String,
         cache_dir: &str,
     ) -> Result<Self> {
-        if Self::should_use_memory(config, content_length) {
+        let reservation = if Self::should_use_memory(config, content_length) {
+            MemoryReservation::try_acquire(
+                content_length,
+                Self::available_memory_bytes(),
+                config.storage.memory_buffer_mb.saturating_mul(1024 * 1024),
+            )
+        } else {
+            None
+        };
+        if let Some(reservation) = reservation {
             let capacity = if content_length > 0 {
                 usize::try_from(content_length).unwrap_or(usize::MAX)
             } else {
@@ -46,6 +55,7 @@ impl AudioBuffer {
             Ok(Self::Memory {
                 data: Vec::with_capacity(capacity),
                 filename,
+                reservation: Some(reservation),
             })
         } else {
             // The display name (sent to Telegram) intentionally omits the music_id, so two
@@ -98,105 +108,76 @@ impl AudioBuffer {
         })
     }
 
-    /// Determine if memory mode should be used based on configuration and system state.
+    /// File limits use bytes so fractional MiB cannot slip over the configured cap.
     fn should_use_memory(config: &Config, content_length: u64) -> bool {
-        match config.storage.storage_mode {
-            StorageMode::Disk => false,
-            StorageMode::Memory => {
-                if content_length == 0 {
-                    tracing::debug!(
-                        "Memory mode: content_length unknown, falling back to disk to avoid unbounded buffering"
-                    );
-                    return false;
-                }
-
-                let file_size_mb = content_length / (1024 * 1024);
-                if file_size_mb > config.storage.memory_max_file_mb {
-                    tracing::debug!(
-                        "Memory mode: file size {}MB exceeds max {}MB, using disk",
-                        file_size_mb,
-                        config.storage.memory_max_file_mb
-                    );
-                    return false;
-                }
-
-                let available_mb = Self::get_available_memory_mb();
-                let required_mb = file_size_mb + config.storage.memory_buffer_mb;
-
-                if available_mb >= required_mb {
-                    true
-                } else {
-                    tracing::error!(
-                        "Memory mode requested but insufficient memory: available={}MB, required={}MB. Falling back to disk.",
-                        available_mb,
-                        required_mb
-                    );
-                    false
+        content_length > 0
+            && content_length
+                <= config
+                    .storage
+                    .memory_max_file_mb
+                    .saturating_mul(1024 * 1024)
+            && match config.storage.storage_mode {
+                StorageMode::Disk => false,
+                StorageMode::Memory => true,
+                StorageMode::Hybrid => {
+                    content_length
+                        <= config
+                            .storage
+                            .memory_threshold_mb
+                            .saturating_mul(1024 * 1024)
                 }
             }
-            StorageMode::Hybrid => {
-                if content_length == 0 {
-                    tracing::debug!(
-                        "Hybrid mode: content_length unknown, using disk to avoid unbounded buffering"
-                    );
-                    return false;
-                }
-
-                let file_size_mb = content_length / (1024 * 1024);
-
-                if file_size_mb > config.storage.memory_threshold_mb {
-                    tracing::debug!(
-                        "Hybrid mode: file size {}MB exceeds threshold {}MB, using disk",
-                        file_size_mb,
-                        config.storage.memory_threshold_mb
-                    );
-                    return false;
-                }
-
-                if file_size_mb > config.storage.memory_max_file_mb {
-                    tracing::debug!(
-                        "Hybrid mode: file size {}MB exceeds max {}MB, using disk",
-                        file_size_mb,
-                        config.storage.memory_max_file_mb
-                    );
-                    return false;
-                }
-
-                let available_mb = Self::get_available_memory_mb();
-                let required_mb = file_size_mb + config.storage.memory_buffer_mb;
-
-                if available_mb >= required_mb {
-                    tracing::debug!(
-                        "Hybrid mode: using memory (file={}MB, available={}MB, buffer={}MB)",
-                        file_size_mb,
-                        available_mb,
-                        config.storage.memory_buffer_mb
-                    );
-                    true
-                } else {
-                    tracing::debug!(
-                        "Hybrid mode: insufficient memory (available={}MB < required={}MB), using disk",
-                        available_mb,
-                        required_mb
-                    );
-                    false
-                }
-            }
-        }
     }
 
-    /// Get available system memory in MB (throttled to avoid frequent syscalls).
     pub fn get_available_memory_mb() -> u64 {
-        if let Ok(mut guard) = SYSTEM.lock() {
-            let (system, last_refresh) = &mut *guard;
-            if last_refresh.elapsed() >= MEMORY_REFRESH_INTERVAL {
-                system.refresh_memory();
-                *last_refresh = StdInstant::now();
-            }
-            system.available_memory() / (1024 * 1024)
-        } else {
-            tracing::warn!("Failed to lock SYSTEM mutex, using conservative memory estimate");
-            512
+        Self::available_memory_bytes() / (1024 * 1024)
+    }
+
+    fn available_memory_bytes() -> u64 {
+        let Ok(mut guard) = SYSTEM.lock() else {
+            return 0;
+        };
+        let (system, last_refresh, available) = &mut *guard;
+        if last_refresh.elapsed() >= MEMORY_REFRESH_INTERVAL {
+            *available = sample_available_memory(system);
+            *last_refresh = StdInstant::now();
         }
+        *available
+    }
+}
+
+fn sample_available_memory(system: &mut System) -> u64 {
+    system.refresh_memory();
+    let process_limits = get_current_pid().ok().and_then(|pid| {
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            false,
+            ProcessRefreshKind::nothing(),
+        );
+        system
+            .process(pid)
+            .and_then(|process| process.cgroup_limits())
+    });
+    let limits = process_limits.or_else(|| system.cgroup_limits());
+    effective_available_memory(
+        system.available_memory(),
+        limits.map(|limits| limits.free_memory),
+    )
+}
+
+fn effective_available_memory(host: u64, cgroup: Option<u64>) -> u64 {
+    cgroup.map_or(host, |free| free.min(host))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_memory_is_bounded_by_both_host_and_cgroup() {
+        assert_eq!(effective_available_memory(8192, Some(128)), 128);
+        assert_eq!(effective_available_memory(64, Some(128)), 64);
+        assert_eq!(effective_available_memory(8192, Some(0)), 0);
+        assert_eq!(effective_available_memory(8192, None), 8192);
     }
 }

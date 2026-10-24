@@ -88,6 +88,7 @@ fn sample_song_detail() -> SongDetail {
 
 fn memory_buffer(data: Vec<u8>, filename: &str) -> AudioBuffer {
     AudioBuffer::Memory {
+        reservation: None,
         data,
         filename: filename.to_string(),
     }
@@ -421,6 +422,7 @@ async fn audio_buffer_public_facade_methods_remain_usable() {
         .expect("memory bytes for upload");
     assert_eq!(bytes.as_ref(), b"abc");
     let _ = AudioBuffer::Memory {
+        reservation: None,
         data: vec![1, 2, 3],
         filename: "into.mp3".to_string(),
     }

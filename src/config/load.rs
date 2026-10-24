@@ -26,6 +26,12 @@ impl Config {
             return Err(anyhow::anyhow!("BOT_TOKEN is required"));
         }
 
+        if config.transfer.max_concurrent_downloads == 0 {
+            return Err(anyhow::anyhow!(
+                "download.max_concurrent must be greater than zero"
+            ));
+        }
+
         Ok(config)
     }
 

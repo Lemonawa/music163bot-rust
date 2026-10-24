@@ -8,16 +8,13 @@ use crate::telegram::{
     ReplyParameters, ResponseResult,
 };
 use crate::telegram::{Chat, User};
-use dashmap::DashMap;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
-/// Locales compiled into the binary (from `locales/*.yml`). Leaked on
-/// purpose: the locale set is static for the process lifetime.
-pub(super) fn locales() -> Vec<&'static str> {
-    crate::_rust_i18n_available_locales()
-        .into_iter()
-        .map(|l| Box::leak(l.into_owned().into_boxed_str()) as &'static str)
-        .collect()
+pub(super) fn locales() -> &'static [&'static str] {
+    crate::i18n::available_locales()
 }
 
 /// Resolve the Chat Language for an incoming message: cached Language
@@ -54,39 +51,85 @@ pub(super) async fn resolve_inline_language_for(state: &BotState, from: &User) -
     .0
 }
 
-/// Single lookup behind the Chat Language seam: shared override cache first,
-/// then the database (re-caching on hit).
+const LANGUAGE_CACHE_SHARDS: usize = 64;
+const LANGUAGE_CACHE_CAPACITY: usize = 4096 / LANGUAGE_CACHE_SHARDS;
+const LANGUAGE_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Positive and negative lookups share a bounded cache. The lock also orders
+/// database reads and writes so an old lookup cannot overwrite a new setting.
+type LanguageEntries = HashMap<i64, (Instant, Option<String>)>;
+
+pub(super) struct ChatLanguageCache {
+    shards: [Mutex<LanguageEntries>; LANGUAGE_CACHE_SHARDS],
+}
+
+impl Default for ChatLanguageCache {
+    fn default() -> Self {
+        Self {
+            shards: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl ChatLanguageCache {
+    pub(super) fn entries(&self, key: i64) -> &Mutex<LanguageEntries> {
+        &self.shards[key.unsigned_abs() as usize % LANGUAGE_CACHE_SHARDS]
+    }
+}
+
+fn cache_override(
+    entries: &mut HashMap<i64, (Instant, Option<String>)>,
+    key: i64,
+    value: Option<String>,
+) {
+    if entries.len() >= LANGUAGE_CACHE_CAPACITY && !entries.contains_key(&key) {
+        entries.retain(|_, (at, _)| at.elapsed() < LANGUAGE_CACHE_TTL);
+        if entries.len() >= LANGUAGE_CACHE_CAPACITY
+            && let Some(key) = entries.keys().next().copied()
+        {
+            entries.remove(&key);
+        }
+    }
+    entries.insert(key, (Instant::now(), value));
+}
+
 async fn cached_override(
     database: &Database,
-    chat_languages: &DashMap<i64, String>,
+    cache: &ChatLanguageCache,
     key: i64,
 ) -> Option<String> {
-    match chat_languages.get(&key) {
-        Some(entry) => Some(entry.value().clone()),
-        None => match database.get_chat_language(key).await.ok().flatten() {
-            Some(lang) => {
-                chat_languages.insert(key, lang.clone());
-                Some(lang)
-            }
-            None => None,
-        },
+    let mut entries = cache.entries(key).lock().await;
+    if let Some((at, value)) = entries.get(&key)
+        && at.elapsed() < LANGUAGE_CACHE_TTL
+    {
+        return value.clone();
+    }
+    match database.get_chat_language(key).await {
+        Ok(value) => {
+            cache_override(&mut entries, key, value.clone());
+            value
+        }
+        Err(error) => {
+            // An unavailable database is not evidence that the chat uses Auto.
+            tracing::warn!("Failed to read chat language: {}", error);
+            None
+        }
     }
 }
 
-/// Persist a Language Override: cache and database stay coherent here, in
-/// the one place that writes them.
 async fn set_override(state: &BotState, chat_id: i64, locale: &str) {
-    state.chat_languages.insert(chat_id, locale.to_string());
-    if let Err(e) = state.database.set_chat_language(chat_id, locale).await {
-        tracing::warn!("Failed to persist chat language for {chat_id}: {}", e);
+    let mut entries = state.chat_languages.entries(chat_id).lock().await;
+    match state.database.set_chat_language(chat_id, locale).await {
+        Ok(()) => cache_override(&mut entries, chat_id, Some(locale.to_string())),
+        Err(error) => tracing::warn!("Failed to persist chat language for {chat_id}: {}", error),
     }
 }
 
-/// Clear a Language Override (Auto): cache and database stay coherent here.
 async fn clear_override(state: &BotState, chat_id: i64) {
-    state.chat_languages.remove(&chat_id);
-    if let Err(e) = state.database.clear_chat_language(chat_id).await {
-        tracing::warn!("Failed to clear chat language: {}", e);
+    let mut entries = state.chat_languages.entries(chat_id).lock().await;
+    match state.database.clear_chat_language(chat_id).await {
+        Ok(()) => cache_override(&mut entries, chat_id, None),
+        Err(error) => tracing::warn!("Failed to clear chat language: {}", error),
     }
 }
 
@@ -164,7 +207,7 @@ pub async fn register_bot_commands(bot: &Bot) {
         return;
     }
 
-    for locale in locales() {
+    for &locale in locales() {
         if locale == "zh" {
             continue; // zh is the default list
         }
@@ -221,8 +264,13 @@ pub(super) async fn handle_lang_command(
                 .await?;
         }
         Some(arg) => {
-            let user_id = authorize_lang_change(bot, msg, state, &lang).await?;
-            apply_lang_argument(bot, msg, state, &lang, &arg, user_id).await?;
+            if authorize_lang_change(bot, msg, state, &lang)
+                .await?
+                .is_none()
+            {
+                return Ok(());
+            }
+            apply_lang_argument(bot, msg, state, &lang, &arg).await?;
         }
     }
 
@@ -260,7 +308,6 @@ async fn apply_lang_argument(
     state: &Arc<BotState>,
     lang: &ChatLanguage,
     arg: &str,
-    _user_id: Option<i64>,
 ) -> ResponseResult<()> {
     match i18n::parse_lang_argument(arg) {
         Ok(Some(locale)) => {
@@ -308,15 +355,7 @@ pub(super) async fn handle_lang_callback(
 
     let lang = resolve_chat_language_for(state, chat_msg).await;
 
-    if action == "auto" {
-        clear_override(state, chat_msg.chat.id.0).await;
-        bot.answer_callback_query(query.id.clone())
-            .text(i18n::tr(&lang, "lang_auto"))
-            .await?;
-        return Ok(true);
-    }
-
-    if !i18n::is_supported_locale(action) {
+    if action != "auto" && !i18n::is_supported_locale(action) {
         bot.answer_callback_query(query.id.clone())
             .text(i18n::tr(&lang, "invalid_operation"))
             .await?;
@@ -340,6 +379,14 @@ pub(super) async fn handle_lang_callback(
         }
     }
 
+    if action == "auto" {
+        clear_override(state, chat_msg.chat.id.0).await;
+        bot.answer_callback_query(query.id.clone())
+            .text(i18n::tr(&lang, "lang_auto"))
+            .await?;
+        return Ok(true);
+    }
+
     set_override(state, chat_msg.chat.id.0, action).await;
     bot.answer_callback_query(query.id.clone())
         .text(i18n::tr_with(
@@ -350,4 +397,31 @@ pub(super) async fn handle_lang_callback(
         ))
         .await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn positive_and_negative_language_entries_share_a_bounded_cache() {
+        let cache = ChatLanguageCache::default();
+        for key in 0..10000 {
+            let mut entries = cache.entries(key).lock().await;
+            cache_override(
+                &mut entries,
+                key,
+                if key % 2 == 0 {
+                    Some("en".into())
+                } else {
+                    None
+                },
+            );
+        }
+        let mut count = 0;
+        for shard in &cache.shards {
+            count += shard.lock().await.len();
+        }
+        assert_eq!(count, LANGUAGE_CACHE_CAPACITY * LANGUAGE_CACHE_SHARDS);
+    }
 }

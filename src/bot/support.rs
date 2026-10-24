@@ -416,22 +416,18 @@ pub(super) async fn handle_callback(
         && let Ok(music_id) = rest.trim_start().parse::<u64>()
         && let Some(MaybeInaccessibleMessage::Regular(msg)) = &query.message
     {
-        match process_music(&bot, msg, &state, music_id).await {
-            Ok(()) => {
-                bot.answer_callback_query(query.id)
-                    .text(tr("callback_download_started"))
-                    .await?;
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Error processing music from callback: {}",
-                    sanitized_error_chain(&e)
-                );
-                bot.answer_callback_query(query.id)
-                    .text(tr("error_generic"))
-                    .await?;
-            }
+        if let Err(error) = bot
+            .answer_callback_query(query.id.clone())
+            .text(tr("callback_download_started"))
+            .await
+        {
+            // A callback can expire while queued; delivery should still proceed.
+            tracing::warn!(
+                "Failed to acknowledge music callback: {}",
+                sanitized_error_chain(&error)
+            );
         }
+        process_music(&bot, msg, &state, music_id).await?;
         return Ok(());
     }
 

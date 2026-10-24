@@ -20,6 +20,9 @@ pub enum BotError {
     #[error("Music API error: {0}")]
     MusicApi(String),
 
+    #[error("Album art exceeds the {0} byte limit")]
+    AlbumArtTooLarge(usize),
+
     #[error("File operation error: {0}")]
     FileOperation(#[from] std::io::Error),
 

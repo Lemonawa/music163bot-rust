@@ -1,4 +1,5 @@
 use super::collection_flow::{cover_download_failure_notice, download_cover_assets};
+use super::core_flow::rate_limit_retry_delay_secs;
 use super::maintenance::collect_maintenance_signals;
 use super::music_ui::create_music_keyboard_for_target;
 use super::permits::{acquire_download_permit, acquire_upload_permit_owned};
@@ -23,6 +24,7 @@ use crate::config::CoverMode;
 use crate::database::SongInfo;
 use crate::error::Result;
 use crate::error::sanitized_error_chain;
+use crate::i18n;
 use crate::telegram::Message;
 use crate::telegram::TelegramBot as Bot;
 use crate::utils::{
@@ -257,12 +259,14 @@ async fn process_tag_and_upload(ctx: &DownloadCtx<'_>, p: TagAndUploadParams<'_>
     ctx.perf_ctx
         .log_stage(PERF_STAGE_PRE_UPLOAD_PATH, pre_upload_path_duration);
 
+    let audio_bytes = audio_buffer.take_memory_bytes_for_upload();
     let file_id = acquire_permit_and_upload(
         ctx,
         &mut UploadFlowParams {
             raw_client: &raw_client,
             api_base_url: &api_base_url,
             audio_buffer: &mut audio_buffer,
+            audio_bytes,
             thumbnail_buffer: p.thumbnail_buffer.as_ref(),
             caption: &caption,
             reply_markup_json,
@@ -312,6 +316,7 @@ struct UploadFlowParams<'a> {
     raw_client: &'a reqwest::Client,
     api_base_url: &'a str,
     audio_buffer: &'a mut AudioBuffer,
+    audio_bytes: Option<bytes::Bytes>,
     thumbnail_buffer: Option<&'a crate::audio_buffer::ThumbnailBuffer>,
     caption: &'a str,
     reply_markup_json: Option<String>,
@@ -324,15 +329,37 @@ async fn acquire_permit_and_upload(
     ctx: &DownloadCtx<'_>,
     p: &mut UploadFlowParams<'_>,
 ) -> Result<Option<String>> {
-    let upload_permit_wait_start = std::time::Instant::now();
-    let _upload_permit =
-        acquire_upload_permit_owned(Arc::clone(&ctx.state.upload_semaphore)).await?;
-    ctx.perf_ctx.log_stage(
-        PERF_STAGE_UPLOAD_PERMIT_WAIT,
-        upload_permit_wait_start.elapsed(),
-    );
-
-    execute_upload(ctx, p).await
+    let mut attempt = 0;
+    loop {
+        let result = {
+            let upload_permit_wait_start = std::time::Instant::now();
+            let _upload_permit =
+                acquire_upload_permit_owned(Arc::clone(&ctx.state.upload_semaphore)).await?;
+            ctx.perf_ctx.log_stage(
+                PERF_STAGE_UPLOAD_PERMIT_WAIT,
+                upload_permit_wait_start.elapsed(),
+            );
+            execute_upload(ctx, p).await
+        };
+        match result {
+            Err(error) => {
+                let Some(delay) = rate_limit_retry_delay_secs(&error, attempt) else {
+                    return Err(error);
+                };
+                attempt += 1;
+                edit_status_message_resilient(
+                    ctx.bot,
+                    ctx.msg.chat.id,
+                    ctx.status_msg.id,
+                    i18n::tr_with(&ctx.lang, "rate_limited", "secs", &delay),
+                )
+                .await;
+                // Keep the prepared buffer, but release the upload slot during flood wait.
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            }
+            success => return success,
+        }
+    }
 }
 
 fn validate_downloaded_audio(lang: &crate::i18n::ChatLanguage, downloaded: u64) -> Option<String> {
@@ -658,8 +685,6 @@ async fn execute_upload(
         if is_flac { "FLAC" } else { "MP3" }
     );
 
-    let audio_bytes = p.audio_buffer.take_memory_bytes_for_upload();
-
     let in_flight = ctx
         .state
         .upload_counters
@@ -673,7 +698,7 @@ async fn execute_upload(
         chat_id: ctx.msg.chat.id.0,
         caption: p.caption,
         reply_to_message_id: ctx.msg.id.0,
-        reply_markup_json: p.reply_markup_json.take(),
+        reply_markup_json: p.reply_markup_json.clone(),
         title: Some(&p.song_info.song_name),
         performer: Some(&p.song_info.song_artists),
         duration: Some(duration_u32),
@@ -686,7 +711,7 @@ async fn execute_upload(
         config: &ctx.state.config,
         is_official_api: ctx.state.is_official_api,
         audio_buffer: p.audio_buffer,
-        audio_bytes: audio_bytes.as_ref(),
+        audio_bytes: p.audio_bytes.as_ref(),
         file_size: p.file_size,
         params: &params,
     })
@@ -729,6 +754,119 @@ async fn execute_upload(
                 sanitized_error_chain(&e)
             );
             Err(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bot::tests::{
+        lang_ui::{test_bot_state, test_message},
+        telegram::MockTelegramPollingServer,
+    };
+
+    #[tokio::test]
+    async fn rate_limited_upload_replays_prepared_audio_and_keyboard_in_memory_and_disk_modes() {
+        for memory in [true, false] {
+            let server = MockTelegramPollingServer::start().await;
+            let state = test_bot_state("upload_replay").await;
+            {
+                let mut upload = state.upload_client_state.lock().await;
+                upload.raw_client = Some(reqwest::Client::new());
+                upload.upload_api_url = format!("{}botTEST/", server.base_url());
+            }
+            let bot = Bot::new("TEST").set_api_url(&server.base_url().parse().unwrap());
+            let msg = test_message(-77, "group");
+            let trace = super::super::wiring::build_perf_trace_context(&state, 71, "miss");
+            let ctx = DownloadCtx {
+                bot: &bot,
+                msg: &msg,
+                state: &state,
+                lang: i18n::default_lang_zh(),
+                status_msg: &msg,
+                perf_ctx: &trace,
+            };
+            let mut buffer = if memory {
+                AudioBuffer::Memory {
+                    data: Vec::new(),
+                    filename: "replay.mp3".into(),
+                    reservation: None,
+                }
+            } else {
+                AudioBuffer::new_disk(
+                    format!("replay_{}.mp3", uuid::Uuid::new_v4()),
+                    std::env::temp_dir().to_str().unwrap(),
+                )
+                .await
+                .unwrap()
+            };
+            buffer
+                .write_chunk(b"UNCHANGED_AUDIO_PAYLOAD")
+                .await
+                .unwrap();
+            buffer.finish().await.unwrap();
+            let disk_path = buffer.path().map(std::path::Path::to_path_buf);
+            let mut thumbnail = None;
+            process_tag_and_upload(
+                &ctx,
+                TagAndUploadParams {
+                    audio_buffer: buffer,
+                    thumbnail_buffer: &mut thumbnail,
+                    audio_format: AudioFormat::Mp3,
+                    song_detail: Arc::new(crate::music_api::SongDetail {
+                        id: 71,
+                        name: "Replay".into(),
+                        dt: Some(1000),
+                        ar: None,
+                        al: None,
+                    }),
+                    cover_artwork_data: None,
+                    embed_cover: false,
+                    song_id: 71,
+                    song_name: "Replay",
+                    artists: "Artist",
+                    song_album: "Album",
+                    file_ext: "mp3",
+                    duration_ms: Some(1000),
+                    api_bitrate: 128000,
+                    link_target: MusicLinkTarget::Song(71),
+                    pre_upload_path_start: std::time::Instant::now(),
+                    should_remove_song_cache: false,
+                    cover_retry_exhausted: false,
+                },
+            )
+            .await
+            .unwrap();
+            let bodies = server.upload_bodies();
+            assert_eq!(bodies.len(), 2);
+            let audio_part = |body: &str| {
+                let start = body.find("filename=").unwrap();
+                let data = body[start..].split_once("\r\n\r\n").unwrap().1;
+                data.split("\r\n--").next().unwrap().to_string()
+            };
+            assert_eq!(audio_part(&bodies[0]), audio_part(&bodies[1]));
+            for body in &bodies {
+                assert!(body.contains("ID3"));
+                assert!(body.contains("UNCHANGED_AUDIO_PAYLOAD"));
+                assert!(body.contains("reply_markup"));
+            }
+            assert_eq!(
+                state
+                    .database
+                    .get_song_by_music_id(71)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .file_id
+                    .as_deref(),
+                Some("replayed")
+            );
+            if let Some(path) = disk_path {
+                assert!(!path.exists());
+            }
+            assert_eq!(state.upload_semaphore.available_permits(), 1);
+            assert_eq!(state.upload_counters.in_flight.load(Ordering::Relaxed), 0);
         }
     }
 }

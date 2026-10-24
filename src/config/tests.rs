@@ -419,3 +419,17 @@ fn task_limits_derive_from_concurrency() {
     assert_eq!(config.message_task_limit(), 12);
     assert_eq!(config.upload_task_limit(), 4);
 }
+
+#[test]
+fn zero_download_concurrency_is_rejected_at_startup() {
+    let path = std::env::temp_dir().join(format!("zero_concurrency_{}.ini", uuid::Uuid::new_v4()));
+    std::fs::write(&path, "bot.token=test\ndownload.max_concurrent=0\n").unwrap();
+    let result = Config::load(path.to_str().unwrap());
+    std::fs::remove_file(path).unwrap();
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("download.max_concurrent")
+    );
+}

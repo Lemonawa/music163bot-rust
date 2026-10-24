@@ -116,20 +116,23 @@ where
         overall_timeout,
         make_attempt,
         |elapsed| E::from(format!("operation timed out after {elapsed:?}")),
+        |_| true,
     )
     .await
 }
 
-pub(crate) async fn run_with_attempts_and_overall_timeout_with_err<F, Fut, T, E, M>(
+pub(crate) async fn run_with_attempts_and_overall_timeout_with_err<F, Fut, T, E, M, R>(
     total_attempts: u32,
     overall_timeout: Duration,
     mut make_attempt: F,
     on_timeout: M,
+    should_retry: R,
 ) -> std::result::Result<T, E>
 where
     F: FnMut(u32) -> Fut,
     Fut: std::future::Future<Output = std::result::Result<T, E>>,
     M: FnOnce(Duration) -> E,
+    R: Fn(&E) -> bool,
 {
     let attempts = total_attempts.max(1);
     let inner = async {
@@ -137,6 +140,7 @@ where
         for attempt in 1..=attempts {
             match make_attempt(attempt).await {
                 Ok(value) => return Ok(value),
+                Err(e) if !should_retry(&e) => return Err(e),
                 Err(e) => last_err = Some(e),
             }
         }

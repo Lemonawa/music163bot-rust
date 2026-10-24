@@ -13,6 +13,8 @@ use bytes::Bytes;
 use tokio::fs::File;
 
 mod backend;
+mod memory_budget;
+pub use memory_budget::MemoryReservation;
 mod storage_policy;
 mod tagging;
 mod thumbnail;
@@ -27,7 +29,11 @@ pub enum AudioBuffer {
         written_bytes: u64,
     },
     /// Memory-based storage with byte vector
-    Memory { data: Vec<u8>, filename: String },
+    Memory {
+        data: Vec<u8>,
+        filename: String,
+        reservation: Option<MemoryReservation>,
+    },
 }
 
 /// Thumbnail buffer for album art
@@ -102,9 +108,25 @@ impl AudioBuffer {
     #[must_use]
     pub fn take_memory_bytes_for_upload(&mut self) -> Option<Bytes> {
         match self {
-            Self::Memory { data, .. } => Some(Bytes::from(std::mem::take(data))),
+            Self::Memory {
+                data, reservation, ..
+            } => Some(Bytes::from_owner(ReservedAudio {
+                data: std::mem::take(data),
+                _reservation: reservation.take(),
+            })),
             Self::Disk { .. } => None,
         }
+    }
+}
+
+struct ReservedAudio {
+    data: Vec<u8>,
+    _reservation: Option<MemoryReservation>,
+}
+
+impl AsRef<[u8]> for ReservedAudio {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
     }
 }
 

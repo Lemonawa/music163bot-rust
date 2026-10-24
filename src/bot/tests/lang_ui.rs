@@ -93,13 +93,15 @@ fn temp_db_path(prefix: &str) -> String {
 
 /// Minimal `BotState` for Chat Language tests: only the fields the language
 /// seam touches are meaningful; everything else gets inert defaults.
-async fn test_bot_state(prefix: &str) -> std::sync::Arc<super::BotState> {
-    let db = crate::database::Database::new(&temp_db_path(prefix))
-        .await
-        .unwrap();
+pub(in crate::bot) async fn test_bot_state(prefix: &str) -> std::sync::Arc<super::BotState> {
+    let path = temp_db_path(prefix);
+    let db = crate::database::Database::new(&path).await.unwrap();
     let (maintenance_tx, _rx) = tokio::sync::mpsc::channel(1);
     std::sync::Arc::new(super::BotState {
-        config: crate::config::Config::default(),
+        config: crate::config::Config {
+            database: path,
+            ..Default::default()
+        },
         database: db,
         music_api: std::sync::Arc::new(crate::music_api::MusicApi::new(
             None,
@@ -124,11 +126,11 @@ async fn test_bot_state(prefix: &str) -> std::sync::Arc<super::BotState> {
         runtime_metrics: super::RuntimeMetrics::new(),
         is_official_api: true,
         clearallcache_confirms: std::sync::Arc::new(dashmap::DashMap::new()),
-        chat_languages: std::sync::Arc::new(dashmap::DashMap::new()),
+        chat_languages: std::sync::Arc::default(),
     })
 }
 
-fn test_message(chat_id: i64, chat_type: &str) -> crate::telegram::Message {
+pub(in crate::bot) fn test_message(chat_id: i64, chat_type: &str) -> crate::telegram::Message {
     crate::telegram::Message {
         id: crate::telegram::MessageId(1),
         from: None,
@@ -152,8 +154,14 @@ async fn resolve_message_uses_db_override_and_caches_it() {
     let lang = super::resolve_chat_language_for(&state, &msg).await;
     assert_eq!(lang.code(), "en");
     assert_eq!(
-        state.chat_languages.get(&777).map(|e| e.value().clone()),
-        Some("en".to_string())
+        state
+            .chat_languages
+            .entries(777)
+            .lock()
+            .await
+            .get(&777)
+            .map(|(_, value)| value.clone()),
+        Some(Some("en".to_string()))
     );
 
     // Second call hits the cache (still correct even if DB row disappears).
@@ -180,7 +188,65 @@ async fn resolve_inline_prefers_override_then_detects_then_defaults() {
 
     // Without an override, the Telegram language_code applies.
     state.database.clear_chat_language(888).await.unwrap();
-    state.chat_languages.remove(&888);
+    state.chat_languages.entries(888).lock().await.remove(&888);
     let lang = super::resolve_inline_language_for(&state, &user).await;
     assert_eq!(lang.code(), "zh");
+}
+
+#[tokio::test]
+async fn auto_lookup_is_cached_and_expires() {
+    let state = test_bot_state("lang_negative").await;
+    let msg = test_message(999, "group");
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "zh"
+    );
+    state.database.set_chat_language(999, "en").await.unwrap();
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "zh"
+    );
+    {
+        let mut entries = state.chat_languages.entries(999).lock().await;
+        entries.get_mut(&999).unwrap().0 -= std::time::Duration::from_secs(301);
+    }
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "en"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_language_lookup_does_not_poison_the_negative_cache() {
+    let state = test_bot_state("lang_db_error").await;
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", state.config.database))
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE chat_settings")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let msg = test_message(1000, "group");
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "zh"
+    );
+    assert!(
+        !state
+            .chat_languages
+            .entries(1000)
+            .lock()
+            .await
+            .contains_key(&1000)
+    );
+    sqlx::query("CREATE TABLE chat_settings (chat_id INTEGER PRIMARY KEY, language TEXT NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    state.database.set_chat_language(1000, "en").await.unwrap();
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "en"
+    );
+    pool.close().await;
 }

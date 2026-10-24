@@ -366,8 +366,8 @@ pub(super) async fn process_music_with_context(
         })
     };
 
-    download_with_retry(
-        DownloadRetryContext {
+    download_and_report(
+        DownloadRequestContext {
             download: DownloadCtx {
                 bot,
                 msg,
@@ -519,7 +519,7 @@ async fn acquire_singleflight_leader(
     Ok(Some((perf_ctx, guard)))
 }
 
-struct DownloadRetryContext<'a> {
+struct DownloadRequestContext<'a> {
     download: DownloadCtx<'a>,
     song_detail: &'a Arc<crate::music_api::SongDetail>,
     song_url: &'a Arc<crate::music_api::SongUrl>,
@@ -528,93 +528,53 @@ struct DownloadRetryContext<'a> {
     music_id: u64,
 }
 
-async fn download_with_retry<F: std::future::Future<Output = ()>>(
-    ctx: DownloadRetryContext<'_>,
+async fn download_and_report<F: std::future::Future<Output = ()>>(
+    ctx: DownloadRequestContext<'_>,
     pending_initial_edit: &mut Option<F>,
 ) {
-    let mut process_attempt = 0u32;
-    loop {
-        let pre_upload_path_start = std::time::Instant::now();
-        let download_params = DownloadAndSendParams {
-            ctx: DownloadCtx {
-                bot: ctx.download.bot,
-                msg: ctx.download.msg,
-                state: ctx.download.state,
-                lang: ctx.download.lang.clone(),
-                status_msg: ctx.download.status_msg,
-                perf_ctx: ctx.download.perf_ctx,
-            },
-            song_detail: Arc::clone(ctx.song_detail),
-            song_url: ctx.song_url,
-            pre_upload_path_start,
-            artists: ctx.artists,
-            link_target: ctx.link_target,
-        };
-        let download_fut = download_and_send_music(&download_params);
-        let result = if let Some(edit_fut) = pending_initial_edit.take() {
-            await_with_status_edit(edit_fut, download_fut).await
-        } else {
-            download_fut.await
-        };
-        match result {
-            Ok(()) => break,
-            Err(e) => {
-                let sanitized = sanitized_error_chain(&e);
-                if let Some(retry_delay_secs) = rate_limit_retry_delay_secs(&e, process_attempt) {
-                    process_attempt = process_attempt.saturating_add(1);
-                    tracing::warn!(
-                        "Upload rate limited for music_id {}. Waiting {}s before retry",
-                        ctx.music_id,
-                        retry_delay_secs
-                    );
-                    edit_status_message_resilient(
-                        ctx.download.bot,
-                        ctx.download.msg.chat.id,
-                        ctx.download.status_msg.id,
-                        i18n::tr_with(
-                            &ctx.download.lang,
-                            "rate_limited",
-                            "secs",
-                            &retry_delay_secs,
-                        ),
-                    )
-                    .await;
-                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
-                    edit_status_message_resilient(
-                        ctx.download.bot,
-                        ctx.download.msg.chat.id,
-                        ctx.download.status_msg.id,
-                        i18n::tr_many_strings(
-                            &ctx.download.lang,
-                            "downloading",
-                            &[
-                                ("name", ctx.song_detail.name.clone()),
-                                ("artists", (*ctx.artists).to_string()),
-                            ],
-                        ),
-                    )
-                    .await;
-                    continue;
-                }
+    let pre_upload_path_start = std::time::Instant::now();
+    let download_params = DownloadAndSendParams {
+        ctx: DownloadCtx {
+            bot: ctx.download.bot,
+            msg: ctx.download.msg,
+            state: ctx.download.state,
+            lang: ctx.download.lang.clone(),
+            status_msg: ctx.download.status_msg,
+            perf_ctx: ctx.download.perf_ctx,
+        },
+        song_detail: Arc::clone(ctx.song_detail),
+        song_url: ctx.song_url,
+        pre_upload_path_start,
+        artists: ctx.artists,
+        link_target: ctx.link_target,
+    };
+    let download_fut = download_and_send_music(&download_params);
+    let result = if let Some(edit_fut) = pending_initial_edit.take() {
+        await_with_status_edit(edit_fut, download_fut).await
+    } else {
+        download_fut.await
+    };
+    match result {
+        Ok(()) => {}
+        Err(e) => {
+            let sanitized = sanitized_error_chain(&e);
 
-                tracing::warn!("Failed to process music {}: {}", ctx.music_id, sanitized);
-                if extract_retry_after_seconds(&sanitized).is_some() {
-                    delete_status_message_resilient(
-                        ctx.download.bot,
-                        ctx.download.msg.chat.id,
-                        ctx.download.status_msg.id,
-                    )
-                    .await;
-                } else {
-                    edit_status_message_resilient(
-                        ctx.download.bot,
-                        ctx.download.msg.chat.id,
-                        ctx.download.status_msg.id,
-                        i18n::tr(&ctx.download.lang, "error_generic"),
-                    )
-                    .await;
-                }
-                break;
+            tracing::warn!("Failed to process music {}: {}", ctx.music_id, sanitized);
+            if extract_retry_after_seconds(&sanitized).is_some() {
+                delete_status_message_resilient(
+                    ctx.download.bot,
+                    ctx.download.msg.chat.id,
+                    ctx.download.status_msg.id,
+                )
+                .await;
+            } else {
+                edit_status_message_resilient(
+                    ctx.download.bot,
+                    ctx.download.msg.chat.id,
+                    ctx.download.status_msg.id,
+                    i18n::tr(&ctx.download.lang, "error_generic"),
+                )
+                .await;
             }
         }
     }

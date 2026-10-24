@@ -228,7 +228,7 @@ pub(super) async fn run(config: Config) -> Result<()> {
         runtime_metrics: RuntimeMetrics::new(),
         is_official_api,
         clearallcache_confirms: Arc::new(DashMap::new()),
-        chat_languages: Arc::new(DashMap::new()),
+        chat_languages: Arc::default(),
     });
 
     let prewarm_state = Arc::clone(&bot_state);
@@ -248,7 +248,8 @@ pub(super) async fn run(config: Config) -> Result<()> {
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
 
-    loop {
+    let mut tasks = tokio::task::JoinSet::new();
+    'polling: loop {
         tokio::select! {
             _ = &mut shutdown => {
                 tracing::info!("Received shutdown signal, stopping...");
@@ -256,16 +257,29 @@ pub(super) async fn run(config: Config) -> Result<()> {
             }
             updates = crate::telegram::poll_once(&bot, &mut offset) => {
                 for update in updates {
-                    let bot = bot.clone();
-                    let state = Arc::clone(&bot_state);
-                    tokio::spawn(async move {
-                        dispatch_update(bot, update, state).await;
-                    });
+                    tokio::select! {
+                        _ = &mut shutdown => break 'polling,
+                        result = spawn_update(&mut tasks, bot.clone(), update, Arc::clone(&bot_state)) => result?,
+                    }
                 }
             }
         }
     }
 
+    // Stop polling first, then give admitted work a bounded window to finish.
+    if tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while let Some(result) = tasks.join_next().await {
+            if let Err(error) = result {
+                tracing::warn!("Update task failed during shutdown: {}", error);
+            }
+        }
+    })
+    .await
+    .is_err()
+    {
+        tracing::warn!("Shutdown drain timed out; cancelling remaining updates");
+        tasks.shutdown().await;
+    }
     Ok(())
 }
 
@@ -345,6 +359,32 @@ async fn create_bot_client(config: &Config) -> Result<Bot> {
     Ok(Bot::with_client(&config.bot_token, client))
 }
 
+/// Admission precedes task creation, so waiting updates remain in the bounded
+/// polling batch rather than becoming an unbounded population of Tokio tasks.
+async fn spawn_update(
+    tasks: &mut tokio::task::JoinSet<()>,
+    bot: Bot,
+    update: Update,
+    state: Arc<BotState>,
+) -> Result<()> {
+    let permit = state
+        .message_task_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(anyhow::Error::from)?;
+    while let Some(result) = tasks.try_join_next() {
+        if let Err(error) = result {
+            tracing::warn!("Update task failed: {}", error);
+        }
+    }
+    tasks.spawn(async move {
+        let _permit = permit;
+        dispatch_update(bot, update, state).await;
+    });
+    Ok(())
+}
+
 async fn dispatch_update(bot: Bot, update: Update, state: Arc<BotState>) {
     if let Some(msg) = update.message {
         if let Err(e) = handle_message(bot, msg, state).await {
@@ -370,40 +410,11 @@ pub(super) async fn handle_message(
         if !should_spawn_message_task(text) {
             return Ok(());
         }
-        let text = text.clone();
-
-        let permit = match state.message_task_semaphore.clone().acquire_owned().await {
-            Ok(permit) => permit,
-            Err(e) => {
-                tracing::error!(
-                    "Message task semaphore closed: {}",
-                    sanitized_error_chain(&e)
-                );
-                return Ok(());
-            }
-        };
-
-        let bot = bot.clone();
-        let msg = msg.clone();
-        let state = state.clone();
-
-        tokio::spawn(async move {
-            let _permit = permit;
-
-            match classify_message_task(&text) {
-                Some(MessageTaskRoute::Command) => {
-                    if let Err(e) = handle_command(&bot, &msg, &state, &text).await {
-                        tracing::error!("Error handling command: {}", sanitized_error_chain(&e));
-                    }
-                }
-                Some(MessageTaskRoute::MusicLink) => {
-                    if let Err(e) = handle_music_url(&bot, &msg, &state, &text).await {
-                        tracing::error!("Error handling music URL: {}", sanitized_error_chain(&e));
-                    }
-                }
-                None => {}
-            }
-        });
+        match classify_message_task(text) {
+            Some(MessageTaskRoute::Command) => handle_command(&bot, &msg, &state, text).await?,
+            Some(MessageTaskRoute::MusicLink) => handle_music_url(&bot, &msg, &state, text).await?,
+            None => {}
+        }
     }
     Ok(())
 }
@@ -504,4 +515,42 @@ pub(super) async fn handle_start_command(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn all_update_kinds_wait_before_spawning_and_release_their_slot() {
+        let state = crate::bot::tests::lang_ui::test_bot_state("admission").await;
+        let held = state.message_task_semaphore.acquire().await.unwrap();
+        let mut tasks = tokio::task::JoinSet::new();
+        let bot = Bot::new("unused");
+        for payload in [
+            serde_json::json!({"message":{"message_id":1,"chat":{"id":1,"type":"private"},"text":"/music 1"}}),
+            serde_json::json!({"callback_query":{"id":"cb","from":{"id":1},"data":"music 1"}}),
+            serde_json::json!({"inline_query":{"id":"inline","from":{"id":1},"query":"search track"}}),
+        ] {
+            let mut payload = payload;
+            payload["update_id"] = serde_json::json!(1);
+            let update: Update = serde_json::from_value(payload).unwrap();
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(10),
+                    spawn_update(&mut tasks, bot.clone(), update, Arc::clone(&state))
+                )
+                .await
+                .is_err()
+            );
+            assert!(tasks.is_empty());
+        }
+        drop(held);
+        let update: Update = serde_json::from_value(serde_json::json!({"update_id":2})).unwrap();
+        spawn_update(&mut tasks, bot, update, Arc::clone(&state))
+            .await
+            .unwrap();
+        tasks.join_next().await.unwrap().unwrap();
+        assert_eq!(state.message_task_semaphore.available_permits(), 1);
+    }
 }

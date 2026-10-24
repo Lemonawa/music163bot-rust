@@ -141,8 +141,8 @@ fn critical_path_stage_labels() -> [&'static str; 2] {
 
 mod command_ui;
 mod concurrency;
-mod lang_ui;
+pub(in crate::bot) mod lang_ui;
 mod lyrics;
 mod scheduling;
-mod telegram;
+pub(in crate::bot) mod telegram;
 mod upload;

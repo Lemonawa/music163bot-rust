@@ -116,3 +116,16 @@ fn tr_many_substitutes_all_placeholders() {
     assert!(text.contains("ID: 42"));
     assert!(!text.contains("%{"));
 }
+
+#[test]
+fn locale_names_are_interned_once_across_repeated_parsing() {
+    let first = super::parse_lang_argument("EN").unwrap().unwrap();
+    for _ in 0..100 {
+        let next = super::parse_lang_argument("en").unwrap().unwrap();
+        assert!(std::ptr::eq(first, next));
+        assert!(std::ptr::eq(
+            super::available_locales(),
+            super::available_locales()
+        ));
+    }
+}

@@ -58,7 +58,9 @@ cover_mode = thumbnail
 memory_threshold = 100
 
 # Memory safety buffer (MB); ensures enough free system memory
-# System available memory must exceed (file size + this buffer) to use memory mode
+# Memory/Hybrid reserve 3x file size + 20 MB per active audio buffer for tagging/upload.
+# Reservations share a process-wide budget; available memory also respects cgroup limits.
+# If remaining budget cannot preserve this safety buffer, the download uses disk.
 memory_buffer = 100
 
 # Maximum file size for memory mode (MB)
@@ -71,7 +73,7 @@ memory_max_file_mb = 100
 max_disk_download_mb = 2000
 
 # Maximum concurrent downloads (v1.1.9+)
-# Controls how many songs download simultaneously; lower values reduce peak memory usage
+# Must be greater than zero. Controls parallel downloads; lower values reduce peak memory usage
 # Recommended: 3–5 (default: 3)
 max_concurrent = 3
 

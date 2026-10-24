@@ -83,7 +83,7 @@ url = ./data/music_bot.db
 | `dir` | `./downloads` | Cache directory |
 | `storage_mode` | `disk` | `disk`, `memory`, or `hybrid` |
 | `cover_mode` | `thumbnail` | `thumbnail`, `original`, or `both` |
-| `max_concurrent` | `4` | Parallel downloads |
+| `max_concurrent` | `4` | Parallel downloads; must be greater than zero |
 | `max_batch_tracks` | `20` | Max tracks per playlist/album request |
 | `memory_threshold` | `100` | MB, hybrid mode threshold |
 | `memory_buffer` | `100` | MB, memory safety buffer |
@@ -92,6 +92,8 @@ url = ./data/music_bot.db
 | `connect_timeout_secs` | `10` | Download connection timeout |
 | `chunk_size_kb` | `256` | Download chunk size |
 | `pool_max_idle_per_host` | `2` | Download pool idle connections |
+
+Memory and Hybrid modes share an audio memory budget that respects the current process's cgroup limit. Each in-memory download reserves three times the file size plus 20 MiB for tagging and compressed covers until its upload bytes are released. Downloads fall back to disk when the budget cannot preserve `memory_buffer`.
 
 **[upload]**
 

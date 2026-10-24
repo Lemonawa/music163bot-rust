@@ -199,6 +199,7 @@ async fn singleflight_claim_helper_waits_for_existing_leader() {
 #[tokio::test]
 async fn tagging_wrapper_returns_buffer_for_mp3_without_artwork() {
     let buffer = crate::audio_buffer::AudioBuffer::Memory {
+        reservation: None,
         data: vec![1, 2, 3],
         filename: "sample.mp3".to_string(),
     };
@@ -226,6 +227,7 @@ async fn tagging_wrapper_returns_buffer_for_mp3_without_artwork() {
 #[tokio::test]
 async fn tagging_wrapper_adds_mp3_id3_header() {
     let buffer = crate::audio_buffer::AudioBuffer::Memory {
+        reservation: None,
         data: vec![0xFF, 0xFB, 0x90, 0x64],
         filename: "sample.mp3".to_string(),
     };
@@ -280,22 +282,34 @@ async fn startup_update_listener_skips_pending_updates() {
 #[derive(Debug, Default)]
 struct MockTelegramPollingServerState {
     get_updates_offsets: Vec<i64>,
+    member_status: String,
+    callback_expired: bool,
+    upload_bodies: Vec<String>,
+    methods: Vec<String>,
 }
 
-struct MockTelegramPollingServer {
+pub(in crate::bot) struct MockTelegramPollingServer {
     base_url: String,
+    state: Arc<Mutex<MockTelegramPollingServerState>>,
     accept_loop_task: JoinHandle<()>,
 }
 
 impl MockTelegramPollingServer {
-    async fn start() -> Self {
+    pub(in crate::bot) async fn start() -> Self {
+        Self::with_member_status("member").await
+    }
+
+    async fn with_member_status(status: &str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind mock telegram polling server");
         let address = listener
             .local_addr()
             .expect("mock telegram polling server local addr");
-        let state = Arc::new(Mutex::new(MockTelegramPollingServerState::default()));
+        let state = Arc::new(Mutex::new(MockTelegramPollingServerState {
+            member_status: status.into(),
+            ..Default::default()
+        }));
         let shared_state = Arc::clone(&state);
 
         let accept_loop_task = tokio::spawn(async move {
@@ -309,11 +323,16 @@ impl MockTelegramPollingServer {
 
         Self {
             base_url: format!("http://{address}/"),
+            state,
             accept_loop_task,
         }
     }
 
-    fn base_url(&self) -> String {
+    pub(in crate::bot) fn upload_bodies(&self) -> Vec<String> {
+        self.state.lock().unwrap().upload_bodies.clone()
+    }
+
+    pub(in crate::bot) fn base_url(&self) -> String {
         self.base_url.clone()
     }
 }
@@ -337,9 +356,39 @@ async fn handle_mock_telegram_polling_connection(
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase();
+    state.lock().unwrap().methods.push(method.clone());
     let body = match method.as_str() {
         "getwebhookinfo" => mock_get_webhook_info_response_json(),
         "getupdates" => mock_get_updates_response_json(&state, &path, &request_body),
+        "getchatmember" => {
+            let status = state.lock().unwrap().member_status.clone();
+            if status == "error" {
+                serde_json::json!({"ok":false, "error_code":500, "description":"mock failure"})
+                    .to_string()
+            } else {
+                serde_json::json!({"ok":true, "result":{"status":status}}).to_string()
+            }
+        }
+        "sendmessage" | "editmessagetext" => serde_json::json!({"ok":true,"result":{
+            "message_id":1, "chat":{"id":-77,"type":"group"}, "date":0
+        }})
+        .to_string(),
+        "answercallbackquery" if state.lock().unwrap().callback_expired => {
+            serde_json::json!({"ok":false,"error_code":400,"description":"query is too old"})
+                .to_string()
+        }
+        "answercallbackquery" | "deletemessage" => {
+            serde_json::json!({"ok":true,"result":true}).to_string()
+        }
+        "sendaudio" => {
+            let mut guard = state.lock().unwrap();
+            guard.upload_bodies.push(request_body);
+            if guard.upload_bodies.len() == 1 {
+                serde_json::json!({"ok":false,"error_code":429,"description":"Too Many Requests", "parameters":{"retry_after":0}}).to_string()
+            } else {
+                serde_json::json!({"ok":true,"result":{"message_id":1,"chat":{"id":-77,"type":"group"},"date":0,"audio":{"file_id":"replayed"}}}).to_string()
+            }
+        }
         _ => serde_json::json!({
             "ok": false,
             "description": format!("unsupported method: {method}")
@@ -519,3 +568,158 @@ fn find_byte_sequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 use super::*;
+
+#[tokio::test]
+async fn denied_or_failed_group_authorization_cannot_change_language() {
+    use crate::bot::lang_command::{handle_lang_callback, handle_lang_command};
+    for status in ["member", "error"] {
+        let server = MockTelegramPollingServer::with_member_status(status).await;
+        let bot = Bot::new("test").set_api_url(&server.base_url().parse().unwrap());
+        let state = super::lang_ui::test_bot_state("lang_denied").await;
+        state.database.set_chat_language(-77, "en").await.unwrap();
+        let mut msg = super::lang_ui::test_message(-77, "group");
+        msg.from = Some(crate::telegram::User {
+            id: 42,
+            first_name: "member".into(),
+            username: None,
+            language_code: None,
+        });
+        for action in ["zh", "auto"] {
+            handle_lang_command(&bot, &msg, &state, Some(action.into()))
+                .await
+                .unwrap();
+            assert_eq!(
+                state
+                    .database
+                    .get_chat_language(-77)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("en")
+            );
+            assert_eq!(
+                super::resolve_chat_language_for(&state, &msg).await.code(),
+                "en"
+            );
+            let query = crate::telegram::CallbackQuery {
+                id: "language".into(),
+                from: msg.from.clone().unwrap(),
+                data: None,
+                message: Some(crate::telegram::MaybeInaccessibleMessage::Regular(
+                    msg.clone(),
+                )),
+            };
+            assert!(
+                handle_lang_callback(&bot, &query, &state, action)
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                state
+                    .database
+                    .get_chat_language(-77)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("en")
+            );
+            assert_eq!(
+                super::resolve_chat_language_for(&state, &msg).await.code(),
+                "en"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn authorized_group_changes_replace_negative_cache_and_auto_clears_override() {
+    use crate::bot::lang_command::{handle_lang_callback, handle_lang_command};
+    let server = MockTelegramPollingServer::with_member_status("administrator").await;
+    let bot = Bot::new("test").set_api_url(&server.base_url().parse().unwrap());
+    let state = super::lang_ui::test_bot_state("lang_allowed").await;
+    let mut msg = super::lang_ui::test_message(-77, "group");
+    msg.from = Some(crate::telegram::User {
+        id: 42,
+        first_name: "admin".into(),
+        username: None,
+        language_code: None,
+    });
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "zh"
+    );
+    handle_lang_command(&bot, &msg, &state, Some("en".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "en"
+    );
+    let query = crate::telegram::CallbackQuery {
+        id: "language".into(),
+        from: msg.from.clone().unwrap(),
+        data: None,
+        message: Some(crate::telegram::MaybeInaccessibleMessage::Regular(
+            msg.clone(),
+        )),
+    };
+    handle_lang_callback(&bot, &query, &state, "auto")
+        .await
+        .unwrap();
+    assert!(
+        state
+            .database
+            .get_chat_language(-77)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        super::resolve_chat_language_for(&state, &msg).await.code(),
+        "zh"
+    );
+}
+
+#[tokio::test]
+async fn music_callback_is_acknowledged_before_delivery_even_if_ack_has_expired() {
+    for expired in [false, true] {
+        let server = MockTelegramPollingServer::start().await;
+        {
+            let mut guard = server.state.lock().unwrap();
+            guard.callback_expired = expired;
+            guard.upload_bodies.push("skip initial rate limit".into());
+        }
+        let bot = Bot::new("TEST").set_api_url(&server.base_url().parse().unwrap());
+        let state = super::lang_ui::test_bot_state("callback_ack").await;
+        state
+            .database
+            .save_song_info(&crate::database::SongInfo {
+                music_id: 71,
+                music_size: 4096,
+                file_id: Some("cached".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let query = crate::telegram::CallbackQuery {
+            id: "music".into(),
+            from: crate::telegram::User {
+                id: 42,
+                first_name: "member".into(),
+                username: None,
+                language_code: None,
+            },
+            data: Some("music 71".into()),
+            message: Some(crate::telegram::MaybeInaccessibleMessage::Regular(
+                super::lang_ui::test_message(-77, "group"),
+            )),
+        };
+        crate::bot::support::handle_callback(bot, query, state)
+            .await
+            .unwrap();
+        assert_eq!(
+            server.state.lock().unwrap().methods,
+            ["answercallbackquery", "sendaudio"]
+        );
+    }
+}
