@@ -50,21 +50,30 @@ pub(super) fn sample_resource_snapshot() -> ResourceSnapshot {
     let mut guard = lock_unpoisoned(&STATUS_RESOURCE_CACHE);
     let (system, last_refresh, snapshot) = &mut *guard;
     if last_refresh.elapsed() >= STATUS_RESOURCE_REFRESH_INTERVAL {
-        system.refresh_cpu_usage();
-        system.refresh_memory();
-        let bot_memory_mb = sample_current_process_memory_mb(system);
-        *snapshot = ResourceSnapshot {
-            cpu_percent: system.global_cpu_usage(),
-            system_used_memory_mb: system.used_memory() / (1024 * 1024),
-            system_total_memory_mb: system.total_memory() / (1024 * 1024),
-            bot_memory_mb,
-        };
+        if system.is_none() {
+            *system = System::new().ok();
+        }
+        *snapshot = system
+            .as_mut()
+            .map(refresh_resource_snapshot)
+            .unwrap_or_default();
         *last_refresh = Instant::now();
     }
     *snapshot
 }
 
-pub(super) fn sample_current_process_memory_mb(system: &mut System) -> Option<u64> {
+pub(super) fn refresh_resource_snapshot(system: &mut System) -> ResourceSnapshot {
+    system.refresh_cpu_usage();
+    system.refresh_memory();
+    ResourceSnapshot {
+        cpu_percent: system.global_cpu_usage(),
+        system_used_memory_mb: system.used_memory() / (1024 * 1024),
+        system_total_memory_mb: system.total_memory() / (1024 * 1024),
+        bot_memory_mb: sample_current_process_memory_mb(system),
+    }
+}
+
+fn sample_current_process_memory_mb(system: &mut System) -> Option<u64> {
     let current_pid = get_current_pid().ok()?;
     let pids = [current_pid];
     system.refresh_processes_specifics(

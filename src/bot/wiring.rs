@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::entry::{percentile_95, sample_current_process_memory_mb};
+use super::entry::{percentile_95, refresh_resource_snapshot};
 use crate::config::Config;
 use crate::database::Database;
 use crate::music_api::MusicApi;
@@ -229,18 +229,13 @@ pub(super) struct ResourceSnapshot {
 }
 
 pub(super) static STATUS_RESOURCE_CACHE: LazyLock<
-    std::sync::Mutex<(System, Instant, ResourceSnapshot)>,
+    std::sync::Mutex<(Option<System>, Instant, ResourceSnapshot)>,
 > = LazyLock::new(|| {
-    let mut system = System::new();
-    system.refresh_cpu_usage();
-    system.refresh_memory();
-    let bot_memory_mb = sample_current_process_memory_mb(&mut system);
-    let snapshot = ResourceSnapshot {
-        cpu_percent: system.global_cpu_usage(),
-        system_used_memory_mb: system.used_memory() / (1024 * 1024),
-        system_total_memory_mb: system.total_memory() / (1024 * 1024),
-        bot_memory_mb,
-    };
+    let mut system = System::new().ok();
+    let snapshot = system
+        .as_mut()
+        .map(refresh_resource_snapshot)
+        .unwrap_or_default();
     std::sync::Mutex::new((system, Instant::now(), snapshot))
 });
 

@@ -11,10 +11,10 @@ use super::{AudioBuffer, MemoryReservation};
 use crate::config::{Config, StorageMode};
 
 /// Cached System instance with last-refresh timestamp for throttling.
-static SYSTEM: LazyLock<Mutex<(System, StdInstant, u64)>> = LazyLock::new(|| {
-    let mut sys = System::new();
-    let available = sample_available_memory(&mut sys);
-    Mutex::new((sys, StdInstant::now(), available))
+static SYSTEM: LazyLock<Mutex<(Option<System>, StdInstant, u64)>> = LazyLock::new(|| {
+    let mut system = System::new().ok();
+    let available = system.as_mut().map_or(0, sample_available_memory);
+    Mutex::new((system, StdInstant::now(), available))
 });
 
 /// Minimum interval between memory refreshes (500ms).
@@ -139,7 +139,10 @@ impl AudioBuffer {
         };
         let (system, last_refresh, available) = &mut *guard;
         if last_refresh.elapsed() >= MEMORY_REFRESH_INTERVAL {
-            *available = sample_available_memory(system);
+            if system.is_none() {
+                *system = System::new().ok();
+            }
+            *available = system.as_mut().map_or(0, sample_available_memory);
             *last_refresh = StdInstant::now();
         }
         *available
