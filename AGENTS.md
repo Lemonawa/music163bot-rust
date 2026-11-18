@@ -4,38 +4,46 @@
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues (github.com/Lemonawa/music163bot-rust) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Use the `gh` CLI for GitHub Issues in `Lemonawa/music163bot-rust`. See [issue tracker conventions](docs/agents/issue-tracker.md).
 
 ### Domain docs
 
-Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+This repository has one domain context. Read [CONTEXT.md](CONTEXT.md) and the relevant decisions in [docs/adr/](docs/adr/) before changing domain behavior. See [domain documentation conventions](docs/agents/domain.md).
 
 ## Project Structure & Module Organization
-Core application code is in `src/`. Entry/runtime setup is in `src/main.rs`. Major domains are split into root files plus submodules: `src/bot.rs` + `src/bot/`, `src/music_api.rs` + `src/music_api/`, `src/audio_buffer.rs` + `src/audio_buffer/`, `src/config.rs` + `src/config/`, and `src/database.rs` + `src/database/`. Common support code lives in `src/error.rs`, `src/memory.rs`, and `src/utils.rs`. Tests are colocated with source files (for example `src/bot/tests.rs`, `src/music_api/tests/*.rs`) rather than a top-level `tests/` directory. Mock-HTTP helpers (`write_json_response`, `find_byte_sequence`, `parse_content_length`) live duplicated in `src/bot/tests/telegram.rs` and `src/music_api/tests.rs`; if you add a third consumer, extract a shared `#[cfg(test)]` module instead of copying again.
+
+- `src/main.rs` is the bot CLI entry point. `src/lib.rs` exposes the shared library used by the bot and the `refresh_hires` maintenance binary in `src/bin/refresh_hires.rs`.
+- `bot`, `music_api`, `audio_buffer`, `config`, and `database` each use a root module file and a subdirectory under `src/`. The Telegram client lives in `src/telegram/`. Shared support lives in `src/error.rs`, `src/memory.rs`, and `src/utils.rs`.
+- `config.ini.example` documents runtime settings. User-facing translations in `locales/` are embedded at compile time.
 
 ## Build, Test, and Development Commands
-- `cargo check`: fast compile validation while iterating.
-- `cargo build --release`: optimized build artifact.
-- `cargo run --release -- --config config.ini`: run the bot with explicit config.
-- `cargo fmt -- --check`: formatting gate.
-- `cargo clippy -- -D warnings`: strict lint gate.
-- `cargo test`: run all unit/async tests.
-- `cargo zigbuild --release --target x86_64-unknown-linux-gnu`: recommended macOS→Linux cross-compilation build (requires `cargo install cargo-zigbuild`).
 
-Recommended verification sequence before merge (mirrors CI): `cargo fmt -- --check && cargo check && cargo clippy -- -D warnings && cargo test`.
+Use stable Rust with the `rustfmt` and `clippy` components, as CI does.
+
+- `cargo build --release` builds both binaries.
+- `cargo run --release --bin music163bot-rust -- --config config.ini` runs the bot with an explicit config file.
+- See the [refresh_hires guide](README.md#refreshing-capped-quality-caches-refresh_hires) for maintenance commands and options.
+- `cargo zigbuild --release --target x86_64-unknown-linux-gnu` is an option for local macOS-to-Linux cross-compilation with Zig and `cargo-zigbuild` installed.
 
 ## Coding Style & Naming Conventions
+
 Use Rust 2024 conventions and `rustfmt` defaults (4-space indentation). Prefer import grouping as `std`, external crates, then `crate::...`. Naming: `snake_case` for functions/variables/modules, `PascalCase` for types/traits, `UPPER_SNAKE_CASE` for constants. Prefer `crate::error::Result<T>` and `?` over `unwrap()`/`expect()` in production paths.
 
 ## Testing Guidelines
-Use focused, behavior-named tests close to the implementation. Use `#[tokio::test]` for async paths. Helpful commands:
-- `cargo test bot::tests::`
-- `cargo test config::tests::upload_max_concurrent_parses -- --exact --nocapture`
+
+Keep tests close to the implementation, use behavior-focused names, and use `#[tokio::test]` for async paths. Existing test modules include `src/bot/tests.rs` and `src/music_api/tests/`.
+
+The mock HTTP helpers `write_json_response`, `find_byte_sequence`, and `parse_content_length` exist in both `src/bot/tests/telegram.rs` and `src/music_api/tests.rs`. Extract a shared `#[cfg(test)]` module if a third consumer needs them. Mock HTTP tests bind loopback ports. If sandboxing blocks the bind, rerun the suite with escalation.
+
+- `cargo test --lib bot::tests::`
+- `cargo test --lib config::tests::upload_max_concurrent_parses -- --exact --nocapture`
 
 ## Commit & Pull Request Guidelines
-Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`). Keep commits small and single-purpose. PRs should include: intent, key changes, validation commands run, and any config/database impact.
+
+Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`). Keep commits small and single-purpose. In PRs, describe the intent, key changes, verification commands, and any config or database impact.
 
 ## Agent Workflow
+
 After each major work round (for example, a feature batch or bugfix batch), and before each `git push`, run the standard Rust verification sequence:
 
 ```bash
@@ -45,11 +53,11 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
-For Codex: any command that involves network access (for example `cargo update`, `pip install`, `curl`, `git clone`) must request sandbox escalation permission first, then execute normally after approval. Do not force `--offline` as a default workaround.
+For Codex, request sandbox escalation before running commands that access the network, including `cargo update`, `curl`, `git clone`, and `git push`. Run normally after approval and avoid using `--offline` as a default workaround.
 
 ## CI/CD
-Four GitHub Actions workflows run on push/PR to `main`:
-- `.github/workflows/ci.yml` — format check, clippy, tests, and release build (x86_64-unknown-linux-gnu)
-- `.github/workflows/build.yml` — multi-platform release builds with `cargo zigbuild`
-- `.github/workflows/audit.yml` — dependency vulnerability scanning
-- `.github/workflows/codeql.yml` — CodeQL security analysis
+
+- [CI](.github/workflows/ci.yml) runs formatting, Clippy, tests, and a Linux x86-64 release build on relevant pushes and pull requests to `main` or on manual dispatch.
+- [Build and Release](.github/workflows/build.yml) runs `cargo build --release --target` for Linux, macOS, and Windows on `v*` tag pushes or manual dispatch.
+- [Security Audit](.github/workflows/audit.yml) runs `cargo audit` daily, on changes to its inputs, or on manual dispatch.
+- [CodeQL](.github/workflows/codeql.yml) scans Rust on pushes and pull requests to `main` and on a weekly schedule.
